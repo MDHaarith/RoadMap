@@ -1,0 +1,8 @@
+[Desktop Entry]
+Type=Application
+Name=Roadmap
+Comment=Learn anything by doing: AI-built courses with free YouTube lessons
+Exec=roadmap-app
+Icon=roadmap-app
+Categories=Education;
+StartupWMClass=roadmap-app
