@@ -58,12 +58,14 @@ def call(method, path, body=None, root=None):
 
 origin = base[:base.index("/", 8)]
 assert call("GET", "/wrong-token/api/settings", root=origin)[0] == 404  # API hidden without the secret path
-assert b"<title>Roadmap</title>" in call("GET", "")[1]
+assert b"<title>Roadmap</title>" in call("GET", "")[1] and b'<html lang="en" data-theme="light">' in call("GET", "")[1]
+assert call("PUT", "api/theme", {"theme": '"><script>'})[0] == 400 and call("PUT", "api/theme", {"theme": "dark"})[0] == 200
+assert b'<html lang="en" data-theme="dark">' in call("GET", "")[1] and stat.S_IMODE(os.stat(app.CONF).st_mode) == 0o600
 assert call("POST", "api/courses", {"prompt": "bread"})[0] == 400  # no AI service yet
 assert call("PUT", "api/settings", {"base": "file:///etc/passwd", "model": "m"})[0] == 400
 assert call("PUT", "api/settings", {"base": f"http://127.0.0.1:{ai.server_port}/v1", "model": "m", "key": "sk-test"})[0] == 200
 assert call("PUT", "api/settings", {"base": f"http://127.0.0.1:{ai.server_port}/v1/", "model": "m"})[0] == 200  # empty key keeps the old one
-assert call("GET", "api/settings")[1] == {"base": f"http://127.0.0.1:{ai.server_port}/v1/", "model": "m", "key_set": True}  # key never returned
+assert call("GET", "api/settings")[1] == {"base": f"http://127.0.0.1:{ai.server_port}/v1/", "model": "m", "key_set": True, "theme": "dark"}  # key never returned
 assert stat.S_IMODE(os.stat(app.CONF).st_mode) == 0o600
 
 real_run = subprocess.run

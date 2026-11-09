@@ -168,6 +168,18 @@ def save_config(body):
     c.update(base=base, model=str(body.get("model", "")).strip())
     if body.get("key"):
         c["key"] = str(body["key"]).strip()
+    write_config(c)
+
+
+THEMES = ("light", "dark", "system")
+
+
+def theme():
+    t = config().get("theme")
+    return t if t in THEMES else "light"
+
+
+def write_config(c):
     CONF.parent.mkdir(parents=True, exist_ok=True)
     with os.fdopen(os.open(CONF, os.O_WRONLY | os.O_CREAT | os.O_TRUNC, 0o600), "w") as f:  # holds the API key
         json.dump(c, f)
@@ -491,10 +503,15 @@ def tutor_system(c, l):
 
 def route(method, path, body):
     if (method, path) == ("GET", ""):
-        return UI.read_bytes()
+        # The theme goes into the page itself so it never flashes the wrong one. Browser storage can't hold it: the port changes every start.
+        return UI.read_bytes().replace(b'data-theme="light"', b'data-theme="%s"' % theme().encode(), 1)
     if (method, path) == ("GET", "api/settings"):
         c = config()
-        return {"base": c.get("base", ""), "model": c.get("model", ""), "key_set": bool(c.get("key"))}  # never send the key back
+        return {"base": c.get("base", ""), "model": c.get("model", ""), "key_set": bool(c.get("key")), "theme": theme()}  # never send the key back
+    if (method, path) == ("PUT", "api/theme"):
+        if body.get("theme") not in THEMES:
+            raise ValueError("Unknown theme.")
+        return write_config({**config(), "theme": body["theme"]}) or {}
     if (method, path) == ("PUT", "api/settings"):
         return save_config(body) or {}
     if (method, path) == ("GET", "api/courses"):
