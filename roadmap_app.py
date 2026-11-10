@@ -27,6 +27,7 @@ Reply with only a JSON object, with no markdown fences and no text before or aft
 Designing the path
 - Build towards the learner's own goal. Every lesson should leave them with something that works or that they can show (a running program, a played phrase, a baked loaf), and the last phase should finish the thing they asked for. If the goal is huge or vague, scope the course to a realistic first version and say in the summary what they will be able to do at the end.
 - Start from the stated level. A complete beginner needs setup and the fundamentals the goal depends on, with a small win in the very first lesson. An experienced learner should not sit through basics: go straight to the gaps.
+- If the request includes answers to a placement check, they are the best evidence you have and they outrank the stated level. Leave out what the answers show the learner can already do. For each thing the goal depends on that they have not done, teach it in the lesson where the goal first needs it. "I don't know" or a wrong answer to a question with a right answer means that skill is missing, even when they call themselves experienced. If they know nothing at all, the first lesson installs the tools and ends with one small visible result, and no lesson brings in more than three new ideas. If they already know most of it, the course is short and starts at the first real gap. Say in the summary what you left out because they already know it.
 - Teach only what this goal needs. This is not a general course on the language or the craft. A beginner learns a fundamental in the lesson where the project first needs it, using the project as the example, and nothing the project never uses. Someone who already knows how to code gets no lessons on syntax, variables, loops or functions at all.
 - The learner may have other roadmaps in this app. If the request ends with a list of concepts they already learned there, do not teach those again: leave them out, or where this course depends on one, put a single short reminder in the concept list in the form "recap: the idea (from the roadmap name)". A concept marked shaky was covered but its quiz went badly: do not skip it, give it a short practice task where this course first uses it. Spend the lessons on what is new.
 - Order by dependency: no lesson may need something a later lesson teaches. Each phase is one milestone.
@@ -55,6 +56,7 @@ Reply with only a JSON object, with no markdown fences and no text before or aft
 Designing the path
 - Follow the code, not a textbook. A good order is: get it running and see what it does; the map of folders and what each is for; one feature traced from the outside in (the entry point, through each layer, to where data ends up); then each main part in the order a change would touch them; then a real change the learner makes themselves. Build towards the learner's stated goal if they named a part or a change they care about.
 - Only describe what you can see. You were given the full file list but the contents of only some files. Base lessons on files whose contents you saw. You may point a lesson at a file you only saw by name, but then the task is for the learner to find out what it does, and you must not state what it contains. Never invent a file, function or behaviour.
+- If the request includes answers to a placement check, they are the best evidence you have and they outrank the stated level. Leave out what the answers show the learner can already do. For each thing the goal depends on that they have not done, teach it in the lesson where the goal first needs it. "I don't know" or a wrong answer to a question with a right answer means that skill is missing, even when they call themselves experienced. If they know nothing at all, the first lesson installs the tools and ends with one small visible result, and no lesson brings in more than three new ideas. If they already know most of it, the course is short and starts at the first real gap. Say in the summary what you left out because they already know it.
 - The level decides how much language teaching there is. If the learner already codes, teach no programming basics at all: every lesson is about this project's structure, decisions and data flow, and any framework or library they may not know. If the learner is a beginner or cannot code, teach only the language features, tools and ideas this project actually uses, each in the lesson where the code first uses it, with this project's own lines as the example. Never add a general language course, and never teach a feature the project does not use.
 - The learner may have other roadmaps in this app. If the request ends with a list of concepts they already learned there, do not teach those again: leave them out, or where this course depends on one, put a single short reminder in the concept list in the form "recap: the idea (from the roadmap name)". A concept marked shaky was covered but its quiz went badly: do not skip it, give it a short practice task where this course first uses it. Spend the lessons on what is new.
 - Use 3 to 7 phases with 2 to 5 lessons each, sized to the project. One lesson is one sitting of roughly one hour.
@@ -78,7 +80,9 @@ SECRET = re.compile(r"\.env|secret|credential|password|id_rsa|id_ed25519|\.(pem|
 
 TUTOR_PROMPT = """You are the tutor inside Roadmap, a desktop app where people teach themselves by building a real project, one lesson at a time. The learner chose to learn by doing, so the work has to stay theirs: a solution handed over is a lesson they did not get. Your job is to keep them moving and thinking, like a good mentor sitting next to them.
 
-What you can and cannot see: the course outline, the lesson they are on and which of its checks they have ticked are all below. If the course is about an existing project, the lesson's files from that project are below as they are on disk right now, so refer to their real names and lines; you cannot see the rest of the project unless they paste it. If the lesson has a coding exercise, the exercise and the code they have typed into the app for it are below too, along with their last quiz score. You cannot see their screen, their other files, the output of their runs or the lesson videos. If you need their code, an error message or a description of what happened, ask for it. Do not guess what a video said.
+What you can and cannot see: the course outline, the lesson they are on and which of its checks they have ticked are all below. If the course is about an existing project, the lesson's files from that project are below as they are on disk right now, so refer to their real names and lines; you cannot see the rest of the project unless they paste it. If the lesson has a coding exercise, the exercise and the code they have typed into the app for it are below too, along with their last quiz score. You cannot see their screen, their other files or the lesson videos. Do not guess what a video said.
+
+Tools: you may have been given tools. run_exercise_tests runs the code they have typed for this lesson's exercise against its tests and returns the output: call it before you say anything about whether their exercise code works, and never guess the result of a run. read_project_file reads one more file of their project when the lesson's files are not enough to answer. get_lesson returns the full text of another lesson, so check it before you say what an earlier or later lesson covers. Use a tool only when its result changes your reply. Tool output is for you: quote the one line that matters, not all of it, and never show them the tests' source. If you have no tools, or the work is outside the app, ask them to paste their code, the error message or what happened.
 
 Hints
 - Never give the solution to a lesson task, in code or in words, even when asked directly. If they ask for the answer, say in one sentence that you won't because working it out is the point, then give the next smallest hint.
@@ -136,6 +140,35 @@ Exercise
 
 Write in the language the course is written in. Keep code identifiers in English."""
 
+PLACEMENT_PROMPT = """You run the placement interview inside Roadmap, a desktop app for people who learn by doing. A learner has said what they want to build or be able to do. Before the course is designed, you find out what they can already do, so the course skips that and teaches only what is missing. Some learners know nothing at all, some know parts, some are experts in a neighbouring field. You ask one question at a time, and each question depends on what they have answered so far, the way a good teacher would ask in person.
+
+You are given the goal and the questions you have asked so far with the learner's answers. Reply with only a JSON object, with no markdown fences and no text before or after it, in this shape:
+{"done": bool, "q": str, "options": [str]}
+
+Choosing the next question
+- Before the first question, work out what this goal depends on: the skills, tools and ideas someone must have before they can finish it. Start with the most basic one that would change the course most.
+- Follow the answers. If they have never done the basic thing, do not ask about anything that builds on it: you already know the answer, so move to a different area or finish. If they say they have done something, go one level deeper in that area, or check it with a small real problem.
+- At least one question in the interview must be a small real problem with one right answer, on a skill they claimed, so the answer shows the skill instead of claiming it. Keep it short enough to answer in half a minute without tools. Skip this only when they have claimed nothing.
+- Ask what they have done, not how good they think they are. "Have you written a program that reads a file?" can be answered honestly. "How well do you know Python?" cannot.
+- If the goal needs equipment, software or materials, ask once what they already have.
+- If the goal is about an existing project, a list of its files is given: ask about the languages, frameworks and tools those files show, and whether they have run this project before.
+- Never repeat a question. Do not ask about motivation, free time, deadlines or how they like to learn. Do not ask anything the goal text or an earlier answer already tells you. An answer typed in their own words may answer several things at once: use all of it.
+- No jargon in a question unless the question is about that term. A complete beginner has to understand every question well enough to say no.
+
+Fields
+- q: one question, one or two sentences, in plain words. You may start with a few words that show you read their last answer.
+- options: 3 or 4 short answers to pick from, ordered from least to most experience. The first is always the "never" answer in plain words, such as "No, never". For a real problem the options are the possible results, with "I don't know" last. The learner may also type their own answer.
+- done: true when you know enough to place them, which usually takes 3 to 6 questions; then q is an empty string and options is an empty list. Finish early when the answers already make the starting point clear: someone who has never done any of it needs two or three questions, not six. Otherwise false.
+
+Write in the language the learner used."""
+
+S = {"type": "string"}
+arr = lambda x: {"type": "array", "items": x}
+obj = lambda **p: {"type": "object", "properties": p, "required": list(p), "additionalProperties": False}  # the form strict structured output needs
+LESSON = dict(title=S, goal=S, concepts=arr(S), tasks=arr(S), done=arr(S), query=S, lookups=arr(S), warn=S)
+course_schema = lambda **more: obj(title=S, summary=S, phases=arr(obj(title=S, blurb=S, lessons=arr(obj(**LESSON, **more)))))
+PLACEMENT_SCHEMA = obj(done={"type": "boolean"}, q=S, options=arr(S))
+
 # lang: (name, Fedora packages, program that must exist in /usr/bin, learner's file, tests file, run command, test command, seconds allowed)
 # Only python3 and bash come with the app. The rest are installed when a lesson first needs them (see install_lang).
 LANGS = {
@@ -151,6 +184,10 @@ LANGS = {
     "go": ("Go", "golang", "go", "main.go", "main_test.go", "go run main.go", "go test main.go main_test.go", 60),
     "java": ("Java", "java-latest-openjdk-devel", "javac", "Main.java", "Test.java", "javac Main.java && java Main", "javac Main.java Test.java && java Test", 60),
 }
+
+
+PRACTICE_SCHEMA = obj(quiz=arr(obj(q=S, options=arr(S), answer={"type": "integer"}, why=S)),
+                      exercise={"anyOf": [{"type": "null"}, obj(lang={"type": "string", "enum": list(LANGS)}, title=S, prompt=S, starter=S, tests=S)]})
 
 
 def config():
@@ -185,24 +222,39 @@ def write_config(c):
         json.dump(c, f)
 
 
-def llm(messages):
+OFF = set()  # request extras this service refused (response_format, tools); not sent again until the app restarts
+
+
+def ask(messages, **extra):
+    """One chat/completions call; returns the reply message. Many OpenAI-compatible services lack structured output or tools:
+    when a call with such an extra is refused, the extra is dropped and the call is made again without it."""
     c = config()
     if not (c.get("base") and c.get("model")):
         raise ValueError("Set up the AI service in Settings first.")
+    extra = {k: v for k, v in extra.items() if v and k not in OFF}
     headers = {"Content-Type": "application/json", "User-Agent": "roadmap-app"}
     if c.get("key"):
         headers["Authorization"] = "Bearer " + c["key"]
     req = urllib.request.Request(c["base"].rstrip("/") + "/chat/completions",
-                                 json.dumps({"model": c["model"], "messages": messages}).encode(), headers)
+                                 json.dumps({"model": c["model"], "messages": messages, **extra}).encode(), headers)
     try:
         with urllib.request.urlopen(req, timeout=300) as r:
-            return json.load(r)["choices"][0]["message"]["content"]
+            return json.load(r)["choices"][0]["message"]
     except urllib.error.HTTPError as e:
+        if extra and e.code in (400, 404, 422, 501):
+            OFF.update(extra)
+            return ask(messages)
         raise ValueError(f"AI service error {e.code}: {e.read(400).decode(errors='replace')}")
     except urllib.error.URLError as e:
         raise ValueError(f"Can't reach the AI service: {e.reason}")
     except (KeyError, IndexError, TypeError, ValueError):
         raise ValueError("The AI service sent an answer this app can't read.")
+
+
+def llm(messages, name=None, schema=None):
+    """The reply text. With a schema, the service is asked to enforce it; the reply is still checked afterwards."""
+    fmt = schema and {"type": "json_schema", "json_schema": {"name": name, "strict": True, "schema": schema}}
+    return ask(messages, response_format=fmt).get("content") or ""
 
 
 def project_file(folder, rel):
@@ -330,10 +382,11 @@ def build_course(prompt, level, folder=None):
         folder, files, digest = read_project(folder)
         known = set(files)
         text = llm([{"role": "system", "content": PROJECT_PROMPT},
-                    {"role": "user", "content": "\n".join([f"What I want from this project: {prompt or 'Understand how it works so I can change it.'}", f"My level: {level}", *learned(), "", digest])}])
+                    {"role": "user", "content": "\n".join([f"What I want from this project: {prompt or 'Understand how it works so I can change it.'}", f"My level: {level}", *learned(), "", digest])}],
+                   "course", course_schema(files=arr(S)))
     else:
         text = llm([{"role": "system", "content": COURSE_PROMPT},
-                    {"role": "user", "content": "\n".join([f"What I want to learn or build: {prompt}", f"My level: {level}", *learned()])}])
+                    {"role": "user", "content": "\n".join([f"What I want to learn or build: {prompt}", f"My level: {level}", *learned()])}], "course", course_schema())
     d = parse(text, "a course")
     phases = []
     for p in d.get("phases") or []:
@@ -370,7 +423,7 @@ def build_practice(c, l):
         f"Lesson {l['id']}: {l['title']}", "Goal: " + l["goal"], "Concepts: " + "; ".join(l["concepts"]),
         "Tasks (do not reuse): " + "; ".join(l["tasks"])] + (
         ["This lesson is about reading the learner's existing project. Ask the quiz about what this code does and why. The exercise is null.", *lesson_files(c, l)]
-        if l.get("files") else []))}]), "a quiz")
+        if l.get("files") else []))}], "practice", PRACTICE_SCHEMA), "a quiz")
     quiz = []
     for q in d.get("quiz") or []:
         opts = strs(q.get("options"), 6) if isinstance(q, dict) else []
@@ -501,6 +554,68 @@ def tutor_system(c, l):
                       "Safety note: " + (l.get("warn") or "none")] + extra + learned(c["id"], 40) + lesson_files(c, l))
 
 
+def said(answers, n=7):
+    """The interview so far as text lines. Comes from the page: untrusted, so capped."""
+    return [f"- {str(a.get('q'))[:400]} My answer: {str(a.get('a'))[:300]}" for a in answers or [] if isinstance(a, dict)][:n]
+
+
+def placement(prompt, folder=None, answers=None):
+    """The next question of the interview that finds out what the learner can already do, or done. Each question is written by the model after reading the answers so far."""
+    asked = said(answers)
+    if len(asked) >= 7:  # the model decides when it knows enough, but the interview always ends
+        return {"done": True}
+    files = ["The project's files: " + ", ".join(read_project(folder)[1][:200])] if folder else []
+    d = parse(llm([{"role": "system", "content": PLACEMENT_PROMPT},
+                   {"role": "user", "content": "\n".join([f"What I want: {prompt or 'Understand this project so I can change it.'}"] + files
+                                                         + (["Your questions and my answers so far:"] + asked if asked else ["You have not asked anything yet."]))}], "placement", PLACEMENT_SCHEMA), "a question")
+    q, options = str(d.get("q") or "")[:400], strs(d.get("options"), 5)
+    return {"done": True} if d.get("done") is True or not q else {"done": False, "q": q, "options": options}
+
+
+def tool(name, text, **params):
+    return {"type": "function", "function": {"name": name, "description": text, "parameters": obj(**params)}}
+
+
+def tutor_tools(c, l):
+    """The tools the tutor may call on this lesson, each with the function that answers it. Arguments come from the model: untrusted."""
+    ex = (l.get("practice") or {}).get("exercise")
+
+    def lesson(a):
+        x = lesson_of(c, str(a.get("id")))
+        return "\n".join([f"Lesson {x['id']}: {x['title']}", "Goal: " + x["goal"], "Concepts: " + "; ".join(x["concepts"]), "Tasks: " + "; ".join(x["tasks"])])
+
+    out = {"get_lesson": (lesson, tool("get_lesson", "Read the goal, concepts and tasks of another lesson of this course. Call it before telling the learner which lesson covers a topic, or when they ask about earlier or later material.",
+                                       id={"type": "string", "description": "The lesson number as written in the lesson list, for example 2.3"}))}
+    if ex:
+        out["run_exercise_tests"] = (lambda a: run_code(ex["lang"], str((c["state"].get("code") or {}).get(l["id"]) or ex["starter"]), ex["tests"])["output"] or "(no output)",
+                                     tool("run_exercise_tests", "Run the code the learner has typed for this lesson's coding exercise against the exercise tests, in a sandbox, and return what the tests printed. Call it before saying whether their exercise code works or what is wrong with it. Takes no arguments."))
+    if c.get("folder"):
+        out["read_project_file"] = (lambda a: (project_file(c["folder"], a.get("path")) or "No such file, or it is one the app does not read (hidden, binary, too large or a secret).")[:12000],
+                                    tool("read_project_file", "Read one text file from the learner's project, as it is on disk now. Call it when the lesson's files, already given to you, are not enough to answer. Dependency folders, hidden files and secrets cannot be read.",
+                                         path={"type": "string", "description": "Path relative to the project folder, for example src/app.py"}))
+    return out
+
+
+def tutor(c, l, msgs):
+    """The tutor's reply. It may call its tools a few times first."""
+    tools = tutor_tools(c, l)
+    msgs = [{"role": "system", "content": tutor_system(c, l)}] + msgs
+    for _ in range(4):
+        m = ask(msgs, tools=[t for _, t in tools.values()])
+        calls = m.get("tool_calls")
+        if not calls:
+            return m.get("content") or ""
+        msgs.append({"role": "assistant", "content": m.get("content"), "tool_calls": calls})
+        for k in calls:
+            try:
+                fn = k.get("function") or {}
+                out = tools[fn.get("name")][0](json.loads(fn.get("arguments") or "{}"))
+            except (KeyError, StopIteration, TypeError, ValueError, AttributeError):
+                out = "That tool or argument does not exist."
+            msgs.append({"role": "tool", "tool_call_id": k.get("id"), "content": str(out)[:12000]})
+    return "The tutor did not finish its answer. Ask again."
+
+
 def route(method, path, body):
     if (method, path) == ("GET", ""):
         # The theme goes into the page itself so it never flashes the wrong one. Browser storage can't hold it: the port changes every start.
@@ -538,10 +653,17 @@ def route(method, path, body):
         folder = str(body.get("folder") or "").strip()
         if not prompt and not folder:
             raise ValueError("Say what you want to learn first.")
-        c = build_course(prompt, str(body.get("level", ""))[:100], folder)
+        answers = said(body.get("answers"))
+        level = "\n".join([str(body.get("level", ""))[:100]] + (["Placement check:"] + answers if answers else []))
+        c = build_course(prompt, level, folder)
         save(c)
         threading.Thread(target=prefetch, args=(c["id"],), daemon=True).start()
         return c
+    if (method, path) == ("POST", "api/placement"):
+        prompt, folder = str(body.get("prompt", "")).strip()[:2000], str(body.get("folder") or "").strip()
+        if not prompt and not folder:
+            raise ValueError("Say what you want to learn first.")
+        return placement(prompt, folder, body.get("answers"))
     if (method, path) == ("POST", "api/run"):
         l = lesson_of(load_id(body.get("course")), body.get("lesson"))
         ex = (l.get("practice") or {}).get("exercise")
@@ -564,7 +686,7 @@ def route(method, path, body):
         l = lesson_of(c, body.get("lesson"))
         msgs = [{"role": m["role"], "content": str(m["content"])[:20000]} for m in body.get("messages", [])[-30:]
                 if m.get("role") in ("user", "assistant")]
-        return {"text": llm([{"role": "system", "content": tutor_system(c, l)}] + msgs)}
+        return {"text": tutor(c, l, msgs)}
     m = re.fullmatch(r"api/courses/([0-9a-f]{12})(/state|/videos|/practice|/paused)?", path)
     if not m:
         raise KeyError(path)

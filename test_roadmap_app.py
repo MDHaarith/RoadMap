@@ -26,8 +26,18 @@ class FakeAI(BaseHTTPRequestHandler):
         body = json.loads(self.rfile.read(int(self.headers["Content-Length"])))
         assert self.headers["Authorization"] == "Bearer sk-test"
         system = body["messages"][0]["content"]
+        if REJECT and ("response_format" in body or "tools" in body):  # a service without structured output or tools
+            self.send_response(400); self.send_header("Content-Length", "2"); self.end_headers(); self.wfile.write(b"{}"); return
+        SEEN.append(body)
+        msg = None
         assert "JSON object" in system or "1.1 Mix (completed)" in system and "[x] Dough holds together" in system  # tutor sees progress
-        if "practice material" in system:
+        if "placement interview inside" in system:
+            assert REJECT or body["response_format"]["json_schema"]["schema"]["properties"]["done"]
+            user = body["messages"][1]["content"]  # each question is written after reading the answers so far
+            text = json.dumps({"done": True, "q": "", "options": []} if "Used an oven? My answer: Yes" in user else
+                              {"done": False, "q": "Used an oven?", "options": ["No, never", "Yes"]} if "Baked before? My answer: No, never" in user else
+                              {"done": False, "q": "Baked before?", "options": ["No, never", "Yes", 3]})
+        elif "practice material" in system:
             text = json.dumps(PRACTICE)
         elif "existing, working project" in system:
             user = body["messages"][1]["content"]
@@ -38,10 +48,16 @@ class FakeAI(BaseHTTPRequestHandler):
         else:
             assert "bakers percentage chart" in system and "def double(x): return x * 2" in system and "Last quiz score: 1 of 1" in system  # tutor sees lookups, code, quiz
             text = "hint for: " + system.split("Current lesson ")[1][:8]
-        data = json.dumps({"choices": [{"message": {"content": text}}]}).encode()
+            names = [t["function"]["name"] for t in body.get("tools") or []]
+            if names and body["messages"][-1]["role"] == "user":  # first the tutor calls its tools, one of them made up
+                assert names == ["get_lesson", "run_exercise_tests"], names
+                msg = {"content": None, "tool_calls": [{"id": f"c{i}", "type": "function", "function": {"name": n, "arguments": a}}
+                                                       for i, (n, a) in enumerate((("run_exercise_tests", "{}"), ("get_lesson", '{"id": "1.1"}'), ("rm_rf", "{}"), ("get_lesson", "not json")))]}
+        data = json.dumps({"choices": [{"message": msg or {"content": text}}]}).encode()
         self.send_response(200); self.send_header("Content-Length", str(len(data))); self.end_headers(); self.wfile.write(data)
 
 
+REJECT, SEEN = False, []
 ai = ThreadingHTTPServer(("127.0.0.1", 0), FakeAI)
 threading.Thread(target=ai.serve_forever, daemon=True).start()
 base = app.serve()
@@ -73,8 +89,17 @@ app.subprocess = types.SimpleNamespace(TimeoutExpired=subprocess.TimeoutExpired,
     {"id": "aaaaaaaaaaa", "title": "Full lesson", "channel": "Baker", "duration": 900.0},
     {"id": "bbbbbbbbbbb", "title": "A Short", "duration": 40},
     {"id": "<script>", "title": "bad id", "duration": 900}]})))
-code, c = call("POST", "api/courses", {"prompt": "bake bread", "level": "Complete beginner"})
+assert call("POST", "api/placement", {})[0] == 400
+first = call("POST", "api/placement", {"prompt": "bake bread"})[1]
+assert first == {"done": False, "q": "Baked before?", "options": ["No, never", "Yes", "3"]} and "You have not asked anything yet." in SEEN[-1]["messages"][1]["content"], first
+told = [{"q": "Baked before?", "a": "No, never"}, "junk"]
+assert call("POST", "api/placement", {"prompt": "bake bread", "answers": told})[1]["q"] == "Used an oven?"  # follows the answer
+assert call("POST", "api/placement", {"prompt": "bake bread", "answers": told + [{"q": "Used an oven?", "a": "Yes"}]})[1] == {"done": True}
+n = len(SEEN); assert call("POST", "api/placement", {"prompt": "bake bread", "answers": [{"q": "x", "a": "y"}] * 7})[1] == {"done": True} and len(SEEN) == n  # always ends, without asking the AI
+code, c = call("POST", "api/courses", {"prompt": "bake bread", "level": "Complete beginner", "answers": [{"q": "Baked before?", "a": "No, never"}, "junk"]})
 assert code == 200 and c["title"] == "Bake bread", c
+assert "Placement check:\n- Baked before? My answer: No, never" in SEEN[-1]["messages"][1]["content"]  # the designer reads the answers
+assert SEEN[-1]["response_format"]["json_schema"]["strict"] and "lookups" in json.dumps(SEEN[-1]["response_format"])  # reply shape is enforced by the service
 assert [l["id"] for p in c["phases"] for l in p["lessons"]] == ["1.1"] and len(c["phases"]) == 1  # junk lesson and empty phase dropped
 cid = c["id"]
 
@@ -142,6 +167,13 @@ assert call("GET", "api/courses")[1] == [{"id": cid, "title": "Bake bread", "sum
 assert call("GET", f"api/courses/{cid}")[1]["phases"][0]["lessons"][0]["known"] == {}
 
 assert call("POST", "api/chat", {"course": cid, "lesson": "1.1", "messages": [{"role": "user", "content": "hint?"}]})[1] == {"text": "hint for: 1.1: Mix"}
+results = [m["content"] for m in SEEN[-1]["messages"] if m["role"] == "tool"]  # what the tutor's tools gave back
+assert len(results) == 4 and results[1].startswith("Lesson 1.1: Mix") and results[2] == results[3] == "That tool or argument does not exist.", results
+assert results[0] == "All tests passed\n" or not os.path.exists("/usr/bin/bwrap"), results  # the tutor ran the learner's saved code
+REJECT = True  # a service that refuses schemas and tools still works: the app asks again without them
+assert call("POST", "api/chat", {"course": cid, "lesson": "1.1", "messages": [{"role": "user", "content": "hint?"}]})[1] == {"text": "hint for: 1.1: Mix"}
+assert call("POST", "api/placement", {"prompt": "bake bread"})[0] == 200 and app.OFF == {"tools", "response_format"}
+assert "tools" not in SEEN[-1] and "response_format" not in SEEN[-1]
 assert call("POST", "api/chat", {"course": "../../etc/passwd", "lesson": "1.1", "messages": []})[0] == 404
 assert call("POST", "api/chat", {"course": cid, "lesson": "9.9", "messages": []})[0] == 404
 assert call("GET", "api/courses/..%2Fconfig")[0] == 404

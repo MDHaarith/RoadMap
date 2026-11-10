@@ -1,6 +1,6 @@
 Name:           roadmap-app
 Version:        0.2.0
-Release:        2%{?dist}
+Release:        4%{?dist}
 Summary:        Learn anything by doing: AI-built courses with free YouTube lessons
 # No licence chosen yet. Replace before sharing the package.
 License:        LicenseRef-Not-Chosen
@@ -10,7 +10,7 @@ Requires:       python3 python3-gobject gtk3 webkit2gtk4.1 yt-dlp bubblewrap
 %description
 Describe a project or skill and Roadmap builds a step-by-step course: free
 YouTube lessons, tasks you do yourself, quizzes, coding exercises with tests,
-checks that gate each lesson, notes,
+checks that gate each lesson, a placement check, notes,
 and an AI tutor that gives hints instead of answers. Works with any
 OpenAI-compatible AI service.
 
