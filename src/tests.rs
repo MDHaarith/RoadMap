@@ -259,6 +259,7 @@ fn python_spec_end_to_end() {
         lock: Mutex::new(()),
         off: Mutex::new(HashSet::new()),
         meter: Mutex::new(()),
+        fetching: Mutex::new(std::collections::HashSet::new()),
         day_offset: AtomicI64::new(0),
         pick: Box::new(move |k| {
             if k == "file" {

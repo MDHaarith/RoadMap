@@ -1,6 +1,6 @@
 Name:           roadmap-app
 Version:        0.2.0
-Release:        9%{?dist}
+Release:        10%{?dist}
 Summary:        Learn anything by doing: AI-built courses with free YouTube lessons
 # No licence chosen yet. Replace before sharing the package.
 License:        LicenseRef-Not-Chosen

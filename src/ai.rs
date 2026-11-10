@@ -736,9 +736,13 @@ impl App {
         })
     }
     pub(crate) fn prefetch(self: &Arc<Self>, cid: String) {
+        if !self.fetching.lock().unwrap_or_else(|e| e.into_inner()).insert(cid.clone()) {
+            return;
+        }
         let app = self.clone();
         std::thread::spawn(move || {
             let _ = app.prefetch_inner(&cid);
+            app.fetching.lock().unwrap_or_else(|e| e.into_inner()).remove(&cid);
         });
     }
     fn prefetch_inner(&self, cid: &str) -> Result<()> {

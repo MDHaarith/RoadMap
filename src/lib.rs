@@ -69,6 +69,8 @@ pub struct App {
     pub(crate) lock: Mutex<()>,
     pub(crate) off: Mutex<HashSet<String>>,
     pub(crate) meter: Mutex<()>,
+    // Roadmaps whose video search is running, so reopening one does not start a second search.
+    pub(crate) fetching: Mutex<HashSet<String>>,
     pub(crate) day_offset: AtomicI64,
     pub(crate) pick: Box<dyn Fn(&str) -> String + Send + Sync>,
     pub(crate) yt_program: PathBuf,
@@ -97,6 +99,7 @@ impl App {
             lock: Mutex::new(()),
             off: Mutex::new(HashSet::new()),
             meter: Mutex::new(()),
+            fetching: Mutex::new(HashSet::new()),
             day_offset: AtomicI64::new(0),
             pick: Box::new(pick),
             yt_program: if cfg!(windows) { "yt-dlp.exe" } else { "yt-dlp" }.into(),
