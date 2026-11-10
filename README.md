@@ -36,3 +36,18 @@ The two long sizes are planned as an outline of stages, phases and lesson titles
 (`POST api/courses/<id>/expand`), so later phases use their results. "Change my
 roadmap" (`POST api/courses/<id>/revise`) lets the learner ask for a new direction
 part-way through; new phases arrive as outlines and are written the same way.
+
+## Connect an AI agent (MCP)
+
+`roadmap-mcp` lets an agent list, read, create and fill learning roadmaps, read progress, append ideas and search. It never calls AI or the network and cannot change progress, delete roadmaps, access settings or API keys, run exercises, or read project folders. Search includes learner notes and tutor chats.
+
+Claude Code: `claude mcp add roadmap -- roadmap-mcp`
+
+Codex, in `~/.codex/config.toml`:
+
+```toml
+[mcp_servers.roadmap]
+command = "roadmap-mcp"
+```
+
+From source, run `cargo build --release --locked` and use the absolute path to `target/release/roadmap-mcp`. A roadmap created while the app is open appears after the library page is reopened.

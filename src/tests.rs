@@ -1315,3 +1315,77 @@ fn topic_videos() {
     assert!(list(&v).iter().skip(1).all(|x| truth(&x["searched"])));
     assert!(!list(&v).iter().any(|x| x["id"] == "old0"));
 }
+
+#[test]
+fn mcp_transport_and_tools() {
+    let dir = tempfile::tempdir().unwrap();
+    let app = isolated_app(dir.path());
+    let input = concat!(
+        "{\"jsonrpc\":\"2.0\",\"id\":1,\"method\":\"initialize\",\"params\":{\"protocolVersion\":\"2024-11-05\"}}\n",
+        "{\"method\":\"notifications/initialized\"}\n",
+        "{\"id\":2,\"method\":\"ping\"}\n",
+        "{\"id\":3,\"method\":\"tools/list\"}\n",
+        "{\"id\":4,\"method\":\"prompts/get\",\"params\":{\"name\":\"write_roadmap\",\"arguments\":{\"topic\":\"Bread\"}}}\n",
+        "bad json\n",
+        "{\"id\":5,\"method\":\"unknown\"}\n",
+        "{\"id\":6,\"method\":\"tools/call\",\"params\":{\"name\":\"unknown\"}}\n",
+        "{\"id\":7,\"method\":\"ping\"}\n"
+    );
+    let mut output=vec![]; mcp::serve(&app,input.as_bytes(),&mut output).unwrap();
+    let replies=String::from_utf8(output).unwrap().lines().map(|l|serde_json::from_str::<Value>(l).unwrap()).collect::<Vec<_>>();
+    assert_eq!(replies.len(),8);
+    assert_eq!(replies[0]["result"]["protocolVersion"],"2024-11-05");
+    assert_eq!(replies[0]["result"]["serverInfo"]["name"],"roadmap");
+    assert_eq!(replies[1]["result"],json!({}));
+    let names=list(&replies[2]["result"]["tools"]).iter().map(|t|string(&t["name"])).collect::<HashSet<_>>();
+    assert_eq!(names, ["list_roadmaps","get_roadmap","create_roadmap","write_lessons","get_progress","add_idea","search"].into_iter().map(String::from).collect());
+    assert!(replies[3].to_string().contains("Bread"));
+    assert_eq!(replies[4]["error"]["code"],-32700);
+    assert_eq!(replies[5]["error"]["code"],-32601);
+    assert_eq!(replies[6]["result"]["isError"],true);
+    assert_eq!(replies[7]["result"],json!({}));
+}
+
+#[test]
+fn mcp_roadmap_lifecycle() {
+    let dir=tempfile::tempdir().unwrap();let app=isolated_app(dir.path());
+    let call=|name:&str,args:Value|->Value {
+        let input=json!({"jsonrpc":"2.0","id":1,"method":"tools/call","params":{"name":name,"arguments":args}}).to_string()+"\n";
+        let mut out=vec![];mcp::serve(&app,input.as_bytes(),&mut out).unwrap();
+        let reply:Value=serde_json::from_slice(&out).unwrap();
+        if reply["result"]["isError"]==true{return reply["result"].clone();}
+        serde_json::from_str(reply["result"]["content"][0]["text"].as_str().unwrap()).unwrap()
+    };
+    let full=json!({"title":"Mix","tasks":["Mix flour"],"done":["Dough mixed"]});
+    let created=call("create_roadmap",json!({"roadmap":{"title":"x".repeat(250),"needs":[{"name":"unsafe","kind":"tool","command":"sh; bad"}],"stages":[{"title":"Bread","phases":[{"title":"Dough","lessons":[full,{"title":"Bake"},false,{"title":"Serve"}]}]}]}}));
+    let id=created["id"].as_str().unwrap();let mut c=app.load(id).unwrap();
+    assert_eq!(string(&c["title"]).len(),200);assert_eq!(c["needs"][0]["command"],"");
+    assert_ne!(c["phases"][0]["lessons"][0]["stub"],true);
+    assert_eq!(c["phases"][0]["lessons"][1]["stub"],true);
+    assert_eq!(c["phases"][0]["lessons"][2]["id"],"1.3");
+    assert!(created["changes"].to_string().contains("non-object"));
+    assert_eq!(call("list_roadmaps",json!({}))[0]["id"],id);
+    assert_eq!(call("get_roadmap",json!({"id":id}))["phases"][0]["lessons"][1]["stub"],true);
+    c["state"]["done"]["1.3"]=json!(true);c["state"]["notes"]["1.3"]=json!("PRIVATE");app.save(&c).unwrap();
+    let result=call("write_lessons",json!({"id":id,"lessons":[{"id":"1.1","tasks":["a"],"done":["b"]},{"id":"1.2","tasks":["a"],"done":["b"]},{"id":"1.3","tasks":["a"],"done":["b"]}]}));
+    assert_eq!(result["written"],json!(["1.2"]));assert_eq!(list(&result["skipped"]).len(),2);
+    // A lesson written without a title keeps the outline's title, and a second write cannot replace it.
+    assert_eq!(app.load(id).unwrap()["phases"][0]["lessons"][1]["title"],"Bake");
+    let kept=call("write_lessons",json!({"id":id,"lessons":[{"id":"1.2","title":"Changed"}]}));
+    assert_eq!(kept["written"],json!([]));assert_eq!(app.load(id).unwrap()["phases"][0]["lessons"][1]["title"],"Bake");
+    let progress=call("get_progress",json!({"id":id}));assert_eq!(progress["lessons"][2]["completed"],true);assert!(!progress.to_string().contains("PRIVATE"));
+    assert_eq!(call("add_idea",json!({"text":"BREAD IDEA"}))["notes"][0],"BREAD IDEA");
+    assert_eq!(call("add_idea",json!({"text":" "}))["isError"],true);
+    assert!(call("search",json!({"query":"Mix"})).to_string().contains("Mix"));
+}
+
+#[test]
+fn mcp_data_lock_is_shared_between_app_instances() {
+    let dir=tempfile::tempdir().unwrap();let app=isolated_app(dir.path());
+    let other=isolated_app(dir.path());
+    let held=app.guard();
+    let (tx,rx)=std::sync::mpsc::channel();
+    let worker=thread::spawn(move||{let _guard=other.guard();tx.send(()).unwrap();});
+    assert!(rx.recv_timeout(Duration::from_millis(50)).is_err());
+    drop(held);rx.recv_timeout(Duration::from_secs(2)).unwrap();worker.join().unwrap();
+}

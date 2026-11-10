@@ -1,10 +1,23 @@
 use gtk::{gio, glib, prelude::*};
-use webkit2gtk::{NavigationPolicyDecisionExt, PolicyDecisionExt, URIRequestExt, WebViewExt};
+use webkit2gtk::{NavigationPolicyDecisionExt, PolicyDecisionExt, URIRequestExt, WebViewExt, SettingsExt, UserContentManagerExt};
 fn main() -> Result<(), Box<dyn std::error::Error>> {
     glib::set_prgname(Some("roadmap-app"));
+    if std::env::args().any(|a| a == "--serve") {
+        use std::io::Write;
+        let app = roadmap_app::App::new(|_| String::new())?;
+        println!("{}", app.serve()?);
+        std::io::stdout().flush()?;
+        loop { std::thread::park(); }
+    }
     gtk::init()?;
     let win = gtk::Window::new(gtk::WindowType::Toplevel);
     win.set_title("Roadmap");
+    let titlebar = gtk::Box::new(gtk::Orientation::Horizontal, 0);
+    // A hidden title bar widget keeps GTK's own shadow and resize edges but takes no height;
+    // a visible empty one still gets the theme's title bar height.
+    titlebar.set_no_show_all(true);
+    win.set_titlebar(Some(&titlebar));
+    titlebar.hide();
     win.set_default_size(1280, 840);
     win.set_icon_name(Some("roadmap-app"));
     // Server threads send picker requests to the GTK main thread and wait for its answer.
@@ -49,7 +62,35 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
     })?;
     let url = app.serve()?;
     let base = url.clone();
-    let view = webkit2gtk::WebView::new();
+    let manager = webkit2gtk::UserContentManager::new();
+    manager.register_script_message_handler("roadmapWindow");
+    let view = webkit2gtk::WebView::with_user_content_manager(&manager);
+    let settings = webkit2gtk::Settings::new();
+    settings.set_hardware_acceleration_policy(webkit2gtk::HardwareAccelerationPolicy::Always);
+    settings.set_enable_smooth_scrolling(true);
+    view.set_settings(&settings);
+    let window = win.clone();
+    manager.connect_script_message_received(Some("roadmapWindow"), move |_, result| {
+        let Some(value) = result.js_value() else { return };
+        let message = value.to_string();
+        let parts: Vec<_> = message.split(',').collect();
+        match parts[0] {
+            "minimise" => window.iconify(),
+            "maximise" => if window.is_maximized() { window.unmaximize() } else { window.maximize() },
+            "close" => window.close(),
+            "move" if parts.len() == 4 => {
+                if let (Ok(x), Ok(y), Ok(time)) = (parts[1].parse(), parts[2].parse(), parts[3].parse()) {
+                    window.begin_move_drag(1, x, y, time);
+                }
+            }
+            _ => {}
+        }
+    });
+    let page = view.clone();
+    win.connect_window_state_event(move |window, _| {
+        page.evaluate_javascript(&format!("window.roadmapMaximised?.({})", window.is_maximized()), None, None, None::<&gio::Cancellable>, |_| {});
+        glib::Propagation::Proceed
+    });
     view.connect_decide_policy(move |_, decision, kind| {
         if !matches!(
             kind,

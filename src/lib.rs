@@ -1,3 +1,4 @@
+pub mod mcp;
 mod ai;
 mod api;
 mod exercise;
@@ -96,8 +97,13 @@ impl App {
         }))
     }
     // A panic in one request must not poison saving for every later request.
-    pub(crate) fn guard(&self) -> std::sync::MutexGuard<'_, ()> {
-        self.lock.lock().unwrap_or_else(|e| e.into_inner())
+    pub(crate) fn guard(&self) -> (std::sync::MutexGuard<'_, ()>, fs::File) {
+        let guard = self.lock.lock().unwrap_or_else(|e| e.into_inner());
+        fs::create_dir_all(&self.data).expect("create data directory for lock");
+        let file = fs::OpenOptions::new().create(true).truncate(false).write(true)
+            .open(self.data.join(".roadmap.lock")).expect("open data lock");
+        file.lock().expect("lock data directory");
+        (guard, file)
     }
     pub(crate) fn today(&self) -> i64 {
         std::time::SystemTime::now()
