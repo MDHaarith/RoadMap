@@ -11,6 +11,7 @@
   import ProjectFiles from '../components/ProjectFiles.svelte';
   import Practice from '../components/Practice.svelte';
   import Tutor from '../components/Tutor.svelte';
+  import Chart from '../components/Chart.svelte';
   let { c, l }: { c: Course; l: Lesson } = $props();
   let key = $derived(keyFor(c, l)), ls = $derived(lessons(c)), i = $derived(ls.findIndex(x => x.id === l.id));
   let pn = $derived(c.phases.findIndex(p => p.lessons.some(x => x.id === l.id)));
@@ -20,7 +21,7 @@
   let isLocked = $derived(locked(c, l));
   let previousStage = $derived((c.phases[pn]?.stage ?? 1) - 1);
   let left = $derived(stageLessons(c, previousStage).filter(x => !c.state.done[x.id]).length);
-  let steps = $derived([{ id: 'watch', title: 'Watch' }, { id: 'learn', title: 'Learn first' }, ...(l.lookups?.length ? [{ id: 'lookup', title: 'Look it up yourself' }] : []), ...(l.files?.length ? [{ id: 'read', title: 'Read the code' }] : []), { id: 'do', title: 'Do it yourself' }, { id: 'practice', title: 'Practise' }, { id: 'done', title: 'Done when' }]);
+  let steps = $derived([{ id: 'watch', title: 'Watch' }, { id: 'learn', title: 'Learn first' }, ...(l.charts?.length ? [{ id: 'graphs', title: 'Study the graphs' }] : []), ...(l.lookups?.length ? [{ id: 'lookup', title: 'Look it up yourself' }] : []), ...(l.files?.length ? [{ id: 'read', title: 'Read the code' }] : []), { id: 'do', title: 'Do it yourself' }, { id: 'practice', title: 'Practise' }, { id: 'done', title: 'Done when' }]);
   let si = $derived(steps.findIndex(s => s.id === step));
   let ok = $derived(checked(c, l).every(Boolean) || passed(c, l));
   onMount(() => {
@@ -70,6 +71,7 @@
     <div id="lesson-content" class="lesson-content"><div class="step-heading"><h2 id="step-title" tabindex="-1"><Icon name={steps[si].title} /> {steps[si].title}</h2><span class="small">{si + 1} / {steps.length}</span></div><div class="step-body">
       {#if step === 'watch'}<Videos {c} {l} {seek} />
       {:else if step === 'learn'}<p class="muted">Get comfortable with these ideas before you start making.</p><ol class="content-list">{#each l.concepts || [] as text, j}{@const recap = /^recap:\s*/i.test(text)}<li class:concept-known={!!l.known?.[j]}><div class="concept-copy">{#if recap}<span class="concept-recap">Recap</span>{/if}<Formatted text={recap ? text.replace(/^recap:\s*/i, '') : text} />{#if l.known?.[j]}<span class="tag">You learned this in {l.known[j]}</span>{/if}</div></li>{/each}</ol>
+      {:else if step === 'graphs'}<p class="muted">Read each graph before you start. Hover a point to see its value.</p>{#each l.charts || [] as chart}<Chart {chart} />{/each}
       {:else if step === 'lookup'}<p>These searches are <strong>your job</strong>. Open each phrase in your browser, compare what you find, and keep useful discoveries in your notes.</p>{#each l.lookups || [] as x, j}<div class="lookup"><a href={`https://duckduckgo.com/?q=${enc(x)}`}><Icon name="Look it up yourself" /> {x}</a><button class="btn secondary" aria-label={`Copy search phrase ${j + 1}`} onclick={e => copy(x, e.currentTarget)}><Icon name="copy" /> Copy</button></div>{/each}
       {:else if step === 'read'}<ProjectFiles {c} {l} />
       {:else if step === 'do'}{#if l.warn}<div class="note"><strong><Icon name="Safety" /> Before you begin</strong><p style="margin:8px 0 0"><Formatted text={l.warn} /></p></div>{/if}<p class="muted">Try it yourself first. Ask the tutor for a hint when you need one.</p><ol class="content-list">{#each l.tasks || [] as x}<li><Formatted text={x} /></li>{/each}</ol>

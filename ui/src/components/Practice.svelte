@@ -35,7 +35,8 @@
   async function again() { delete appState.sessions[key]; delete c.state.quiz[l.id]; save(c); await tick(); document.getElementById('question')?.focus({ preventScroll: true }); }
 </script>
 <div id="practice">
-  {#if appState.practiceBusy[key]}<div class="loading" role="status"><h3>Preparing your practice.</h3><p>The AI is writing questions{(/python|code|program|javascript/i.test(c.prompt || '')) ? ' and an exercise' : ''} for this lesson. This often takes many seconds.</p><span class="small">Your notes and tutor are still available.</span></div>
+  {#if !p && (!appState.config.base || !appState.config.model)}<div class="note setup"><div><strong>No AI service connected</strong><p>Practice questions are written by an AI service. Add one in Settings.</p></div><a class="btn secondary" href="#/settings">Open Settings</a></div>
+  {:else if appState.practiceBusy[key]}<div class="loading" role="status"><h3>Preparing your practice.</h3><p>The AI is writing questions{(/python|code|program|javascript/i.test(c.prompt || '')) ? ' and an exercise' : ''} for this lesson. This often takes many seconds.</p><span class="small">Your notes and tutor are still available.</span></div>
   {:else if appState.practiceErrors[key]}<div class="err" role="alert"><strong>Practice couldn’t load.</strong><p>{appState.practiceErrors[key]}</p><button id="retry-practice" class="btn secondary" onclick={() => loadPractice(!!appState.practiceFresh[key])}>Try again</button></div>
   {:else if !p}<div class="practice-start"><h3>Put it to the test.</h3><p>A few questions to check what stuck. No rush, and no penalty for getting it wrong.</p><button class="btn" id="load-practice" onclick={() => loadPractice()}>Get practice <Icon name="arrow" /></button><p class="small" style="margin:16px 0 0">Created for this lesson. It can take a little while.</p></div>
   {:else}

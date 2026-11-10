@@ -71,6 +71,10 @@ fn main() {
                     .map(|path| path.to_string_lossy().into_owned())
                     .unwrap_or_default()
             })?);
+            // The compact layout reads too small at 100%; the layout's breakpoints still adapt to the zoomed width.
+            if let Some(window) = app.get_webview_window("main") {
+                let _ = window.set_zoom(1.15);
+            }
             Ok(())
         })
         .invoke_handler(tauri::generate_handler![api, chat_stream])
