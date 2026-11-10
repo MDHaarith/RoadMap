@@ -1,6 +1,7 @@
 pub mod mcp;
 mod ai;
 mod api;
+pub use api::request_body;
 mod exercise;
 mod project;
 mod prompts;
@@ -10,7 +11,6 @@ use serde_json::{json, Value};
 use std::{
     collections::HashSet,
     fs,
-    io::Read,
     path::PathBuf,
     sync::{
         atomic::{AtomicI64, Ordering},
@@ -19,7 +19,7 @@ use std::{
 };
 
 pub type Result<T> = std::result::Result<T, Error>;
-#[derive(Debug)]
+#[derive(Debug, serde::Serialize)]
 pub struct Error {
     pub status: u16,
     pub message: String,
@@ -66,7 +66,6 @@ pub struct App {
     pub home: PathBuf,
     pub data: PathBuf,
     pub conf: PathBuf,
-    pub prefix: String,
     pub(crate) lock: Mutex<()>,
     pub(crate) off: Mutex<HashSet<String>>,
     pub(crate) meter: Mutex<()>,
@@ -76,24 +75,31 @@ pub struct App {
 }
 impl App {
     pub fn new(pick: impl Fn(&str) -> String + Send + Sync + 'static) -> Result<Arc<Self>> {
-        let home = PathBuf::from(std::env::var_os("HOME").unwrap_or_else(|| "/".into()));
+        let home = dirs::home_dir().ok_or_else(|| Error::bad("Home directory is unavailable."))?;
+        #[cfg(target_os = "linux")]
         let xdg = |k: &str, fallback: &str| {
             std::env::var_os(k)
                 .filter(|s| !s.is_empty())
                 .map(PathBuf::from)
                 .unwrap_or_else(|| home.join(fallback))
         };
+        #[cfg(target_os = "linux")]
+        let (data, config) = (xdg("XDG_DATA_HOME", ".local/share"), xdg("XDG_CONFIG_HOME", ".config"));
+        #[cfg(not(target_os = "linux"))]
+        let (data, config) = (
+            dirs::data_dir().ok_or_else(|| Error::bad("Data directory is unavailable."))?,
+            dirs::config_dir().ok_or_else(|| Error::bad("Config directory is unavailable."))?,
+        );
         Ok(Arc::new(Self {
-            data: xdg("XDG_DATA_HOME", ".local/share").join("roadmap-app"),
-            conf: xdg("XDG_CONFIG_HOME", ".config").join("roadmap-app/config.json"),
+            data: data.join("roadmap-app"),
+            conf: config.join("roadmap-app").join("config.json"),
             home,
-            prefix: format!("/{}/", random_hex(16)?),
             lock: Mutex::new(()),
             off: Mutex::new(HashSet::new()),
             meter: Mutex::new(()),
             day_offset: AtomicI64::new(0),
             pick: Box::new(pick),
-            yt_program: "yt-dlp".into(),
+            yt_program: if cfg!(windows) { "yt-dlp.exe" } else { "yt-dlp" }.into(),
         }))
     }
     // A panic in one request must not poison saving for every later request.
@@ -116,7 +122,7 @@ impl App {
 }
 pub(crate) fn random_hex(n: usize) -> Result<String> {
     let mut b = vec![0; n];
-    fs::File::open("/dev/urandom")?.read_exact(&mut b)?;
+    getrandom::fill(&mut b).map_err(|e| Error { status: 500, message: format!("Random number generator failed: {e}") })?;
     Ok(b.iter().map(|x| format!("{x:02x}")).collect())
 }
 pub(crate) fn text(v: &Value) -> String {
@@ -271,7 +277,17 @@ pub(crate) fn clean_needs(v: &Value) -> Vec<Value> {
 pub(crate) fn on_path(cmd: &str) -> bool {
     matches(r"^[A-Za-z0-9_+-][A-Za-z0-9_.+-]{0,39}$", cmd)
         && std::env::var_os("PATH")
-            .is_some_and(|p| std::env::split_paths(&p).any(|d| d.join(cmd).is_file()))
+            .is_some_and(|p| std::env::split_paths(&p).any(|d| {
+                if d.join(cmd).is_file() { return true; }
+                #[cfg(windows)]
+                {
+                    let extensions = std::env::var("PATHEXT").unwrap_or_else(|_| ".COM;.EXE;.BAT;.CMD".into());
+                    extensions.split(';').filter(|ext| !ext.is_empty())
+                        .any(|ext| d.join(format!("{cmd}{ext}")).is_file())
+                }
+                #[cfg(not(windows))]
+                false
+            }))
 }
-#[cfg(test)]
+#[cfg(all(test, target_os = "linux"))]
 mod tests;

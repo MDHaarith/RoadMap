@@ -6,7 +6,7 @@ use crate::{
 };
 use std::{
     collections::BTreeMap,
-    io::{BufRead, BufReader},
+    io::{BufRead, BufReader, Read},
     process::Command,
     time::Duration,
 };
@@ -509,7 +509,7 @@ impl App {
         )
         .map_err(|e| {
             if e.kind() == std::io::ErrorKind::NotFound {
-                Error::bad("yt-dlp is not installed. Run: sudo dnf install yt-dlp")
+                Error::bad(if cfg!(target_os = "linux") { "yt-dlp is not installed. Run: sudo dnf install yt-dlp" } else { "yt-dlp is not installed. Install yt-dlp and add it to PATH." })
             } else {
                 e.into()
             }

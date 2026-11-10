@@ -49,7 +49,7 @@ impl App {
             Error::bad("Choose the folder of one project, not your whole home folder.")
         })?;
         if !root.is_dir()
-            || root == Path::new("/")
+            || root.parent().is_none()
             || root == fs::canonicalize(&self.home).unwrap_or(self.home.clone())
         {
             return Err(Error::bad(
@@ -66,7 +66,7 @@ impl App {
                             .strip_prefix(root)
                             .unwrap()
                             .to_string_lossy()
-                            .into(),
+                            .replace('\\', "/"),
                     );
                 }
             }

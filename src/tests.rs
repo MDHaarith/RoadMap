@@ -116,7 +116,7 @@ impl FakeAI {
                             && !user.contains(".git")
                             && !user.contains("node_modules")
                     );
-                    { json!({"title":"Understand demo","phases":[{"title":"Run it","lessons":[{"title":"Entry","files":["app.py",".env","../../etc/passwd","made_up.py"]}]}]}).to_string() }
+                    json!({"title":"Understand demo","phases":[{"title":"Run it","lessons":[{"title":"Entry","files":["app.py",".env","../../etc/passwd","made_up.py"]}]}]}).to_string()
                 } else if system.contains("You plan a long course") && user.contains("--- app.py ---") {
                     assert!(user.contains("Size: about three months") && user.contains("Never pad it"), "{user}");
                     json!({"title":"Demo","stages":[{"title":"S","phases":[{"title":"P","lessons":[{"title":"Entry","files":["app.py","fake.py"]}]},{"title":"Later","lessons":[{"title":"Later"}]}]}]}).to_string()
@@ -213,32 +213,13 @@ impl Drop for FakeAI {
         }
     }
 }
-fn call_raw(base: &str, method: &str, path: &str, b: Option<Value>) -> (u16, String, Vec<u8>) {
-    let req = ureq::request(method, &format!("{base}{path}")).timeout(Duration::from_secs(30));
-    let result = if let Some(b) = b {
-        req.set("Content-Type", "application/json")
-            .send_string(&b.to_string())
-    } else {
-        req.call()
-    };
-    let r = match result {
-        Ok(r) => r,
-        Err(ureq::Error::Status(_, r)) => r,
-        Err(e) => panic!("{method} {path}: {e}"),
-    };
-    let status = r.status();
-    let ct = r.header("Content-Type").unwrap_or("").to_string();
-    let mut bytes = vec![];
-    r.into_reader()
-        .read_to_end(&mut bytes)
-        .unwrap_or_else(|e| panic!("{method} {path}: {e}"));
-    (status, ct, bytes)
+fn call(app: &Arc<App>, method: &str, path: &str, body: Value) -> (u16, Value) {
+    match request_body(body).and_then(|body| app.route(method, path, &body)) {
+        Ok(value) => (200, value),
+        Err(e) => (e.status, json!({"error":e.message})),
+    }
 }
-fn call(base: &str, method: &str, path: &str, b: Value) -> (u16, Value) {
-    let (s, _, bytes) = call_raw(base, method, path, Some(b));
-    (s, serde_json::from_slice(&bytes).unwrap())
-}
-fn wait_videos(base: &str, cid: &str) {
+fn wait_videos(base: &Arc<App>, cid: &str) {
     let start = Instant::now();
     loop {
         let c = call(base, "GET", &format!("api/courses/{cid}"), json!({})).1;
@@ -275,7 +256,6 @@ fn python_spec_end_to_end() {
         home: tmp.path().into(),
         data: tmp.path().join("data/roadmap-app"),
         conf: tmp.path().join("config/roadmap-app/config.json"),
-        prefix: format!("/{}/", random_hex(16).unwrap()),
         lock: Mutex::new(()),
         off: Mutex::new(HashSet::new()),
         meter: Mutex::new(()),
@@ -297,18 +277,7 @@ fn python_spec_end_to_end() {
     fs::set_permissions(&app.yt_program, fs::Permissions::from_mode(0o755)).unwrap();
     let app = Arc::new(app);
     let ai = FakeAI::new();
-    let base = app.serve().unwrap();
-    let origin = base.split(&app.prefix).next().unwrap();
-    assert_eq!(
-        call(origin, "GET", "/wrong-token/api/settings", json!({})).0,
-        404
-    );
-    let (_, _, html) = call_raw(&base, "GET", "", None);
-    let html = String::from_utf8(html).unwrap();
-    assert!(
-        html.contains("<title>Roadmap</title>")
-            && html.contains("<html lang=\"en\" data-theme=\"light\">")
-    );
+    let base = app.clone();
     assert_eq!(
         call(&base, "PUT", "api/theme", json!({"theme":"\"><script>"})).0,
         400
@@ -317,9 +286,7 @@ fn python_spec_end_to_end() {
         call(&base, "PUT", "api/theme", json!({"theme":"dark"})).0,
         200
     );
-    assert!(String::from_utf8(call_raw(&base, "GET", "", None).2)
-        .unwrap()
-        .contains("<html lang=\"en\" data-theme=\"dark\">"));
+    assert_eq!(call(&base, "GET", "api/settings", Value::Null).1["theme"], "dark");
     assert_eq!(
         fs::metadata(&app.conf).unwrap().permissions().mode() & 0o777,
         0o600
@@ -713,15 +680,10 @@ fn python_spec_end_to_end() {
     assert!(results[1].starts_with("Lesson 1.1: Mix"));
     assert_eq!(results[2], "That tool or argument does not exist.");
     assert_eq!(results[2], results[3]);
-    let (status, ct, bytes) = call_raw(
-        &base,
-        "POST",
-        "api/chat",
-        Some(merge(chat.clone(), json!({"stream":true}))),
-    );
-    assert_eq!(status, 200);
-    assert!(ct.starts_with("text/plain"));
-    assert_eq!(bytes, b"hint for: 1.1: Mix");
+    let mut pieces = String::new();
+    let answer = app.chat_stream(&chat, &mut |piece| { pieces.push_str(piece); Ok(()) }).unwrap();
+    assert_eq!(answer, "hint for: 1.1: Mix");
+    assert_eq!(pieces, answer);
     assert_eq!(ai.last()["stream"], true);
     assert_eq!(
         list(&ai.last()["messages"])
@@ -1040,7 +1002,7 @@ fn sse_tool_fragments_stream_fallback_and_ai_errors() {
 fn request_limits_legacy_files_and_project_symlinks() {
     let tmp = tempfile::tempdir().unwrap();
     let app = isolated_app(tmp.path());
-    let base = app.serve().unwrap();
+    let base = app.clone();
     assert_eq!(call(&base, "PUT", "api/settings", json!([])).0, 400);
     assert_eq!(
         call(
@@ -1052,10 +1014,8 @@ fn request_limits_legacy_files_and_project_symlinks() {
         .0,
         413
     );
-    let bad = ureq::post(&format!("{base}api/settings"))
-        .send_string("not json")
-        .unwrap_err();
-    assert!(matches!(bad, ureq::Error::Status(400, _)));
+    assert_eq!(request_body(Value::Null).unwrap(), json!({}));
+    assert_eq!(serde_json::to_value(Error::bad("Bad request.")).unwrap(), json!({"status":400,"message":"Bad request."}));
     // These are the literal file formats the old app wrote, including nullable folder and a Python exercise.
     let legacy = r#"{"id":"0123456789ab","title":"Existing roadmap","summary":"saved before the port","prompt":"learn","level":"beginner","folder":null,"phases":[{"title":"One","blurb":"","lessons":[{"id":"1.1","title":"Basics","goal":"g","concepts":["one"],"tasks":[],"done":[],"query":"q","practice":{"quiz":[],"exercise":{"lang":"python","title":"Double","prompt":"p","starter":"def double(x): pass","tests":"import main"}}}]}],"state":{"checks":{},"done":{},"notes":{"1.1":"old note"},"code":{"1.1":"def double(x): return x * 2"},"last":"1.1"}}"#;
     fs::create_dir_all(&app.data).unwrap();
@@ -1388,4 +1348,43 @@ fn mcp_data_lock_is_shared_between_app_instances() {
     let worker=thread::spawn(move||{let _guard=other.guard();tx.send(()).unwrap();});
     assert!(rx.recv_timeout(Duration::from_millis(50)).is_err());
     drop(held);rx.recv_timeout(Duration::from_secs(2)).unwrap();worker.join().unwrap();
+}
+
+#[test]
+fn chat_stream_fallback_empty_partial_and_early_errors() {
+    let tmp = tempfile::tempdir().unwrap();
+    let app = isolated_app(tmp.path());
+    let cid = "0123456789ab";
+    let mut c = course();
+    c["id"] = json!(cid);
+    c["phases"][0]["lessons"][0]["id"] = json!("1.1");
+    app.save(&c).unwrap();
+    let server = tiny_http::Server::http("127.0.0.1:0").unwrap();
+    app.save_config(&json!({"base":format!("http://{}/v1", server.server_addr()),"model":"m"})).unwrap();
+    let worker = thread::spawn(move || {
+        for (status, content_type, body) in [
+            (200, "application/json", json!({"choices":[{"message":{"content":"fallback"}}]}).to_string()),
+            (200, "application/json", json!({"choices":[{"message":{"content":""}}]}).to_string()),
+            (200, "text/event-stream", format!("data: {}\n\ndata: broken\n\n", json!({"choices":[{"delta":{"content":"partial"}}]}))),
+            (503, "text/plain", "unavailable".into()),
+        ] {
+            let req = server.recv_timeout(Duration::from_secs(10)).unwrap().expect("chat request");
+            req.respond(tiny_http::Response::from_string(body).with_status_code(status)
+                .with_header(tiny_http::Header::from_bytes("Content-Type", content_type).unwrap())).unwrap();
+        }
+    });
+    let body = json!({"course":cid,"lesson":"1.1","messages":[{"role":"user","content":"help"}]});
+    for expected in ["fallback", "(No answer.)", "partial\n\n(The answer was cut off: The AI service sent an answer this app can't read.)"] {
+        let mut pieces = String::new();
+        let answer = app.chat_stream(&body, &mut |piece| { pieces.push_str(piece); Ok(()) }).unwrap();
+        assert_eq!(answer, expected);
+        assert_eq!(pieces, answer);
+        if expected == "fallback" {
+            assert_eq!(app.read_side(&app.chat_file(cid).unwrap())["1.1"][1]["content"], expected);
+        }
+    }
+    let mut pieces = String::new();
+    assert_eq!(app.chat_stream(&body, &mut |piece| { pieces.push_str(piece); Ok(()) }).unwrap_err().status, 400);
+    assert!(pieces.is_empty());
+    worker.join().unwrap();
 }
