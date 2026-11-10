@@ -68,6 +68,7 @@ pub struct App {
     pub prefix: String,
     pub(crate) lock: Mutex<()>,
     pub(crate) off: Mutex<HashSet<String>>,
+    pub(crate) meter: Mutex<()>,
     pub(crate) day_offset: AtomicI64,
     pub(crate) pick: Box<dyn Fn(&str) -> String + Send + Sync>,
     pub(crate) yt_program: PathBuf,
@@ -88,6 +89,7 @@ impl App {
             prefix: format!("/{}/", random_hex(16)?),
             lock: Mutex::new(()),
             off: Mutex::new(HashSet::new()),
+            meter: Mutex::new(()),
             day_offset: AtomicI64::new(0),
             pick: Box::new(pick),
             yt_program: "yt-dlp".into(),
@@ -246,6 +248,24 @@ pub(crate) fn clean_stages(v: &Value) -> Vec<Value> {
         .enumerate()
         .map(|(i, s)| json!({"title":cap(&if truth(&s["title"]){text(&s["title"])}else{format!("Stage {}",i+1)},200),"blurb":cap(&string(&s["blurb"]),600)}))
         .collect()
+}
+// What a course needs before lesson one. `command` is only ever looked up on PATH, never run.
+pub(crate) fn clean_needs(v: &Value) -> Vec<Value> {
+    list(v)
+        .iter()
+        .filter(|n| n.is_object() && truth(&n["name"]))
+        .take(20)
+        .map(|n| {
+            let cmd = string(&n["command"]);
+            json!({"name":cap(&text(&n["name"]),120),"kind":if n["kind"]=="tool"{"tool"}else{"part"},
+                "command":if matches(r"^[A-Za-z0-9_+-][A-Za-z0-9_.+-]{0,39}$",&cmd){cmd}else{String::new()},"why":cap(&string(&n["why"]),300)})
+        })
+        .collect()
+}
+pub(crate) fn on_path(cmd: &str) -> bool {
+    matches(r"^[A-Za-z0-9_+-][A-Za-z0-9_.+-]{0,39}$", cmd)
+        && std::env::var_os("PATH")
+            .is_some_and(|p| std::env::split_paths(&p).any(|d| d.join(cmd).is_file()))
 }
 #[cfg(test)]
 mod tests;

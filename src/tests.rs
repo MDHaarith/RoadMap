@@ -116,7 +116,10 @@ impl FakeAI {
                             && !user.contains(".git")
                             && !user.contains("node_modules")
                     );
-                    json!({"title":"Understand demo","phases":[{"title":"Run it","lessons":[{"title":"Entry","files":["app.py",".env","../../etc/passwd","made_up.py"]}]}]}).to_string()
+                    { json!({"title":"Understand demo","phases":[{"title":"Run it","lessons":[{"title":"Entry","files":["app.py",".env","../../etc/passwd","made_up.py"]}]}]}).to_string() }
+                } else if system.contains("You plan a long course") && user.contains("--- app.py ---") {
+                    assert!(user.contains("Size: about three months") && user.contains("Never pad it"), "{user}");
+                    json!({"title":"Demo","stages":[{"title":"S","phases":[{"title":"P","lessons":[{"title":"Entry","files":["app.py","fake.py"]}]},{"title":"Later","lessons":[{"title":"Later"}]}]}]}).to_string()
                 } else if system.contains("You plan a long course") {
                     assert!(user.contains("Size: about six months"), "{user}");
                     json!({"title":"Bake bread","summary":"s","stages":[{"title":"Basics","blurb":"Ends with a loaf.","phases":[{"title":"Dough","blurb":"b","lessons":[{"title":"Mix","goal":"Mix a dough."},{"title":"Knead","goal":"Knead it."}]}]},"junk",{"title":"","blurb":"","phases":[{"title":"Bake","blurb":"b","lessons":[{"title":"Heat","goal":"Heat it."}]}]}]}).to_string()
@@ -153,7 +156,7 @@ impl FakeAI {
                     if !names.is_empty()
                         && b["messages"].as_array().unwrap().last().unwrap()["role"] == "user"
                     {
-                        assert_eq!(names, vec!["get_lesson", "run_exercise_tests"]);
+                        assert_eq!(names, vec!["get_lesson", "run_exercise_tests", "read_video_transcript"]);
                         let calls = [("run_exercise_tests", "{}"), ("get_lesson", "{\"id\":\"1.1\"}"), ("rm_rf", "{}"), ("get_lesson", "not json")]
                             .iter().enumerate().map(|(i,(n,a))| json!({"id":format!("c{i}"),"type":"function","function":{"name":n,"arguments":a}})).collect::<Vec<_>>();
                         msg = Some(json!({"content":null,"tool_calls":calls}));
@@ -275,6 +278,7 @@ fn python_spec_end_to_end() {
         prefix: format!("/{}/", random_hex(16).unwrap()),
         lock: Mutex::new(()),
         off: Mutex::new(HashSet::new()),
+        meter: Mutex::new(()),
         day_offset: AtomicI64::new(0),
         pick: Box::new(move |k| {
             if k == "file" {
@@ -356,7 +360,7 @@ fn python_spec_end_to_end() {
     );
     assert_eq!(
         call(&base, "GET", "api/settings", json!({})).1,
-        json!({"base":ai.base,"model":"m","key_set":true,"theme":"dark"})
+        json!({"base":ai.base,"model":"m","small":"","usage":{},"key_set":true,"theme":"dark"})
     );
     assert_eq!(
         fs::metadata(&app.conf).unwrap().permissions().mode() & 0o777,
@@ -1156,7 +1160,7 @@ fn long_roadmap_outline_expand_and_revise() {
     }
     assert!(!truth(&app.load(&cid).unwrap()["phases"][0]["lessons"][1]["videos"]));
 
-    let file = app.export_course(&app.load(&cid).unwrap()).unwrap();
+    let file = app.export_course(&app.load(&cid).unwrap(), false).unwrap();
     let back = app.import_course(&string(&file["path"])).unwrap();
     assert_eq!(back["stages"], c["stages"]);
     assert_eq!(back["phases"][1]["stage"], 1);
@@ -1206,4 +1210,108 @@ fn long_roadmap_outline_expand_and_revise() {
             .status,
         404
     );
+}
+#[test]
+fn ideas_mistakes_search_setup_and_exports() {
+    let tmp = tempfile::tempdir().unwrap();
+    let app = isolated_app(tmp.path());
+    let cid = "0123456789ab";
+    let note = "Remember the Autolyse step";
+    app.save(&json!({"id":cid,"title":"Bake bread","summary":"s","prompt":"bread","level":"new",
+        "needs":clean_needs(&json!([{"name":"Shell","kind":"tool","command":"sh"},{"name":"Missing","kind":"tool","command":"no-such-tool-xyz"},{"name":"Oven","command":"rm -rf /"}])),
+        "phases":[{"title":"P","blurb":"","lessons":[{"id":"1.1","title":"Starter","goal":"Feed a starter","concepts":["hydration ratio"],"tasks":[],"done":["bubbles"],
+            "practice":{"quiz":[{"q":"Q?","options":["a","b"],"answer":1,"why":"because"}],"exercise":null}}]}],
+        "state":{"checks":{},"done":{},"notes":{"1.1":note},"last":"1.1"}}))
+        .unwrap();
+    let r = |m: &str, p: &str, b: Value| app.route(m, p, &b);
+    let at = |sub: &str| format!("api/courses/{cid}{sub}");
+
+    assert!(r("PUT", "api/ideas", json!({})).is_err());
+    r("PUT", "api/ideas", json!({"notes":["Rye autolyse experiment", 5]})).unwrap();
+    assert_eq!(
+        r("GET", "api/ideas", json!({})).unwrap(),
+        json!({"notes":["Rye autolyse experiment"]})
+    );
+
+    let miss = |i: u64| r("POST", "api/mistake", json!({"course":cid,"lesson":"1.1","i":i,"picked":0}));
+    assert!(miss(9).is_err());
+    miss(0).unwrap();
+    // The page saves its state often and must not be able to wipe the notebook.
+    r("PUT", &at("/state"), json!({"checks":{},"done":{},"notes":{"1.1":note},"mistakes":{}})).unwrap();
+    let m = r("GET", "api/mistakes", json!({})).unwrap()["items"][0].clone();
+    assert_eq!((&m["picked"], &m["answer"], &m["n"], &m["fixed"]), (&json!(0), &json!(1), &json!(1), &json!(false)));
+    assert_eq!(app.load(cid).unwrap()["state"]["review"]["1.1#0"]["due"], app.today());
+    app.reviewed(cid, "1.1", "0", true).unwrap();
+    assert_eq!(r("GET", "api/mistakes", json!({})).unwrap()["items"][0]["fixed"], true);
+
+    app.save_chat(cid, "1.1", &[json!({"role":"user","content":"why autolyse?"})], "It hydrates the flour.");
+    let kinds = |q: &str| {
+        list(&r("POST", "api/search", json!({"q":q})).unwrap()["results"])
+            .iter()
+            .map(|x| string(&x["kind"]))
+            .collect::<Vec<_>>()
+    };
+    assert_eq!(kinds("AUTOLYSE"), ["idea", "note", "chat"]);
+    assert_eq!(kinds("hydration starter"), ["lesson"]);
+    assert!(kinds("autolyse nowhere").is_empty() && kinds(" ").is_empty());
+    assert_eq!(list(&r("GET", &at(""), json!({})).unwrap()["chats"]["1.1"]).len(), 2);
+
+    assert_eq!(
+        r("POST", &at("/setup"), json!({})).unwrap(),
+        json!({"found":{"sh":true,"no-such-tool-xyz":false}})
+    );
+    let file = |v: Value| fs::read_to_string(v["path"].as_str().unwrap()).unwrap();
+    let t: Value = serde_json::from_str(&file(r("POST", &at("/export"), json!({"template":true})).unwrap())).unwrap();
+    assert_eq!((&t["title"], &t["state"]["notes"]), (&json!("Bake bread"), &json!({})));
+    let md = file(r("POST", &at("/summary"), json!({})).unwrap());
+    assert!(md.starts_with("# Bake bread") && md.contains(note));
+
+    assert_eq!(
+        crate::ai::transcript_lines(&json!({"events":[{"tStartMs":0,"segs":[{"utf8":"hello"}]},{"tStartMs":5000,"segs":[{"utf8":"\n"}]},{"tStartMs":9000,"segs":[{"utf8":" there"}]},{"tStartMs":25000,"segs":[{"utf8":"next"}]}]})),
+        [(0, "hello there".to_string()), (25, "next".to_string())]
+    );
+    r("DELETE", &at(""), json!({})).unwrap();
+    assert!(!app.data.join(format!("{cid}.chat.json")).exists());
+}
+
+
+#[test]
+fn deep_project() {
+    let tmp = tempfile::tempdir().unwrap();
+    let app = isolated_app(tmp.path());
+    let ai = FakeAI::new();
+    app.write_config(&json!({"base":ai.base,"model":"m","key":"sk-test"})).unwrap();
+    let root = tmp.path().join("project");
+    fs::create_dir(&root).unwrap();
+    fs::write(root.join("app.py"), "print('hi')").unwrap();
+    let mut c = app.build_course("understand", "beginner", root.to_str().unwrap(), "deep").unwrap();
+    assert!(c["stages"].is_array());
+    assert_eq!(c["phases"][0]["lessons"][0]["files"], json!(["app.py"]));
+    let cid = string(&c["id"]);
+    app.save(&c).unwrap();
+    c = app.expand(&cid, &json!("1.1")).unwrap();
+    assert!(c["phases"][0]["lessons"][0].get("stub").is_none());
+    assert_eq!(c["phases"][0]["lessons"][0]["files"], json!(["app.py"]));
+    assert_eq!(c["phases"][1]["lessons"][0]["stub"], true);
+}
+
+#[test]
+fn topic_videos() {
+    let tmp = tempfile::tempdir().unwrap();
+    let mut app = isolated_app(tmp.path());
+    let a = Arc::get_mut(&mut app).unwrap();
+    a.yt_program = tmp.path().join("yt-dlp");
+    fs::write(&a.yt_program, format!("#!/bin/sh\ncat <<'FIXTURE'\n{}\nFIXTURE\n", found())).unwrap();
+    fs::set_permissions(&a.yt_program, fs::Permissions::from_mode(0o755)).unwrap();
+    let cid = "0123456789ab";
+    let mut videos = vec![json!({"id":"original"})];
+    for i in 0..7 { videos.push(json!({"id":format!("old{i}"),"searched":true})); }
+    app.save(&json!({"id":cid,"phases":[{"lessons":[{"id":"1.1","videos":videos}]}]})).unwrap();
+    let path = format!("api/courses/{cid}/videos");
+    assert_eq!(app.route("POST",&path,&json!({"lesson":"1.1","query":"  "})).unwrap_err().status,400);
+    let v = app.route("POST",&path,&json!({"lesson":"1.1","query":"some topic"})).unwrap();
+    assert_eq!(v[0]["id"], "original");
+    assert_eq!(list(&v).len(),8);
+    assert!(list(&v).iter().skip(1).all(|x| truth(&x["searched"])));
+    assert!(!list(&v).iter().any(|x| x["id"] == "old0"));
 }
