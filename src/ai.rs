@@ -30,7 +30,7 @@ fn course_schema(project: bool) -> Value {
         l["files"] = arr(s());
     }
     obj(
-        json!({"title":s(),"summary":s(),"phases":arr(obj(json!({"title":s(),"blurb":s(),"lessons":arr(obj(l))})))}),
+        json!({"title":s(),"summary":s(),"needs":needs_schema(),"phases":arr(obj(json!({"title":s(),"blurb":s(),"lessons":arr(obj(l))})))}),
     )
 }
 // Whether a size is planned as an outline first, and the size line the designer is given.
@@ -41,6 +41,11 @@ fn size_rule(size: &str) -> (bool, &'static str) {
         "mastery" => (true, "Size: about six months of steady study. Use 6 stages, each with 4 to 5 phases of 3 to 5 lessons: 90 to 120 lessons in total."),
         _ => (false, ""),
     }
+}
+fn needs_schema() -> Value {
+    arr(obj(
+        json!({"name":s(),"kind":{"type":"string","enum":["tool","part"]},"command":s(),"why":s()}),
+    ))
 }
 fn practice_schema() -> Value {
     obj(
@@ -74,11 +79,35 @@ impl App {
         on_text: &mut Sink<'_>,
         extra: Value,
     ) -> Result<Value> {
+        self.ask_as(false, msgs, on_text, extra)
+    }
+    // shortcut: a streamed answer rarely reports its usage, so tokens are then estimated at four characters each; send stream_options.include_usage if exact counts matter.
+    fn metered(&self, usage: &Value, sent: usize, got: usize) {
+        self.count(
+            usage["prompt_tokens"].as_u64().unwrap_or(sent as u64 / 4),
+            usage["completion_tokens"]
+                .as_u64()
+                .unwrap_or(got as u64 / 4),
+        );
+    }
+    // `small` sends the job to the cheaper model, when Settings names one.
+    fn ask_as(
+        &self,
+        small: bool,
+        msgs: &[Value],
+        on_text: &mut Sink<'_>,
+        extra: Value,
+    ) -> Result<Value> {
         let c = self.config();
         if !truth(&c["base"]) || !truth(&c["model"]) {
             return Err(Error::bad("Set up the AI service in Settings first."));
         }
-        let mut body = json!({"model":c["model"],"messages":msgs});
+        let model = if small && truth(&c["small"]) {
+            &c["small"]
+        } else {
+            &c["model"]
+        };
+        let mut body = json!({"model":model,"messages":msgs});
         let mut extra = extra.as_object().cloned().unwrap_or_default();
         extra.insert("stream".into(), json!(on_text.is_some()));
         {
@@ -90,19 +119,8 @@ impl App {
             "{}/chat/completions",
             string(&c["base"]).trim_end_matches('/')
         );
-        let mut agent = ureq::AgentBuilder::new()
-            .timeout(Duration::from_secs(300))
-            .redirects(10)
-            .try_proxy_from_env(false);
-        // urllib used the proxy for this URL's scheme and respected no_proxy.
-        // ureq's automatic proxy discovery does neither, so preserve that policy here.
-        if let Some(proxy) = proxy_for(&url) {
-            agent = agent.proxy(
-                ureq::Proxy::new(proxy)
-                    .map_err(|e| Error::bad(format!("Can't reach the AI service: {e}")))?,
-            );
-        }
-        let agent = agent.build();
+        let agent = agent(&url, 300)
+            .map_err(|e| Error::bad(format!("Can't reach the AI service: {e}")))?;
         let mut req = agent
             .post(&url)
             .set("Content-Type", "application/json")
@@ -112,12 +130,13 @@ impl App {
         if !key.is_empty() {
             req = req.set("Authorization", &auth);
         }
-        let r = match req.send_string(&body.to_string()) {
+        let sent = body.to_string();
+        let r = match req.send_string(&sent) {
             Ok(r) => r,
             Err(ureq::Error::Status(code, r)) => {
                 if !extra.is_empty() && [400, 404, 422, 501].contains(&code) {
                     self.off.lock().unwrap_or_else(|e| e.into_inner()).extend(extra.keys().cloned());
-                    return self.ask(msgs, on_text, json!({}));
+                    return self.ask_as(small, msgs, on_text, json!({}));
                 }
                 let mut bytes = vec![];
                 let _ = r.into_reader().take(400).read_to_end(&mut bytes);
@@ -140,6 +159,11 @@ impl App {
                 .filter(|v| v.is_object())
                 .ok_or_else(unreadable)?
                 .clone();
+            self.metered(
+                &d["usage"],
+                sent.len(),
+                m["content"].as_str().map_or(0, str::len),
+            );
             if let Some(out) = on_text.as_mut() {
                 if let Some(t) = m["content"].as_str().filter(|s| !s.is_empty()) {
                     out(t)?;
@@ -149,6 +173,7 @@ impl App {
         }
         let mut content = String::new();
         let mut calls = BTreeMap::new();
+        let mut usage = Value::Null;
         for line in BufReader::new(r.into_reader()).split(b'\n') {
             let line = line.map_err(|_| unreadable())?;
             let line = String::from_utf8_lossy(&line);
@@ -160,6 +185,9 @@ impl App {
                 continue;
             }
             let d: Value = serde_json::from_str(data).map_err(|_| unreadable())?;
+            if d["usage"].is_object() {
+                usage = d["usage"].clone();
+            }
             let delta = &d["choices"][0]["delta"];
             if let Some(t) = delta["content"].as_str() {
                 content.push_str(t);
@@ -182,12 +210,14 @@ impl App {
                 }
             }
         }
+        self.metered(&usage, sent.len(), content.len());
         Ok(
             json!({"content":content,"tool_calls":if calls.is_empty(){Value::Null}else{json!(calls.into_values().collect::<Vec<_>>())}}),
         )
     }
     fn llm(&self, msgs: Vec<Value>, name: &str, schema: Value) -> Result<String> {
-        let m=self.ask(&msgs,&mut None,json!({"response_format":{"type":"json_schema","json_schema":{"name":name,"strict":true,"schema":schema}}}))?;
+        let small = ["practice", "videos", "mark", "placement"].contains(&name);
+        let m=self.ask_as(small,&msgs,&mut None,json!({"response_format":{"type":"json_schema","json_schema":{"name":name,"strict":true,"schema":schema}}}))?;
         Ok(string(&m["content"]))
     }
     pub(crate) fn placement(&self, prompt: &str, folder: &str, answers: &Value) -> Result<Value> {
@@ -242,12 +272,7 @@ impl App {
         folder: &str,
         size: &str,
     ) -> Result<Value> {
-        // Project roadmaps are sized by the project, so a size applies to new builds only.
-        let (outline, rule) = if folder.is_empty() {
-            size_rule(size)
-        } else {
-            (false, "")
-        };
+        let (outline, rule) = size_rule(size);
         let mut known = vec![];
         let mut root = folder.to_string();
         let mut rows;
@@ -256,7 +281,12 @@ impl App {
             let (r, f, digest) = self.read_project(folder)?;
             root = r;
             known = f;
-            system = PROJECT_PROMPT;
+            // A long project roadmap is planned as an outline too; the rows below carry the project.
+            system = if outline {
+                OUTLINE_PROMPT
+            } else {
+                PROJECT_PROMPT
+            };
             rows = vec![
                 format!(
                     "What I want from this project: {}",
@@ -285,13 +315,19 @@ impl App {
             }
             rows.extend(self.learned("", 120)?);
         }
-        let brief = || obj(json!({"title":s(),"goal":s()}));
+        if !folder.is_empty() {
+            if !rule.is_empty() { rows.push(rule.into()); }
+            if outline {
+                rows.push("This course is about the existing project shown above. Plan it around that project's real code. Give every lesson a \"files\" list: the project files it studies, as paths from the file list above. The size is a target, never a minimum: a small project gets a shorter outline. Never pad it. Extra length must come from the techniques, tools and field the project uses.".into());
+            }
+        }
+        let brief = || if folder.is_empty() { obj(json!({"title":s(),"goal":s()})) } else { obj(json!({"title":s(),"goal":s(),"files":arr(s())})) };
         let d = parse(
             &self.llm(
                 messages(system, rows.join("\n")),
                 "course",
                 if outline {
-                    obj(json!({"title":s(),"summary":s(),"stages":arr(obj(json!({"title":s(),"blurb":s(),"phases":arr(obj(json!({"title":s(),"blurb":s(),"lessons":arr(brief())})))})))}))
+                    obj(json!({"title":s(),"summary":s(),"needs":needs_schema(),"stages":arr(obj(json!({"title":s(),"blurb":s(),"phases":arr(obj(json!({"title":s(),"blurb":s(),"lessons":arr(brief())})))})))}))
                 } else {
                     course_schema(!folder.is_empty())
                 },
@@ -342,6 +378,10 @@ impl App {
         if outline {
             c["stages"] = json!(clean_stages(&d["stages"]));
         }
+        let needs = clean_needs(&d["needs"]);
+        if !needs.is_empty() {
+            c["needs"] = json!(needs);
+        }
         Ok(c)
     }
     // Writes the lessons of the phase holding `lid` that are still only a title and a goal.
@@ -363,6 +403,14 @@ impl App {
             format!("The learner's goal: {}", text(&c["prompt"])),
             format!("Level: {}", level(&c)),
         ];
+        // A project folder that was moved must not stop the roadmap: its lessons keep the files the outline gave them.
+        let known = match self.read_project(&string(&c["folder"])) {
+            Ok((_, files, digest)) if !string(&c["folder"]).is_empty() => {
+                rows.push(digest);
+                files
+            }
+            _ => vec![],
+        };
         rows.extend(progress(&c));
         rows.push(format!(
             "Write the lessons of this phase: {}. {}",
@@ -398,8 +446,9 @@ impl App {
                 if !truth(&old["stub"]) || !truth(&l["done"]) {
                     continue;
                 }
-                let mut x = clean_lesson(l, lid, &[]);
-                for k in ["title", "goal"] {
+                let mut x = clean_lesson(l, lid, &known);
+                // The outline already chose and checked each lesson's project files.
+                for k in ["title", "goal", "files"] {
                     if !truth(&l[k]) {
                         x[k] = old[k].clone();
                     }
@@ -480,6 +529,79 @@ impl App {
             .ok()
             .filter(Value::is_object)
             .unwrap_or(json!({})))
+    }
+    // What is said in a video, as (second, text) rows, kept on disk after the first read.
+    fn transcript(&self, id: &str) -> Result<Vec<(i64, String)>> {
+        if !matches(r"^[\p{L}\p{N}_-]{11}$", id) {
+            return Err(Error::missing());
+        }
+        let f = self.data.join("transcripts").join(format!("{id}.json"));
+        if let Some(v) = fs::read(&f)
+            .ok()
+            .and_then(|b| serde_json::from_slice::<Vec<(i64, String)>>(&b).ok())
+        {
+            return Ok(v);
+        }
+        let d = self.yt(&[
+            "--skip-download".into(),
+            format!("https://www.youtube.com/watch?v={id}"),
+        ])?;
+        let none = || Error::bad("This video has no captions.");
+        let url = caption_url(&d).ok_or_else(none)?;
+        let r = agent(&url, 30)
+            .and_then(|a| a.get(&url).call())
+            .map_err(|e| Error::bad(format!("The captions could not be fetched: {e}")))?;
+        let j: Value = serde_json::from_reader(r.into_reader().take(8 << 20))
+            .map_err(|_| Error::bad("The captions could not be read."))?;
+        let lines = transcript_lines(&j);
+        if lines.is_empty() {
+            return Err(none());
+        }
+        fs::create_dir_all(self.data.join("transcripts"))?;
+        fs::write(&f, serde_json::to_vec(&lines)?)?;
+        Ok(lines)
+    }
+    // What the learner changed since their last commit, limited to the files the app may read.
+    fn project_changes(&self, root: &str) -> Result<String> {
+        let (root, files, _) = self.read_project(root)?;
+        let git = |args: &[String]| {
+            process(
+                Command::new("git")
+                    .args(["--no-optional-locks", "--literal-pathspecs", "-C"])
+                    .arg(&root)
+                    .args(["-c", "core.fsmonitor=false"])
+                    .args(args),
+                20,
+            )
+            .ok()
+            .filter(|r| r.0 == 0 && !r.3)
+            .map(|r| r.1)
+        };
+        let Some(status) = git(&["status".into(), "--short".into()]) else {
+            return Ok("This folder is not a Git repository, or Git is not installed, so there is no record of what changed. Read the files instead.".into());
+        };
+        if status.trim().is_empty() {
+            return Ok("Nothing has changed since the last commit.".into());
+        }
+        let mut args = ["diff", "HEAD", "--no-ext-diff", "--no-textconv", "--"]
+            .map(String::from)
+            .to_vec();
+        // Without a path list Git would diff every file, secrets included.
+        let diff = if files.is_empty() {
+            String::new()
+        } else {
+            args.extend(files.into_iter().take(400));
+            git(&args).unwrap_or_default()
+        };
+        Ok(format!(
+            "Changed files (git status --short):\n{}\n\nChanges since the last commit:\n{}",
+            cap(status.trim_end(), 2000),
+            if diff.trim().is_empty() {
+                "(No text changes in tracked files. New files are in the list above: read them with read_project_file.)".into()
+            } else {
+                cap(&diff, 9000)
+            }
+        ))
     }
     fn search_videos(&self, query: &str, skip: &[String]) -> Result<Vec<Value>> {
         let d = self.yt(&["--flat-playlist".into(), format!("ytsearch12:{query}")])?;
@@ -573,6 +695,15 @@ impl App {
         if picks.is_empty() {
             picks = vids.into_iter().take(4).collect();
         }
+        self.video_chapters(picks)
+    }
+    pub(crate) fn query_videos(&self, query: &str, skip: &[String]) -> Result<Vec<Value>> {
+        let mut picks = self.search_videos(query, skip)?;
+        picks.truncate(4);
+        for v in &mut picks { v["searched"] = json!(true); }
+        self.video_chapters(picks)
+    }
+    fn video_chapters(&self, picks: Vec<Value>) -> Result<Vec<Value>> {
         std::thread::scope(|scope| {
             let handles = picks
                 .into_iter()
@@ -736,7 +867,23 @@ impl App {
         }
         let root = root_of(c);
         if !root.is_empty() {
-            rows.push(format!("They connected their project folder ({}). Use list_project_files and read_project_file to look at their real work.",std::path::Path::new(&root).file_name().unwrap_or_default().to_string_lossy()));
+            rows.push(format!("They connected their project folder ({}). Use list_project_files and read_project_file to look at their real work, and get_project_changes to see what they changed since their last commit.",std::path::Path::new(&root).file_name().unwrap_or_default().to_string_lossy()));
+        }
+        if truth(&l["videos"]) {
+            rows.push(format!(
+                "Videos on this lesson page: {}",
+                list(&l["videos"])
+                    .iter()
+                    .enumerate()
+                    .map(|(i, v)| format!(
+                        "video {}: {} ({} min)",
+                        i + 1,
+                        text(&v["title"]),
+                        v["duration"].as_i64().unwrap_or(0) / 60
+                    ))
+                    .collect::<Vec<_>>()
+                    .join("; ")
+            ));
         }
         rows.extend(self.learned(&string(&c["id"]), 40)?);
         rows.extend(self.lesson_files(c, l));
@@ -751,6 +898,10 @@ impl App {
         if !root_of(c).is_empty() {
             out.push(tool("list_project_files","List the text files in the learner's project folder, as paths relative to it. Call it before read_project_file when you do not know the path. Takes no arguments.",json!({})));
             out.push(tool("read_project_file","Read one text file from the learner's project, as it is on disk now. Call it when the lesson's files, already given to you, are not enough to answer. Dependency folders, hidden files and secrets cannot be read.",json!({"path":{"type":"string","description":"Path relative to the project folder, for example src/app.py"}})));
+            out.push(tool("get_project_changes","Show what the learner changed in their project since their last Git commit: the list of changed files and the diff. Call it when they ask for a review of their work, or say something stopped working. Takes no arguments.",json!({})));
+        }
+        if truth(&l["videos"]) {
+            out.push(tool("read_video_transcript","Read what is said in one of this lesson's videos, with the time of each part. Call it before you say anything about what a video covers, explains or leaves out, and to find the moment a topic is covered.",json!({"video":{"type":"integer","description":"The video's number in the lesson's video list, starting at 1"},"from_minute":{"type":"integer","description":"Where to start reading, in minutes from the start of the video. Use 0 for the beginning."}})));
         }
         out
     }
@@ -773,6 +924,20 @@ impl App {
    "get_lesson"=>{let x=lesson(c,&json!(text(&a["id"])))?;Ok(format!("Lesson {}: {}\nGoal: {}\nConcepts: {}\nTasks: {}",text(&x["id"]),text(&x["title"]),text(&x["goal"]),joined(&x["concepts"]),joined(&x["tasks"])))},
    "run_exercise_tests"=>{let ex=&l["practice"]["exercise"];let saved=string(&c["state"]["code"][string(&l["id"])]);let out=run_code(&string(&ex["lang"]),if saved.is_empty(){ex["starter"].as_str().unwrap_or("")}else{&saved},Some(ex["tests"].as_str().unwrap_or("")))?;Ok(if truth(&out["output"]){text(&out["output"])}else{"(no output)".into()})},
    "list_project_files"=>Ok(self.read_project(&root_of(c))?.1.into_iter().take(400).collect::<Vec<_>>().join("\n")),
+   "get_project_changes"=>self.project_changes(&root_of(c)),
+   "read_video_transcript"=>{
+       let n=a["video"].as_u64().unwrap_or(1).max(1) as usize;
+       let v=list(&l["videos"]).get(n-1).ok_or_else(Error::missing)?;
+       let from=a["from_minute"].as_i64().unwrap_or(0).max(0)*60;
+       let lines=match self.transcript(&string(&v["id"])){Ok(x)=>x,Err(e)=>return Ok(format!("The transcript is not available: {}",e.message))};
+       let mut out=format!("Transcript of video {n}, {}:",text(&v["title"]));
+       let start=out.len();
+       for (t,s) in lines.iter().filter(|(t,_)|*t>=from){
+           if out.len()>9000{out.push_str(&format!("\n(The transcript continues. Call again with from_minute {}.)",t/60));break}
+           out.push_str(&format!("\n[{}:{:02}] {s}",t/60,t%60));
+       }
+       if out.len()==start{out.push_str("\n(Nothing is said after that point.)")}
+       Ok(out)},
    "read_project_file"=>Ok(cap(&self.project_file(&root_of(c),&a["path"]).filter(|s|!s.is_empty()).unwrap_or_else(||"No such file, or it is one the app does not read (hidden, binary, too large or a secret).".into()),12000)),_=>Err(Error::missing())
   }
     }
@@ -1036,6 +1201,58 @@ impl App {
         }
         Ok(json!({"change":change,"course":self.mark_known(c)?}))
     }
+}
+// urllib used the proxy for this URL's scheme and respected no_proxy.
+// ureq's automatic proxy discovery does neither, so preserve that policy here.
+fn agent(url: &str, secs: u64) -> std::result::Result<ureq::Agent, ureq::Error> {
+    let mut agent = ureq::AgentBuilder::new()
+        .timeout(Duration::from_secs(secs))
+        .redirects(10)
+        .try_proxy_from_env(false);
+    if let Some(proxy) = proxy_for(url) {
+        agent = agent.proxy(ureq::Proxy::new(proxy)?);
+    }
+    Ok(agent.build())
+}
+// The caption track in the video's own language, else English; uploaded subtitles before automatic ones.
+fn caption_url(d: &Value) -> Option<String> {
+    let lang = string(&d["language"]);
+    [&d["subtitles"], &d["automatic_captions"]]
+        .into_iter()
+        .find_map(|tracks| {
+            let o = tracks.as_object()?;
+            let formats = [lang.as_str(), "en", "en-orig"]
+                .iter()
+                .find_map(|k| o.get(*k))
+                .or_else(|| o.iter().find(|(k, _)| k.starts_with("en")).map(|(_, v)| v))?;
+            list(formats).iter().find(|x| x["ext"] == "json3")?["url"]
+                .as_str()
+                .filter(|u| u.starts_with("https://"))
+                .map(String::from)
+        })
+}
+// YouTube's json3 captions as (second, text) rows of about twenty seconds each.
+pub(crate) fn transcript_lines(j: &Value) -> Vec<(i64, String)> {
+    let mut lines: Vec<(i64, String)> = vec![];
+    for e in list(&j["events"]) {
+        let t = e["tStartMs"].as_i64().unwrap_or(0) / 1000;
+        let said = list(&e["segs"])
+            .iter()
+            .filter_map(|x| x["utf8"].as_str())
+            .collect::<String>();
+        let said = said.split_whitespace().collect::<Vec<_>>().join(" ");
+        if said.is_empty() {
+            continue;
+        }
+        match lines.last_mut() {
+            Some((start, line)) if t - *start < 20 => {
+                line.push(' ');
+                line.push_str(&said);
+            }
+            _ => lines.push((t, said)),
+        }
+    }
+    lines
 }
 // One line per lesson with what the learner did in it, for the prompts that change a course.
 fn progress(c: &Value) -> Vec<String> {

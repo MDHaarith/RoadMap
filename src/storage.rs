@@ -43,6 +43,8 @@ impl App {
         }
         c["base"] = json!(base);
         c["model"] = json!(b.get("model").map(text).unwrap_or_default().trim());
+        // Optional cheaper model for quizzes, video picks, marking and placement.
+        c["small"] = json!(cap(string(&b["small"]).trim(), 200));
         if truth(&b["key"]) {
             c["key"] = json!(text(&b["key"]).trim());
         }
@@ -167,22 +169,156 @@ impl App {
         }
         Ok(c)
     }
-    pub(crate) fn export_course(&self, c: &Value) -> Result<Value> {
+    // Small JSON files next to the roadmaps: ideas, usage and one tutor-chat file per roadmap.
+    pub(crate) fn read_side(&self, name: &str) -> Value {
+        fs::read(self.data.join(name))
+            .ok()
+            .and_then(|b| serde_json::from_slice(&b).ok())
+            .filter(Value::is_object)
+            .unwrap_or(json!({}))
+    }
+    pub(crate) fn write_side(&self, name: &str, v: &Value) -> Result<()> {
+        fs::create_dir_all(&self.data)?;
+        let path = self.data.join(name);
+        let tmp = path.with_extension("tmp");
+        fs::write(&tmp, serde_json::to_vec(v)?)?;
+        fs::rename(tmp, path)?;
+        Ok(())
+    }
+    pub(crate) fn chat_file(&self, cid: &str) -> Result<String> {
+        self.path_of(cid)?;
+        Ok(format!("{cid}.chat.json"))
+    }
+    // The client sends the whole conversation each time, so the saved copy is replaced.
+    pub(crate) fn save_chat(&self, cid: &str, lid: &str, msgs: &[Value], answer: &str) {
+        let Ok(name) = self.chat_file(cid) else {
+            return;
+        };
+        if answer.is_empty() {
+            return;
+        }
+        let _guard = self.guard();
+        let mut all = self.read_side(&name);
+        let mut ms = msgs.to_vec();
+        ms.push(json!({"role":"assistant","content":answer}));
+        let start = ms.len().saturating_sub(40);
+        all[cap(lid, 20)] = json!(&ms[start..]);
+        let _ = self.write_side(&name, &all);
+    }
+    pub(crate) fn count(&self, input: u64, output: u64) {
+        let _meter = self.meter.lock().unwrap_or_else(|e| e.into_inner());
+        let u = self.read_side("usage.json");
+        let n = |k: &str| u[k].as_u64().unwrap_or(0);
+        let _ = self.write_side(
+            "usage.json",
+            &json!({"in":n("in")+input,"out":n("out")+output,"calls":n("calls")+1,"since":u["since"].as_i64().unwrap_or(self.today())}),
+        );
+    }
+    fn out_file(&self, title: &str, ext: &str) -> PathBuf {
         let out = if self.home.join("Downloads").is_dir() {
             self.home.join("Downloads")
         } else {
             self.home.clone()
         };
         let re = regex::Regex::new(r"[^\p{L}\p{N}_-]+").unwrap();
-        let title = string(&c["title"]);
-        let s = re.replace_all(&title, "-");
+        let s = re.replace_all(title, "-");
         let name = cap(s.trim_matches('-'), 60);
         let name = if name.is_empty() { "roadmap" } else { &name };
-        let f = out.join(format!("{name}.roadmap.json"));
+        out.join(format!("{name}.{ext}"))
+    }
+    // A template is the roadmap alone: no progress, notes, placement answers or change history.
+    pub(crate) fn export_course(&self, c: &Value, template: bool) -> Result<Value> {
+        let f = self.out_file(
+            &string(&c["title"]),
+            if template {
+                "template.roadmap.json"
+            } else {
+                "roadmap.json"
+            },
+        );
         let mut c = c.clone();
         c.as_object_mut().unwrap().remove("folder");
         c.as_object_mut().unwrap().remove("work");
+        if template {
+            let first = lessons(&c)
+                .next()
+                .map(|l| l["id"].clone())
+                .unwrap_or(json!("1.1"));
+            c.as_object_mut().unwrap().remove("changes");
+            c["level"] = json!("");
+            c["state"] = json!({"checks":{},"done":{},"notes":{},"last":first});
+        }
         fs::write(&f, serde_json::to_vec_pretty(&c)?)?;
+        Ok(json!({"path":f}))
+    }
+    pub(crate) fn summary(&self, c: &Value) -> Result<Value> {
+        let st = &c["state"];
+        let ls = lessons(c).collect::<Vec<_>>();
+        let done = |l: &Value| truth(&st["done"][string(&l["id"])]);
+        let mut md = vec![
+            format!("# {}", text(&c["title"])),
+            String::new(),
+            string(&c["summary"]),
+            String::new(),
+            format!(
+                "**Goal:** {}",
+                string(&c["prompt"]).lines().next().unwrap_or("")
+            ),
+            format!(
+                "**Progress:** {} of {} lessons complete",
+                ls.iter().filter(|l| done(l)).count(),
+                ls.len()
+            ),
+        ];
+        for (n, p) in list(&c["phases"]).iter().enumerate() {
+            md.extend([
+                String::new(),
+                format!("## Phase {}: {}", n + 1, text(&p["title"])),
+            ]);
+            if truth(&p["blurb"]) {
+                md.extend([String::new(), text(&p["blurb"])]);
+            }
+            for l in list(&p["lessons"]) {
+                let lid = string(&l["id"]);
+                md.extend([
+                    String::new(),
+                    format!(
+                        "### {} {lid} {}",
+                        if done(l) { "[x]" } else { "[ ]" },
+                        text(&l["title"])
+                    ),
+                    String::new(),
+                    string(&l["goal"]),
+                ]);
+                if truth(&l["concepts"]) {
+                    md.extend([
+                        String::new(),
+                        format!("Concepts: {}", joined(&l["concepts"])),
+                    ]);
+                }
+                if done(l) && truth(&l["tasks"]) {
+                    md.extend([String::new(), "What I made:".into()]);
+                    md.extend(list(&l["tasks"]).iter().map(|t| format!("- {}", text(t))));
+                }
+                let q = &st["quiz"][&lid];
+                if q.is_object() {
+                    md.extend([
+                        String::new(),
+                        format!("Quiz: {} of {}", text(&q["score"]), text(&q["total"])),
+                    ]);
+                }
+                if truth(&st["tests"][&lid]["ok"]) {
+                    md.extend([String::new(), "Coding exercise: tests passed".into()]);
+                }
+                let note = string(&st["notes"][&lid]);
+                if !note.trim().is_empty() {
+                    md.extend([String::new(), "My notes:".into(), String::new()]);
+                    md.extend(note.trim().lines().map(|x| format!("> {x}")));
+                }
+            }
+        }
+        let f = self.out_file(&string(&c["title"]), "summary.md");
+        fs::write(&f, md.join("\n") + "\n")?;
         Ok(json!({"path":f}))
     }
     pub(crate) fn import_course(&self, path: &str) -> Result<Value> {
@@ -269,6 +405,20 @@ impl App {
             }
             state[k] = keep;
         }
+        // Stage exam results are keyed by stage, not by lesson.
+        let mut exams = json!({});
+        for (k, v) in old["exams"].as_object().into_iter().flatten() {
+            if k.parse::<usize>().is_ok_and(|i| i < stages.len())
+                && v.as_object().is_some_and(|o| {
+                    o.len() == 2 && ["score", "total"].iter().all(|k| o.get(*k).is_some_and(Value::is_u64))
+                })
+            {
+                exams[k] = v.clone();
+            }
+        }
+        if truth(&exams) {
+            state["exams"] = exams;
+        }
         state["last"] = if ids.contains(&text(&old["last"])) {
             old["last"].clone()
         } else {
@@ -277,6 +427,10 @@ impl App {
         let mut c = json!({"id":random_hex(6)?,"prompt":cap(&string(&d["prompt"]),2000),"level":cap(&string(&d["level"]),3000),"folder":null,"title":cap(&if truth(&d["title"]){text(&d["title"])}else{"Imported roadmap".into()},200),"summary":cap(&string(&d["summary"]),600),"phases":phases,"state":state});
         if !stages.is_empty() {
             c["stages"] = json!(stages);
+        }
+        let needs = clean_needs(&d["needs"]);
+        if !needs.is_empty() {
+            c["needs"] = json!(needs);
         }
         self.save(&c)?;
         Ok(c)

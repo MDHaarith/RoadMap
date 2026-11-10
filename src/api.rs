@@ -18,9 +18,130 @@ impl App {
             0
         };
         let r = json!({"step":step,"due":self.today()+[1,3,7,16,35][step as usize]});
-        c["state"]["review"][key] = r.clone();
+        c["state"]["review"][&key] = r.clone();
+        if i.parse::<usize>().is_ok() {
+            if !right {
+                missed(&mut c, &key, None, self.today());
+            } else if c["state"]["mistakes"][&key].is_object() {
+                c["state"]["mistakes"][&key]["fixed"] = json!(true);
+            }
+        }
         self.save(&c)?;
         Ok(r)
+    }
+    // A wrong quiz or exam answer goes in the mistakes notebook and comes back in today's review.
+    pub(crate) fn mistake(&self, b: &Value) -> Result<Value> {
+        let _guard = self.guard();
+        let mut c = self.load(&text(&b["course"]))?;
+        let l = lesson(&c, &b["lesson"])?;
+        let i = b["i"]
+            .as_u64()
+            .filter(|i| (*i as usize) < list(&l["practice"]["quiz"]).len())
+            .ok_or_else(Error::missing)?;
+        let key = format!("{}#{i}", string(&l["id"]));
+        missed(&mut c, &key, b["picked"].as_i64(), self.today());
+        if !c["state"]["review"].is_object() {
+            c["state"]["review"] = json!({});
+        }
+        c["state"]["review"][&key] = json!({"step":-1,"due":self.today()});
+        self.save(&c)?;
+        Ok(json!({}))
+    }
+    pub(crate) fn mistakes(&self) -> Result<Value> {
+        let mut out = vec![];
+        for c in self.courses()? {
+            let st = &c["state"];
+            let base = |l: &Value| json!({"course":c["id"],"roadmap":c["title"],"lesson":l["id"],"lesson_title":l["title"]});
+            for (key, m) in st["mistakes"].as_object().into_iter().flatten() {
+                let Some((lid, i)) = key.split_once('#') else {
+                    continue;
+                };
+                let (Ok(l), Ok(i)) = (lesson(&c, &json!(lid)), i.parse::<usize>()) else {
+                    continue;
+                };
+                if let Some(q) = list(&l["practice"]["quiz"]).get(i) {
+                    out.push(merge(
+                        merge(base(l), json!({"kind":"quiz","i":i})),
+                        merge(q.clone(), m.clone()),
+                    ));
+                }
+            }
+            for l in lessons(&c) {
+                let t = &st["tests"][string(&l["id"])];
+                if t["runs"].as_u64().unwrap_or(0) > 0 && !truth(&t["ok"]) {
+                    out.push(merge(base(l), json!({"kind":"code","title":l["practice"]["exercise"]["title"],"n":t["runs"],"fixed":false,"day":0})));
+                }
+            }
+        }
+        out.sort_by_key(|m| {
+            (
+                truth(&m["fixed"]),
+                std::cmp::Reverse(m["day"].as_i64().unwrap_or(0)),
+            )
+        });
+        out.truncate(200);
+        Ok(json!({"items":out}))
+    }
+    // Every word must appear in a hit: lesson text, notes, tutor chats and sticky ideas.
+    pub(crate) fn search(&self, q: &str) -> Result<Value> {
+        let terms = q
+            .to_lowercase()
+            .split_whitespace()
+            .take(6)
+            .map(String::from)
+            .collect::<Vec<_>>();
+        let mut out = vec![];
+        if terms.is_empty() {
+            return Ok(json!({"results":out}));
+        }
+        let mut hit = |kind: &str, at: Value, title: String, body: &str| {
+            let low = body.to_lowercase();
+            if out.len() >= 40 || !terms.iter().all(|t| low.contains(t)) {
+                return;
+            }
+            let before = low[..low.find(&terms[0]).unwrap_or(0)].chars().count();
+            let snippet = body
+                .chars()
+                .skip(before.saturating_sub(60))
+                .take(200)
+                .collect::<String>();
+            out.push(merge(at, json!({"kind":kind,"title":title,"snippet":snippet.split_whitespace().collect::<Vec<_>>().join(" ")})));
+        };
+        for n in list(&self.read_side("ideas.json")["notes"]) {
+            hit("idea", json!({}), "Idea".into(), &string(n));
+        }
+        for c in self.courses()? {
+            let chats = self
+                .chat_file(&string(&c["id"]))
+                .map(|f| self.read_side(&f))
+                .unwrap_or_default();
+            for l in lessons(&c) {
+                let lid = string(&l["id"]);
+                let at = json!({"course":c["id"],"roadmap":c["title"],"lesson":l["id"]});
+                let title = text(&l["title"]);
+                hit(
+                    "lesson",
+                    at.clone(),
+                    title.clone(),
+                    &format!(
+                        "{title}. {} {} {}",
+                        string(&l["goal"]),
+                        joined(&l["concepts"]),
+                        joined(&l["tasks"])
+                    ),
+                );
+                hit(
+                    "note",
+                    at.clone(),
+                    title.clone(),
+                    &string(&c["state"]["notes"][&lid]),
+                );
+                for m in list(&chats[&lid]) {
+                    hit("chat", at.clone(), title.clone(), &string(&m["content"]));
+                }
+            }
+        }
+        Ok(json!({"results":out}))
     }
     pub(crate) fn review_due(&self) -> Result<Value> {
         let mut due = vec![];
@@ -71,7 +192,7 @@ impl App {
             ("GET", "api/settings") => {
                 let c = self.config();
                 return Ok(
-                    json!({"base":c.get("base").unwrap_or(&json!("")),"model":c.get("model").unwrap_or(&json!("")),"key_set":truth(&c["key"]),"theme":self.theme()}),
+                    json!({"base":c.get("base").unwrap_or(&json!("")),"model":c.get("model").unwrap_or(&json!("")),"small":string(&c["small"]),"usage":self.read_side("usage.json"),"key_set":truth(&c["key"]),"theme":self.theme()}),
                 );
             }
             ("PUT", "api/theme") => {
@@ -89,6 +210,31 @@ impl App {
             ("GET", "api/courses") => {
                 return Ok(json!(self.courses()?.iter().map(|c|{let ls=lessons(c).collect::<Vec<_>>();let next=ls.iter().find(|l|!truth(&c["state"]["done"][string(&l["id"])]));json!({"id":c["id"],"title":c["title"],"summary":c["summary"],"total":ls.len(),"done":c["state"]["done"].as_object().map(|o|o.values().filter(|v|truth(v)).count()).unwrap_or(0),"paused":truth(&c["paused"]),"project":truth(&c["folder"]),"next":next.map(|l|json!({"id":l["id"],"title":l["title"]}))})}).collect::<Vec<_>>()));
             }
+            ("PUT", "api/usage") => {
+                let _meter = self.meter.lock().unwrap_or_else(|e| e.into_inner());
+                self.write_side("usage.json", &json!({"since":self.today()}))?;
+                return Ok(json!({}));
+            }
+            ("GET", "api/ideas") => {
+                return Ok(json!({"notes":list(&self.read_side("ideas.json")["notes"])}));
+            }
+            ("PUT", "api/ideas") => {
+                if !b["notes"].is_array() {
+                    return Err(Error::bad("Bad notes."));
+                }
+                let notes = list(&b["notes"])
+                    .iter()
+                    .filter_map(Value::as_str)
+                    .take(200)
+                    .map(|s| cap(s, 4000))
+                    .collect::<Vec<_>>();
+                let _guard = self.guard();
+                self.write_side("ideas.json", &json!({"notes":notes}))?;
+                return Ok(json!({}));
+            }
+            ("POST", "api/search") => return self.search(&string(&b["q"])),
+            ("POST", "api/mistake") => return self.mistake(b),
+            ("GET", "api/mistakes") => return self.mistakes(),
             ("GET", "api/review") => return self.review_due(),
             ("POST", "api/review") => {
                 let i = b
@@ -192,22 +338,29 @@ impl App {
             ("POST", "api/install") => return install_lang(&string(&b["lang"])),
             ("POST", "api/chat") => {
                 let (c, l, ms) = self.chat_args(b)?;
-                return Ok(json!({"text":self.tutor(&c,&l,ms,&mut None)?}));
+                let answer = self.tutor(&c, &l, ms.clone(), &mut None)?;
+                self.save_chat(&string(&c["id"]), &string(&l["id"]), &ms, &answer);
+                return Ok(json!({"text":answer}));
             }
             _ => {}
         }
         let re = regex::Regex::new(
-            r"^api/courses/([0-9a-f]{12})(/state|/videos|/practice|/paused|/adapt|/revise|/expand|/export|/work)?$",
+            r"^api/courses/([0-9a-f]{12})(/state|/videos|/practice|/paused|/adapt|/revise|/expand|/export|/summary|/setup|/work)?$",
         )
         .unwrap();
         let m = re.captures(path).ok_or_else(Error::missing)?;
         let cid = &m[1];
         let sub = m.get(2).map(|m| m.as_str()).unwrap_or("");
         match (method, sub) {
-            ("GET", "") => self.mark_known(self.load(cid)?),
+            ("GET", "") => {
+                let mut c = self.mark_known(self.load(cid)?)?;
+                c["chats"] = self.read_side(&self.chat_file(cid)?);
+                Ok(c)
+            }
             ("DELETE", "") => {
                 let _guard = self.guard();
                 fs::remove_file(self.path_of(cid)?)?;
+                let _ = fs::remove_file(self.data.join(self.chat_file(cid)?));
                 Ok(json!({}))
             }
             ("PUT", "/state") => {
@@ -231,6 +384,12 @@ impl App {
                 } else {
                     json!({})
                 };
+                // The mistakes notebook is written by the server only, like review and tests.
+                if truth(&old["mistakes"]) {
+                    st["mistakes"] = old["mistakes"].clone();
+                } else if let Some(o) = st.as_object_mut() {
+                    o.remove("mistakes");
+                }
                 if let Some(q) = b["quiz"].as_object() {
                     for lid in q.keys() {
                         if old["quiz"].get(lid).is_none() {
@@ -265,7 +424,20 @@ impl App {
                 self.adapt(cid, &ask)
             }
             ("POST", "/expand") => self.expand(cid, &b["lesson"]),
-            ("POST", "/export") => self.export_course(&self.load(cid)?),
+            ("POST", "/export") => self.export_course(&self.load(cid)?, truth(&b["template"])),
+            ("POST", "/summary") => self.summary(&self.load(cid)?),
+            ("POST", "/setup") => {
+                let c = self.load(cid)?;
+                let mut found = json!({});
+                for cmd in list(&c["needs"])
+                    .iter()
+                    .filter_map(|n| n["command"].as_str())
+                    .filter(|s| !s.is_empty())
+                {
+                    found[cmd] = json!(on_path(cmd));
+                }
+                Ok(json!({"found":found}))
+            }
             ("PUT", "/work") => {
                 let clear = truth(&b["clear"]);
                 let folder = if clear {
@@ -298,6 +470,24 @@ impl App {
                 let c = self.load(cid)?;
                 let l = lesson(&c, &b["lesson"])?;
                 let old = list(&l["videos"]);
+                if let Some(query) = b["query"].as_str() {
+                    let query = cap(query.trim(), 200);
+                    if query.is_empty() { return Err(Error::bad("Enter a video search query.")); }
+                    let found = self.query_videos(&query, &old.iter().map(|v| string(&v["id"])).collect::<Vec<_>>())?;
+                    if found.is_empty() { return Err(Error::bad("No videos found.")); }
+                    let _guard = self.guard();
+                    let mut c = self.load(cid)?;
+                    let l = lesson_mut(&mut c, &string(&l["id"]))?;
+                    let mut videos = list(&l["videos"]).to_vec();
+                    videos.extend(found.into_iter().filter(|v| !list(&l["videos"]).iter().any(|x| x["id"] == v["id"])));
+                    while videos.len() > 8 {
+                        let Some(i) = videos.iter().position(|v| truth(&v["searched"])) else { break };
+                        videos.remove(i);
+                    }
+                    l["videos"] = json!(videos);
+                    self.save(&c)?;
+                    return Ok(json!(videos));
+                }
                 let fresh = truth(&b["fresh"]);
                 let vids = if fresh || old.is_empty() {
                     self.find_videos(
@@ -330,13 +520,15 @@ impl App {
                 let _guard = self.guard();
                 let mut c = self.load(cid)?;
                 lesson_mut(&mut c, &string(&l["id"]))?["practice"] = pr.clone();
-                let mut r = c["state"]["review"]
-                    .as_object()
-                    .cloned()
-                    .unwrap_or_default();
                 let prefix = format!("{}#", text(&l["id"]));
-                r.retain(|k, _| !k.starts_with(&prefix));
-                c["state"]["review"] = json!(r);
+                // New questions make the old review dates and recorded mistakes meaningless.
+                for k in ["review", "mistakes"] {
+                    if k == "review" || c["state"][k].is_object() {
+                        let mut r = c["state"][k].as_object().cloned().unwrap_or_default();
+                        r.retain(|k, _| !k.starts_with(&prefix));
+                        c["state"][k] = json!(r);
+                    }
+                }
                 self.save(&c)?;
                 Ok(pr)
             }
@@ -451,10 +643,11 @@ impl App {
             let result = {
                 let mut out =
                     |s: &str| -> Result<()> { stream_piece(&mut writer, &mut started, s) };
-                self.tutor(&c, &l, msgs, &mut Some(&mut out))
+                self.tutor(&c, &l, msgs.clone(), &mut Some(&mut out))
             };
             match result {
                 Ok(text) => {
+                    self.save_chat(&string(&c["id"]), &string(&l["id"]), &msgs, &text);
                     if !started {
                         let text = if text.is_empty() {
                             "(No answer.)"
@@ -499,6 +692,13 @@ impl App {
             ),
         }
     }
+}
+fn missed(c: &mut Value, key: &str, picked: Option<i64>, day: i64) {
+    if !c["state"]["mistakes"].is_object() {
+        c["state"]["mistakes"] = json!({});
+    }
+    let old = c["state"]["mistakes"][key].clone();
+    c["state"]["mistakes"][key] = json!({"n":old["n"].as_u64().unwrap_or(0)+1,"picked":picked.map_or(old["picked"].clone(),|p|json!(p)),"day":day,"fixed":false});
 }
 fn stream_piece(writer: &mut dyn Write, started: &mut bool, text: &str) -> Result<()> {
     if !*started {
