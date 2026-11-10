@@ -234,6 +234,7 @@ pub(crate) fn process(
         timeout,
     ))
 }
+#[cfg(target_os = "linux")]
 pub(crate) fn run_code(lang: &str, code: &str, tests: Option<&str>) -> Result<Value> {
     let ([name, pkg, prog, main, test, run, check], secs) = language(lang)?;
     if !std::path::Path::new("/usr/bin").join(prog).exists() {
@@ -306,6 +307,7 @@ pub(crate) fn run_code(lang: &str, code: &str, tests: Option<&str>) -> Result<Va
         json!({"ok":status==0,"output":tail(&(out+&err),20000)})
     })
 }
+#[cfg(target_os = "linux")]
 pub(crate) fn install_lang(lang: &str) -> Result<Value> {
     let ([name, pkg, prog, ..], _) = language(lang)?;
     let installed = || std::path::Path::new("/usr/bin").join(prog).exists();
@@ -333,4 +335,14 @@ pub(crate) fn install_lang(lang: &str) -> Result<Value> {
     Ok(
         json!({"ok":ok,"output":if ok{format!("{name} is installed.")}else{format!("Install failed. Try: sudo dnf install {pkg}\n{}",tail(&(out+&err),2000))}}),
     )
+}
+
+#[cfg(not(target_os = "linux"))]
+pub(crate) fn run_code(_lang: &str, _code: &str, _tests: Option<&str>) -> Result<Value> {
+    Err(Error { status: 501, message: "Running exercises in a sandbox works only on Linux for now.".into() })
+}
+
+#[cfg(not(target_os = "linux"))]
+pub(crate) fn install_lang(_lang: &str) -> Result<Value> {
+    Err(Error { status: 501, message: "Installing exercise runtimes works only on Linux for now.".into() })
 }

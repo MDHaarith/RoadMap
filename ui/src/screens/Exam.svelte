@@ -1,0 +1,47 @@
+<script lang="ts">
+  import { onMount, tick } from 'svelte';
+  import { api } from '../lib/api';
+  import { save } from '../lib/state.svelte';
+  import { examPool, examReady } from '../lib/progress';
+  import { href, clock } from '../lib/format';
+  import type { Course, Session, Quiz } from '../lib/types';
+  import Icon from '../components/Icon.svelte';
+  import Progress from '../components/Progress.svelte';
+  import QuizQuestion from '../components/QuizQuestion.svelte';
+  let { c, stage }: { c: Course; stage: number } = $props();
+  let qs = $state<(Quiz & { lesson: string; i: number })[]>([]);
+  let s = $state<Session>({ index: 0, score: 0, selected: null, finished: false });
+  let started = $state(false), left = $state(60);
+  let won = $derived(s.score / qs.length >= .7), last = $derived(c.state.exams?.[stage]);
+  onMount(() => { exam(); });
+  $effect(() => {
+    if (!started || s.finished || s.selected !== null) return;
+    const timer = setInterval(() => { left--; if (left <= 0) examAnswer(-1); }, 1000);
+    return () => clearInterval(timer);
+  });
+  function exam() {
+    if (!Number.isInteger(stage) || !c.stages?.[stage] || !examReady(c, stage)) { location.hash = href(c.id); return; }
+    qs = examPool(c, stage).map(q => ({ order: Math.random(), q })).sort((a, b) => a.order - b.order).slice(0, 10).map(x => x.q);
+    s = { index: 0, score: 0, selected: null, finished: false }; started = false; left = 60;
+  }
+  async function focus() { await tick(); (document.getElementById('exam-next') || document.getElementById('question') || document.querySelector<HTMLElement>('.score'))?.focus({ preventScroll: true }); }
+  function examAnswer(i: number) {
+    const q = qs[s.index]; if (!started || s.finished || s.selected !== null) return;
+    s.selected = i; if (i === q.answer) s.score++;
+    else api('POST', 'api/mistake', { course: c.id, lesson: q.lesson, i: q.i, ...(i >= 0 ? { picked: i } : {}) }).catch(() => {});
+    void focus();
+  }
+  function examNext() {
+    if (s.selected === null) return;
+    if (s.index === qs.length - 1) {
+      s.finished = true; const old = c.state.exams?.[stage];
+      if (!old || s.score / qs.length >= old.score / old.total) { (c.state.exams ||= {})[stage] = { score: s.score, total: qs.length }; save(c); }
+    } else { s.index++; s.selected = null; left = 60; }
+    void focus();
+  }
+</script>
+<div class="wrap review-wrap"><div class="intro"><div><div class="kicker"><Icon name="flag" /> Stage {stage + 1} exam</div><h1>Stage {stage + 1} exam: {c.stages?.[stage]?.title}</h1></div><a href={href(c.id)}>Back to the roadmap</a></div>
+  {#if qs.length}{#if !started}<div class="note"><h2>{qs.length} questions, one minute each.</h2><p>They come from this stage’s lesson quizzes, in a new order. Score 70% to pass{c.stages?.[stage + 1] ? ' and open Stage ' + (stage + 2) : ''}. No notes and no tutor: this shows you what stuck.</p>{#if last}<p class="small">Your best result so far: {last.score} of {last.total}.</p>{/if}<button class="btn" id="exam-start" onclick={() => { started = true; void focus(); }}>Start the exam <Icon name="arrow" /></button></div>
+  {:else if s.finished}<div class="score" tabindex="-1"><strong>{s.score} / {qs.length}</strong><h3>{won ? 'Stage passed.' : 'Not passed yet.'}</h3><p>{won ? 'Well earned. Carry on with the roadmap.' : 'You need 70%. The questions you missed are in your mistakes notebook and in today’s review. Go over them, then try again.'}</p><div class="row">{#if !won}<button class="btn" id="exam-again" onclick={exam}>Try again</button>{/if}<a class="btn secondary" href="#/mistakes">Mistakes notebook</a><a class={`btn ${won ? '' : 'secondary'}`} href={href(c.id)}>Back to the roadmap</a></div></div>
+  {:else}<div class="review-progress"><Progress n={s.index} total={qs.length} wide={false} /></div><section class="lesson-content"><div class="step-body"><p class="exam-clock" role="timer">Time left <b id="exam-clock">{clock(Math.max(0, left))}</b></p>{#if s.selected === -1}<p class="err" role="alert">Time is up for this question.</p>{/if}<QuizQuestion q={qs[s.index]} session={s} total={qs.length} answer={examAnswer} next={examNext} mode="exam" /></div></section>{/if}{/if}
+</div>

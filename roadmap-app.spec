@@ -4,7 +4,7 @@ Release:        7%{?dist}
 Summary:        Learn anything by doing: AI-built courses with free YouTube lessons
 # No licence chosen yet. Replace before sharing the package.
 License:        LicenseRef-Not-Chosen
-BuildRequires:  cargo >= 1.92 rust >= 1.92 gcc pkgconf-pkg-config gtk3-devel webkit2gtk4.1-devel
+BuildRequires:  cargo >= 1.92 rust >= 1.92 gcc-c++ pkgconf-pkg-config gtk3-devel webkit2gtk4.1-devel openssl-devel nodejs npm
 Requires:       gtk3 webkit2gtk4.1 yt-dlp bubblewrap bash ca-certificates
 # Optional exercise interpreters are installed on demand; Python does not run the app.
 # Cargo downloads Cargo.lock's crates during this local RPM build (not vendored).
@@ -19,18 +19,18 @@ OpenAI-compatible AI service.
 
 %build
 cd %{_sourcedir}
-CARGO_TARGET_DIR=%{_builddir}/roadmap-target cargo build --release --locked
+npm --prefix ui ci
+CARGO_TARGET_DIR=%{_builddir}/roadmap-target npm --prefix ui run tauri -- build --no-bundle -- --locked
+CARGO_TARGET_DIR=%{_builddir}/roadmap-target cargo build --release --locked --bin roadmap-mcp
 
 %install
 install -Dm755 %{_builddir}/roadmap-target/release/roadmap-app %{buildroot}%{_bindir}/roadmap-app
 install -Dm755 %{_builddir}/roadmap-target/release/roadmap-mcp %{buildroot}%{_bindir}/roadmap-mcp
-install -Dm644 %{_sourcedir}/index.html %{buildroot}%{_datadir}/roadmap-app/index.html
 install -Dm644 %{_sourcedir}/roadmap-app.desktop %{buildroot}%{_datadir}/applications/roadmap-app.desktop
 install -Dm644 %{_sourcedir}/roadmap-app.svg %{buildroot}%{_datadir}/icons/hicolor/scalable/apps/roadmap-app.svg
 
 %files
 %{_bindir}/roadmap-mcp
 %{_bindir}/roadmap-app
-%{_datadir}/roadmap-app/
 %{_datadir}/applications/roadmap-app.desktop
 %{_datadir}/icons/hicolor/scalable/apps/roadmap-app.svg

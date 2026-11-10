@@ -3,9 +3,11 @@ use crate::*;
 use std::{
     collections::HashSet,
     io::Write,
-    os::unix::fs::{OpenOptionsExt, PermissionsExt},
     path::Path,
 };
+#[cfg(unix)]
+use std::os::unix::fs::{OpenOptionsExt, PermissionsExt};
+
 impl App {
     pub(crate) fn config(&self) -> Value {
         fs::read(&self.conf)
@@ -16,12 +18,12 @@ impl App {
     }
     pub(crate) fn write_config(&self, c: &Value) -> Result<()> {
         fs::create_dir_all(self.conf.parent().unwrap())?;
-        let mut f = fs::OpenOptions::new()
-            .write(true)
-            .create(true)
-            .truncate(true)
-            .mode(0o600)
-            .open(&self.conf)?;
+        let mut options = fs::OpenOptions::new();
+        options.write(true).create(true).truncate(true);
+        #[cfg(unix)]
+        options.mode(0o600);
+        let mut f = options.open(&self.conf)?;
+        #[cfg(unix)]
         f.set_permissions(fs::Permissions::from_mode(0o600))?;
         f.write_all(&serde_json::to_vec(c)?)?;
         Ok(())

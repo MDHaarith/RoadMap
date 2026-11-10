@@ -3,7 +3,6 @@ use crate::{
     ai::said,
     exercise::{install_lang, run_code},
 };
-use std::{io::Write, net::TcpListener};
 impl App {
     pub(crate) fn library_list(&self) -> Result<Value> {
         Ok(json!(self.courses()?.iter().map(|c|{let ls=lessons(c).collect::<Vec<_>>();let next=ls.iter().find(|l|!truth(&c["state"]["done"][string(&l["id"])]));json!({"id":c["id"],"title":c["title"],"summary":c["summary"],"total":ls.len(),"done":c["state"]["done"].as_object().map(|o|o.values().filter(|v|truth(v)).count()).unwrap_or(0),"paused":truth(&c["paused"]),"project":truth(&c["folder"]),"next":next.map(|l|json!({"id":l["id"],"title":l["title"]}))})}).collect::<Vec<_>>()))
@@ -190,7 +189,7 @@ impl App {
             json!({"count":due.len(),"questions":due.into_iter().take(10).map(|(_,q)|q).collect::<Vec<_>>()}),
         )
     }
-    pub(crate) fn route(self: &Arc<Self>, method: &str, path: &str, b: &Value) -> Result<Value> {
+    pub fn route(self: &Arc<Self>, method: &str, path: &str, b: &Value) -> Result<Value> {
         match (method, path) {
             ("GET", "api/settings") => {
                 let c = self.config();
@@ -538,196 +537,50 @@ impl App {
             _ => Err(Error::missing()),
         }
     }
-    pub fn serve(self: &Arc<Self>) -> Result<String> {
-        let listener = TcpListener::bind(("127.0.0.1", 0))?;
-        let port = listener.local_addr()?.port();
-        let server = tiny_http::Server::from_listener(listener, None)
-            .map_err(|e| Error::bad(e.to_string()))?;
-        let app = self.clone();
-        std::thread::spawn(move || {
-            for req in server.incoming_requests() {
-                let app = app.clone();
-                std::thread::spawn(move || {
-                    app.handle(req);
-                });
-            }
-        });
-        Ok(format!("http://127.0.0.1:{port}{}", self.prefix))
-    }
-    fn html(&self) -> Result<Vec<u8>> {
-        let mut candidates = vec![];
-        if let Ok(exe) = std::env::current_exe() {
-            if let Some(parent) = exe.parent() {
-                candidates.push(parent.join("index.html"));
-            }
-        }
-        candidates.extend([
-            PathBuf::from(concat!(env!("CARGO_MANIFEST_DIR"), "/index.html")),
-            PathBuf::from("/usr/share/roadmap-app/index.html"),
-        ]);
-        let f = candidates
-            .into_iter()
-            .find(|p| p.exists())
-            .ok_or_else(Error::missing)?;
-        Ok(fs::read_to_string(f)?
-            .replacen(
-                "data-theme=\"light\"",
-                &format!("data-theme=\"{}\"", self.theme()),
-                1,
-            )
-            .into_bytes())
-    }
-    fn handle(self: &Arc<Self>, mut req: tiny_http::Request) {
-        let prepared = (|| -> Result<(String, String, Value)> {
-            if !req.url().starts_with(&self.prefix) {
-                return Err(Error::missing());
-            }
-            if req.body_length().unwrap_or(0) > 1 << 20 {
-                return Err(Error {
-                    status: 413,
-                    message: "Too large".into(),
-                });
-            }
-            let mut bytes = vec![];
-            req.as_reader()
-                .take((1 << 20) + 1)
-                .read_to_end(&mut bytes)?;
-            if bytes.len() > 1 << 20 {
-                return Err(Error {
-                    status: 413,
-                    message: "Too large".into(),
-                });
-            }
-            let b = if bytes.is_empty() {
-                json!({})
-            } else {
-                serde_json::from_slice(&bytes)?
+    pub fn chat_stream(&self, body: &Value, on_piece: &mut dyn FnMut(&str) -> Result<()>) -> Result<String> {
+        let (c, l, msgs) = self.chat_args(body)?;
+        let mut pieces = String::new();
+        let mut started = false;
+        let result = {
+            let mut out = |piece: &str| {
+                on_piece(piece)?;
+                started = true;
+                pieces.push_str(piece);
+                Ok(())
             };
-            if !b.is_object() {
-                return Err(Error::bad("Bad request."));
-            }
-            Ok((
-                req.method().as_str().to_string(),
-                req.url()[self.prefix.len()..]
-                    .split('?')
-                    .next()
-                    .unwrap_or("")
-                    .into(),
-                b,
-            ))
-        })();
-        let (method, path, b) = match prepared {
-            Ok(x) => x,
-            Err(e) => {
-                reply(
-                    req,
-                    e.status,
-                    json!({"error":e.message}).to_string().into_bytes(),
-                    false,
-                );
-                return;
-            }
-        };
-        if method == "POST" && path == "api/chat" && truth(&b["stream"]) {
-            let (c, l, msgs) = match self.chat_args(&b) {
-                Ok(x) => x,
-                Err(e) => {
-                    reply(
-                        req,
-                        e.status,
-                        json!({"error":e.message}).to_string().into_bytes(),
-                        false,
-                    );
-                    return;
-                }
-            };
-            let mut writer = req.into_writer();
-            let mut started = false;
-            let result = {
-                let mut out =
-                    |s: &str| -> Result<()> { stream_piece(&mut writer, &mut started, s) };
-                self.tutor(&c, &l, msgs.clone(), &mut Some(&mut out))
-            };
-            match result {
-                Ok(text) => {
-                    self.save_chat(&string(&c["id"]), &string(&l["id"]), &msgs, &text);
-                    if !started {
-                        let text = if text.is_empty() {
-                            "(No answer.)"
-                        } else {
-                            &text
-                        };
-                        let _ = stream_piece(&mut writer, &mut started, text);
-                    }
-                }
-                Err(e) => {
-                    if started {
-                        let _ = stream_piece(
-                            &mut writer,
-                            &mut started,
-                            &format!("\n\n(The answer was cut off: {e})"),
-                        );
-                    } else {
-                        let body = json!({"error":e.message}).to_string();
-                        let _=write!(writer,"HTTP/1.1 {} Error\r\nContent-Type: application/json\r\nContent-Length: {}\r\nCache-Control: no-store\r\nConnection: close\r\n\r\n{body}",e.status,body.len());
-                    }
-                }
-            }
-            if started {
-                let _ = writer.write_all(b"0\r\n\r\n");
-            }
-            let _ = writer.flush();
-            return;
-        }
-        let result = if method == "GET" && path.is_empty() {
-            self.html().map(|b| (b, true))
-        } else {
-            self.route(&method, &path, &b)
-                .map(|v| (v.to_string().into_bytes(), false))
+            self.tutor(&c, &l, msgs.clone(), &mut Some(&mut out))
         };
         match result {
-            Ok((b, html)) => reply(req, 200, b, html),
-            Err(e) => reply(
-                req,
-                e.status,
-                json!({"error":e.message}).to_string().into_bytes(),
-                false,
-            ),
+            Ok(text) => {
+                self.save_chat(&string(&c["id"]), &string(&l["id"]), &msgs, &text);
+                let text = if text.is_empty() { "(No answer.)".into() } else { text };
+                if !started { on_piece(&text)?; }
+                Ok(text)
+            }
+            Err(e) if started => {
+                let note = format!("\n\n(The answer was cut off: {e})");
+                let _ = on_piece(&note);
+                pieces.push_str(&note);
+                Ok(pieces)
+            }
+            Err(e) => Err(e),
         }
     }
 }
+
+pub fn request_body(body: Value) -> Result<Value> {
+    let body = if body.is_null() { json!({}) } else { body };
+    if !body.is_object() { return Err(Error::bad("Bad request.")); }
+    if serde_json::to_vec(&body)?.len() > 1 << 20 {
+        return Err(Error { status: 413, message: "Too large".into() });
+    }
+    Ok(body)
+}
+
 fn missed(c: &mut Value, key: &str, picked: Option<i64>, day: i64) {
     if !c["state"]["mistakes"].is_object() {
         c["state"]["mistakes"] = json!({});
     }
     let old = c["state"]["mistakes"][key].clone();
     c["state"]["mistakes"][key] = json!({"n":old["n"].as_u64().unwrap_or(0)+1,"picked":picked.map_or(old["picked"].clone(),|p|json!(p)),"day":day,"fixed":false});
-}
-fn stream_piece(writer: &mut dyn Write, started: &mut bool, text: &str) -> Result<()> {
-    if !*started {
-        writer.write_all(b"HTTP/1.1 200 OK\r\nContent-Type: text/plain; charset=utf-8\r\nCache-Control: no-store\r\nTransfer-Encoding: chunked\r\nConnection: close\r\n\r\n")?;
-        *started = true;
-    }
-    if !text.is_empty() {
-        write!(writer, "{:x}\r\n{text}\r\n", text.len())?;
-    }
-    writer.flush()?;
-    Ok(())
-}
-fn reply(req: tiny_http::Request, status: u16, data: Vec<u8>, html: bool) {
-    let r = tiny_http::Response::from_data(data)
-        .with_status_code(status)
-        .with_header(
-            tiny_http::Header::from_bytes(
-                "Content-Type",
-                if html {
-                    "text/html; charset=utf-8"
-                } else {
-                    "application/json"
-                },
-            )
-            .unwrap(),
-        )
-        .with_header(tiny_http::Header::from_bytes("Cache-Control", "no-store").unwrap());
-    let _ = req.respond(r);
 }
