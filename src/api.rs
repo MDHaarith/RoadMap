@@ -6,7 +6,7 @@ use crate::{
 use std::{io::Write, net::TcpListener};
 impl App {
     pub(crate) fn reviewed(&self, cid: &str, lid: &str, i: &str, right: bool) -> Result<Value> {
-        let _guard = self.lock.lock().unwrap();
+        let _guard = self.guard();
         let mut c = self.load(cid)?;
         if !c["state"]["review"].is_object() {
             c["state"]["review"] = json!({});
@@ -78,7 +78,7 @@ impl App {
                 if !["light", "dark", "system"].iter().any(|t| b["theme"] == *t) {
                     return Err(Error::bad("Unknown theme."));
                 }
-                let _guard = self.lock.lock().unwrap();
+                let _guard = self.guard();
                 self.write_config(&merge(self.config(), json!({"theme":b["theme"]})))?;
                 return Ok(json!({}));
             }
@@ -122,9 +122,21 @@ impl App {
                     level.push("Placement check:".into());
                     level.extend(answers);
                 }
-                let c = self.build_course(&prompt, &level.join("\n"), &folder)?;
+                let c = self.build_course(
+                    &prompt,
+                    &level.join("\n"),
+                    &folder,
+                    &string(&b["size"]),
+                )?;
                 self.save(&c)?;
-                self.prefetch(string(&c["id"]));
+                let cid = string(&c["id"]);
+                let first = lessons(&c).next().cloned().unwrap_or_default();
+                // A long roadmap is saved as an outline: write its first phase now so the learner can start.
+                // If that fails, the lesson page asks again when it is opened.
+                if truth(&first["stub"]) {
+                    return Ok(self.expand(&cid, &first["id"]).unwrap_or(c));
+                }
+                self.prefetch(cid);
                 return Ok(c);
             }
             ("POST", "api/run") => {
@@ -141,7 +153,7 @@ impl App {
                     if tests { ex["tests"].as_str() } else { None },
                 )?;
                 if tests && !truth(&out["missing"]) {
-                    let _guard = self.lock.lock().unwrap();
+                    let _guard = self.guard();
                     let mut c = self.load(&text(&b["course"]))?;
                     if !c["state"]["tests"].is_object() {
                         c["state"]["tests"] = json!({});
@@ -185,7 +197,7 @@ impl App {
             _ => {}
         }
         let re = regex::Regex::new(
-            r"^api/courses/([0-9a-f]{12})(/state|/videos|/practice|/paused|/adapt|/export|/work)?$",
+            r"^api/courses/([0-9a-f]{12})(/state|/videos|/practice|/paused|/adapt|/revise|/expand|/export|/work)?$",
         )
         .unwrap();
         let m = re.captures(path).ok_or_else(Error::missing)?;
@@ -194,7 +206,7 @@ impl App {
         match (method, sub) {
             ("GET", "") => self.mark_known(self.load(cid)?),
             ("DELETE", "") => {
-                let _guard = self.lock.lock().unwrap();
+                let _guard = self.guard();
                 fs::remove_file(self.path_of(cid)?)?;
                 Ok(json!({}))
             }
@@ -205,7 +217,7 @@ impl App {
                 {
                     return Err(Error::bad("Bad progress data."));
                 }
-                let _guard = self.lock.lock().unwrap();
+                let _guard = self.guard();
                 let mut c = self.load(cid)?;
                 let old = c["state"].clone();
                 let mut st = b.clone();
@@ -244,7 +256,15 @@ impl App {
                 self.save(&c)?;
                 Ok(json!({}))
             }
-            ("POST", "/adapt") => self.adapt(cid),
+            ("POST", "/adapt") => self.adapt(cid, ""),
+            ("POST", "/revise") => {
+                let ask = cap(b.get("ask").map(text).unwrap_or_default().trim(), 600);
+                if ask.is_empty() {
+                    return Err(Error::bad("Say what you want to change first."));
+                }
+                self.adapt(cid, &ask)
+            }
+            ("POST", "/expand") => self.expand(cid, &b["lesson"]),
             ("POST", "/export") => self.export_course(&self.load(cid)?),
             ("PUT", "/work") => {
                 let clear = truth(&b["clear"]);
@@ -261,14 +281,14 @@ impl App {
                 } else {
                     self.read_project(&folder)?.0
                 };
-                let _guard = self.lock.lock().unwrap();
+                let _guard = self.guard();
                 let mut c = self.load(cid)?;
                 c["work"] = json!(root);
                 self.save(&c)?;
                 Ok(json!({"work":root}))
             }
             ("PUT", "/paused") => {
-                let _guard = self.lock.lock().unwrap();
+                let _guard = self.guard();
                 let mut c = self.load(cid)?;
                 c["paused"] = json!(truth(&b["paused"]));
                 self.save(&c)?;
@@ -293,7 +313,7 @@ impl App {
                     old.to_vec()
                 };
                 if !vids.is_empty() && (fresh || old.is_empty()) {
-                    let _guard = self.lock.lock().unwrap();
+                    let _guard = self.guard();
                     let mut c = self.load(cid)?;
                     lesson_mut(&mut c, &string(&l["id"]))?["videos"] = json!(vids);
                     self.save(&c)?;
@@ -307,7 +327,7 @@ impl App {
                     return Ok(l["practice"].clone());
                 }
                 let pr = self.build_practice(&c, l)?;
-                let _guard = self.lock.lock().unwrap();
+                let _guard = self.guard();
                 let mut c = self.load(cid)?;
                 lesson_mut(&mut c, &string(&l["id"]))?["practice"] = pr.clone();
                 let mut r = c["state"]["review"]

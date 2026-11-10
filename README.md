@@ -29,3 +29,10 @@ interpreter; Fedora's yt-dlp package also has its own Python dependency.
 The Rust server uses HTTP chunked framing for streamed tutor replies. API
 routes, payloads, prompts, schemas, saved data, and the UI are unchanged.
 Error diagnostics from Rust's JSON/HTTP libraries can differ in wording.
+
+A new roadmap has a size: about two weeks, a month, three months or six months.
+The two long sizes are planned as an outline of stages, phases and lesson titles
+(`OUTLINE_PROMPT`). The lessons of a phase are written when the learner reaches it
+(`POST api/courses/<id>/expand`), so later phases use their results. "Change my
+roadmap" (`POST api/courses/<id>/revise`) lets the learner ask for a new direction
+part-way through; new phases arrive as outlines and are written the same way.

@@ -93,6 +93,10 @@ impl App {
             yt_program: "yt-dlp".into(),
         }))
     }
+    // A panic in one request must not poison saving for every later request.
+    pub(crate) fn guard(&self) -> std::sync::MutexGuard<'_, ()> {
+        self.lock.lock().unwrap_or_else(|e| e.into_inner())
+    }
     pub(crate) fn today(&self) -> i64 {
         std::time::SystemTime::now()
             .duration_since(std::time::UNIX_EPOCH)
@@ -232,6 +236,16 @@ pub(crate) fn clean_lesson(l: &Value, lid: &str, files: &[String]) -> Value {
         "concepts":strs(&l["concepts"],8),"tasks":strs(&l["tasks"],8),"done":strs(&l["done"],8),
         "query":cap(&if truth(&l["query"]) {text(&l["query"])}else{string(&l["title"])},200),"lookups":strs(&l["lookups"],4),
         "files":strs(&l["files"],6).into_iter().filter(|f|files.contains(f)).collect::<Vec<_>>(),"warn":cap(&string(&l["warn"]),600)})
+}
+// The stages of a long roadmap: about a month each, shown above their phases.
+pub(crate) fn clean_stages(v: &Value) -> Vec<Value> {
+    list(v)
+        .iter()
+        .filter(|s| s.is_object())
+        .take(12)
+        .enumerate()
+        .map(|(i, s)| json!({"title":cap(&if truth(&s["title"]){text(&s["title"])}else{format!("Stage {}",i+1)},200),"blurb":cap(&string(&s["blurb"]),600)}))
+        .collect()
 }
 #[cfg(test)]
 mod tests;
