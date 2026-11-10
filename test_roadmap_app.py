@@ -37,6 +37,18 @@ class FakeAI(BaseHTTPRequestHandler):
             text = json.dumps({"done": True, "q": "", "options": []} if "Used an oven? My answer: Yes" in user else
                               {"done": False, "q": "Used an oven?", "options": ["No, never", "Yes"]} if "Baked before? My answer: No, never" in user else
                               {"done": False, "q": "Baked before?", "options": ["No, never", "Yes", 3]})
+        elif "choose the videos" in system:
+            user = body["messages"][1]["content"]
+            assert "0. Full lesson | Baker | 15 min | 1200 views | Flour and water" in user and "A Short" not in user and "live now" not in user, user
+            text = json.dumps({"picks": [{"i": 0, "why": "Covers hydration."}, {"i": 99, "why": "made up"}, "junk"], "query": ""})
+        elif "mark one review answer" in system:
+            assert "Concept to explain: hydration" in body["messages"][1]["content"]
+            text = json.dumps({"right": "water" in body["messages"][1]["content"].split("answer:")[1], "feedback": "It is the water to flour ratio."})
+        elif "You designed this course earlier" in system:
+            user = body["messages"][1]["content"]
+            assert "- 1.1 Mix [completed, quiz 1 of 1" in user and ("exercise passed after 2 test runs" in user or not os.path.exists("/usr/bin/bwrap")), user
+            new = {"title": "Mix again", "goal": "g", "concepts": ["hydration by feel"], "tasks": ["t"], "done": ["d"], "query": "q", "lookups": [], "warn": ""}
+            text = json.dumps({"note": "Added practice.", "drop": ["1.1", "7.7"], "add": [{"after": "1.1", "lesson": new}, {"after": "9.9", "lesson": new}, {"after": "1.1"}]})
         elif "practice material" in system:
             text = json.dumps(PRACTICE)
         elif "existing, working project" in system:
@@ -53,6 +65,11 @@ class FakeAI(BaseHTTPRequestHandler):
                 assert names == ["get_lesson", "run_exercise_tests"], names
                 msg = {"content": None, "tool_calls": [{"id": f"c{i}", "type": "function", "function": {"name": n, "arguments": a}}
                                                        for i, (n, a) in enumerate((("run_exercise_tests", "{}"), ("get_lesson", '{"id": "1.1"}'), ("rm_rf", "{}"), ("get_lesson", "not json")))]}
+        if body.get("stream") and not msg:  # the reply in two pieces, as a streaming service sends it
+            self.send_response(200); self.send_header("Content-Type", "text/event-stream"); self.end_headers()
+            for part in (text[:5], text[5:]):
+                self.wfile.write(b"data: " + json.dumps({"choices": [{"delta": {"content": part}}]}).encode() + b"\n\n")
+            self.wfile.write(b"data: [DONE]\n\n"); return
         data = json.dumps({"choices": [{"message": msg or {"content": text}}]}).encode()
         self.send_response(200); self.send_header("Content-Length", str(len(data))); self.end_headers(); self.wfile.write(data)
 
@@ -85,10 +102,13 @@ assert call("GET", "api/settings")[1] == {"base": f"http://127.0.0.1:{ai.server_
 assert stat.S_IMODE(os.stat(app.CONF).st_mode) == 0o600
 
 real_run = subprocess.run
-app.subprocess = types.SimpleNamespace(TimeoutExpired=subprocess.TimeoutExpired, DEVNULL=subprocess.DEVNULL, run=lambda a, **k: real_run(a, **k) if a[0] != "yt-dlp" else types.SimpleNamespace(returncode=0, stderr="", stdout=json.dumps({"entries": [
-    {"id": "aaaaaaaaaaa", "title": "Full lesson", "channel": "Baker", "duration": 900.0},
+FOUND = {"entries": [
+    {"id": "aaaaaaaaaaa", "title": "Full lesson", "channel": "Baker", "duration": 900.0, "view_count": 1200, "description": "Flour and\nwater"},
     {"id": "bbbbbbbbbbb", "title": "A Short", "duration": 40},
-    {"id": "<script>", "title": "bad id", "duration": 900}]})))
+    {"id": "ccccccccccc", "title": "live now", "duration": 900, "live_status": "is_live"},
+    {"id": "<script>", "title": "bad id", "duration": 900}],
+    "chapters": [{"start_time": 0.0, "title": "Intro"}, {"start_time": 75.5, "title": "Mixing"}, {"title": "no time"}]}  # one fake answers both the search and the single-video lookup
+app.subprocess = types.SimpleNamespace(TimeoutExpired=subprocess.TimeoutExpired, DEVNULL=subprocess.DEVNULL, run=lambda a, **k: real_run(a, **k) if a[0] != "yt-dlp" else types.SimpleNamespace(returncode=0, stderr="", stdout=json.dumps(FOUND)))
 assert call("POST", "api/placement", {})[0] == 400
 first = call("POST", "api/placement", {"prompt": "bake bread"})[1]
 assert first == {"done": False, "q": "Baked before?", "options": ["No, never", "Yes", "3"]} and "You have not asked anything yet." in SEEN[-1]["messages"][1]["content"], first
@@ -111,6 +131,8 @@ else:
     raise AssertionError("videos were not prefetched")
 code, vids = call("POST", f"api/courses/{cid}/videos", {"lesson": "1.1"})
 assert code == 200 and [v["id"] for v in vids] == ["aaaaaaaaaaa"], vids
+assert vids[0]["why"] == "Covers hydration." and vids[0]["chapters"] == [{"t": 0, "title": "Intro"}, {"t": 75, "title": "Mixing"}], vids  # chosen by the AI, with a reason and jump points
+assert call("POST", f"api/courses/{cid}/videos", {"lesson": "1.1", "fresh": True})[1] == vids  # nothing new found: the old ones stay
 
 assert call("POST", "api/run", {"course": cid, "lesson": "1.1", "code": ""})[0] == 404  # no exercise yet
 code, pr = call("POST", f"api/courses/{cid}/practice", {"lesson": "1.1"})
@@ -158,7 +180,8 @@ real_known = app.known; app.known = lambda skip=None: [("hydration: the ratio of
 assert call("GET", "api/courses/0123456789ab")[1]["phases"][0]["lessons"][0]["known"] == {"0": "Bake bread"}  # same idea in another roadmap is tagged
 app.known = real_known; app.path_of("0123456789ab").unlink()
 assert call("PUT", f"api/courses/{cid}/state", state)[0] == 200  # a page saving an old copy keeps the schedule
-state["review"] = {"1.1#0": {"step": 0, "due": app.today() + 2}}
+state["review"] = {"1.1#0": {"step": 0, "due": app.today() + 2}, "1.1#explain": {"step": -1, "due": app.today() + 2}, "1.1#code": {"step": -1, "due": app.today() + 4}}
+state["tests"] = {"1.1": {"runs": 2, "ok": True}} if os.path.exists("/usr/bin/bwrap") else {}  # kept by the server, not by the page
 assert call("PUT", f"api/courses/{cid}/paused", {"paused": True})[0] == 200 and call("GET", "api/courses")[1][0]["paused"] is True
 assert call("PUT", f"api/courses/{cid}/paused", {"paused": False})[0] == 200
 saved = call("GET", f"api/courses/{cid}")[1]
@@ -170,9 +193,49 @@ assert call("POST", "api/chat", {"course": cid, "lesson": "1.1", "messages": [{"
 results = [m["content"] for m in SEEN[-1]["messages"] if m["role"] == "tool"]  # what the tutor's tools gave back
 assert len(results) == 4 and results[1].startswith("Lesson 1.1: Mix") and results[2] == results[3] == "That tool or argument does not exist.", results
 assert results[0] == "All tests passed\n" or not os.path.exists("/usr/bin/bwrap"), results  # the tutor ran the learner's saved code
+req = urllib.request.Request(base + "api/chat", json.dumps({"course": cid, "lesson": "1.1", "stream": True, "messages": [{"role": "user", "content": "hint?"}]}).encode(), method="POST")
+with urllib.request.urlopen(req) as r:  # streamed: tools first, then the text in pieces
+    assert r.headers["Content-Type"].startswith("text/plain") and r.read() == b"hint for: 1.1: Mix"
+assert SEEN[-1]["stream"] is True and len([m for m in SEEN[-1]["messages"] if m["role"] == "tool"]) == 4
+
+app.today = lambda: real_today() + 4  # review by doing: explain a concept from memory, write the exercise again
+kinds = {q["i"]: q for q in call("GET", "api/review")[1]["questions"]}
+assert set(kinds) == {0, "explain", "code"} and kinds["explain"]["q"] == "hydration" and kinds["code"]["starter"] and "tests" not in kinds["code"] and "answer" not in kinds["explain"], kinds
+assert call("POST", "api/review/answer", {"course": cid, "lesson": "1.1", "i": "explain", "answer": "no idea"})[1] == {"right": False, "feedback": "It is the water to flour ratio.", "step": 0, "due": app.today() + 1}
+assert call("POST", "api/review/answer", {"course": cid, "lesson": "1.1", "i": "explain", "answer": "how much water for the flour"})[1]["step"] == 1
+assert call("POST", "api/review/answer", {"course": cid, "lesson": "1.1", "i": 0, "answer": "x"})[0] == 404
+if os.path.exists("/usr/bin/bwrap"):
+    assert call("POST", "api/review/answer", {"course": cid, "lesson": "1.1", "i": "code", "answer": "def double(x): return 0"})[1]["right"] is False
+    assert call("POST", "api/review/answer", {"course": cid, "lesson": "1.1", "i": "code", "answer": "def double(x): return x * 2"})[1] == {"right": True, "output": "All tests passed\n", "step": 1, "due": app.today() + 3}
+app.today = real_today
+
+app.HOME = type(app.HOME)(tmp)  # export must not write into the real home folder
+out = call("POST", f"api/courses/{cid}/export")[1]["path"]
+assert out == os.path.join(tmp, "Bake-bread.roadmap.json")
+app.PICK = lambda kind="folder": out if kind == "file" else proj
+back = call("POST", "api/import")[1]
+src = call("GET", f"api/courses/{cid}")[1]
+assert back["id"] != cid and back["state"] == src["state"] and back["phases"][0]["lessons"][0]["practice"] == pr and back["phases"][0]["lessons"][0]["videos"][0]["chapters"] == vids[0]["chapters"] and "folder" not in json.load(open(out)), back  # progress, notes, practice and videos survive
+evil = json.load(open(out)); evil["phases"][0]["lessons"].append({"id": "../../x", "title": "bad id"}); evil["phases"][0]["lessons"][0]["videos"] = [{"id": "<script>"}]
+evil["state"] = {"checks": {"1.1#0": "<img>", "9.9#0": True}, "done": {"1.1": True}, "notes": {"1.1": 5}, "review": {"1.1#0": {"step": "x", "due": 1}}, "quiz": [], "last": "<b>"}
+json.dump(evil, open(out, "w")); bad = call("POST", "api/import")[1]
+assert len(bad["phases"][0]["lessons"]) == 1 and bad["phases"][0]["lessons"][0]["videos"] == [] and bad["state"] == {"checks": {}, "done": {"1.1": True}, "notes": {}, "code": {}, "quiz": {}, "review": {}, "tests": {}, "last": "1.1"}, bad
+open(out, "w").write("not json"); assert call("POST", "api/import")[0] == 400
+for x in (back, bad): app.path_of(x["id"]).unlink()
+
+assert call("PUT", f"api/courses/{cid}/work", {})[1] == {"work": proj}  # a build roadmap connected to the folder the learner works in
+tools = app.tutor_tools(app.load(cid), app.load(cid)["phases"][0]["lessons"][0])
+assert tools["list_project_files"][0]({}) == "README.md\napp.py" and tools["read_project_file"][0]({"path": "app.py"}) == "print('hi')" and "No such file" in tools["read_project_file"][0]({"path": ".env"})
+assert call("PUT", f"api/courses/{cid}/work", {"clear": True})[1] == {"work": ""} and "read_project_file" not in app.tutor_tools(app.load(cid), app.load(cid)["phases"][0]["lessons"][0])
+
+code, ad = call("POST", f"api/courses/{cid}/adapt")  # the roadmap changes with the results: practice added, a finished lesson is never dropped
+assert code == 200 and ad["change"] == {"day": app.today(), "note": "Added practice.", "added": ["Mix again"], "dropped": []}, ad
+assert [(l["id"], l["title"], l.get("added")) for l in ad["course"]["phases"][0]["lessons"]] == [("1.1", "Mix", None), ("1.2", "Mix again", True)] and ad["course"]["changes"] == [ad["change"]]
+time.sleep(0.5)
+
 REJECT = True  # a service that refuses schemas and tools still works: the app asks again without them
 assert call("POST", "api/chat", {"course": cid, "lesson": "1.1", "messages": [{"role": "user", "content": "hint?"}]})[1] == {"text": "hint for: 1.1: Mix"}
-assert call("POST", "api/placement", {"prompt": "bake bread"})[0] == 200 and app.OFF == {"tools", "response_format"}
+assert call("POST", "api/placement", {"prompt": "bake bread"})[0] == 200 and app.OFF >= {"tools", "response_format"}
 assert "tools" not in SEEN[-1] and "response_format" not in SEEN[-1]
 assert call("POST", "api/chat", {"course": "../../etc/passwd", "lesson": "1.1", "messages": []})[0] == 404
 assert call("POST", "api/chat", {"course": cid, "lesson": "9.9", "messages": []})[0] == 404
