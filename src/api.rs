@@ -1,0 +1,510 @@
+use crate::*;
+use crate::{
+    ai::said,
+    exercise::{install_lang, run_code},
+};
+use std::{io::Write, net::TcpListener};
+impl App {
+    pub(crate) fn reviewed(&self, cid: &str, lid: &str, i: &str, right: bool) -> Result<Value> {
+        let _guard = self.lock.lock().unwrap();
+        let mut c = self.load(cid)?;
+        if !c["state"]["review"].is_object() {
+            c["state"]["review"] = json!({});
+        }
+        let key = format!("{lid}#{i}");
+        let step = if right {
+            (c["state"]["review"][&key]["step"].as_i64().unwrap_or(-1) + 1).clamp(0, 4)
+        } else {
+            0
+        };
+        let r = json!({"step":step,"due":self.today()+[1,3,7,16,35][step as usize]});
+        c["state"]["review"][key] = r.clone();
+        self.save(&c)?;
+        Ok(r)
+    }
+    pub(crate) fn review_due(&self) -> Result<Value> {
+        let mut due = vec![];
+        for c in self.courses()? {
+            if truth(&c["paused"]) {
+                continue;
+            }
+            let st = &c["state"];
+            let r = &st["review"];
+            for l in lessons(&c) {
+                let lid = string(&l["id"]);
+                if st["quiz"].get(&lid).is_none() {
+                    continue;
+                }
+                let base = json!({"course":c["id"],"roadmap":c["title"],"lesson":l["id"],"lesson_title":l["title"]});
+                let pr = &l["practice"];
+                let mut items = list(&pr["quiz"])
+                    .iter()
+                    .enumerate()
+                    .map(|(i, q)| (json!(i), merge(json!({"kind":"quiz"}), q.clone())))
+                    .collect::<Vec<_>>();
+                let cs = list(&l["concepts"]);
+                if !cs.is_empty() && r.get(format!("{lid}#explain")).is_some() {
+                    let step = r[format!("{lid}#explain")]["step"].as_i64().unwrap_or(-1);
+                    items.push((json!("explain"),json!({"kind":"explain","q":cs[(step+1).rem_euclid(cs.len() as i64) as usize]})));
+                }
+                let ex = &pr["exercise"];
+                if truth(ex) && r.get(format!("{lid}#code")).is_some() {
+                    items.push((json!("code"),json!({"kind":"code","lang":ex["lang"],"title":ex["title"],"prompt":ex["prompt"],"starter":ex["starter"]})));
+                }
+                for (i, item) in items {
+                    let when = r[format!("{lid}#{}", text(&i))]["due"]
+                        .as_i64()
+                        .unwrap_or(0);
+                    if when <= self.today() {
+                        due.push((when, merge(merge(base.clone(), json!({"i":i})), item)));
+                    }
+                }
+            }
+        }
+        due.sort_by_key(|(d, _)| *d);
+        Ok(
+            json!({"count":due.len(),"questions":due.into_iter().take(10).map(|(_,q)|q).collect::<Vec<_>>()}),
+        )
+    }
+    pub(crate) fn route(self: &Arc<Self>, method: &str, path: &str, b: &Value) -> Result<Value> {
+        match (method, path) {
+            ("GET", "api/settings") => {
+                let c = self.config();
+                return Ok(
+                    json!({"base":c.get("base").unwrap_or(&json!("")),"model":c.get("model").unwrap_or(&json!("")),"key_set":truth(&c["key"]),"theme":self.theme()}),
+                );
+            }
+            ("PUT", "api/theme") => {
+                if !["light", "dark", "system"].iter().any(|t| b["theme"] == *t) {
+                    return Err(Error::bad("Unknown theme."));
+                }
+                let _guard = self.lock.lock().unwrap();
+                self.write_config(&merge(self.config(), json!({"theme":b["theme"]})))?;
+                return Ok(json!({}));
+            }
+            ("PUT", "api/settings") => {
+                self.save_config(b)?;
+                return Ok(json!({}));
+            }
+            ("GET", "api/courses") => {
+                return Ok(json!(self.courses()?.iter().map(|c|{let ls=lessons(c).collect::<Vec<_>>();let next=ls.iter().find(|l|!truth(&c["state"]["done"][string(&l["id"])]));json!({"id":c["id"],"title":c["title"],"summary":c["summary"],"total":ls.len(),"done":c["state"]["done"].as_object().map(|o|o.values().filter(|v|truth(v)).count()).unwrap_or(0),"paused":truth(&c["paused"]),"project":truth(&c["folder"]),"next":next.map(|l|json!({"id":l["id"],"title":l["title"]}))})}).collect::<Vec<_>>()));
+            }
+            ("GET", "api/review") => return self.review_due(),
+            ("POST", "api/review") => {
+                let i = b
+                    .get("i")
+                    .unwrap_or(&json!(-1))
+                    .as_i64()
+                    .or_else(|| b["i"].as_str().and_then(|s| s.parse().ok()))
+                    .or_else(|| b["i"].as_f64().map(|x| x as i64))
+                    .or_else(|| b["i"].as_bool().map(i64::from))
+                    .ok_or_else(|| Error::bad("Bad review index."))?;
+                return self.reviewed(
+                    &text(&b["course"]),
+                    &cap(&text(&b["lesson"]), 20),
+                    &i.to_string(),
+                    truth(&b["right"]),
+                );
+            }
+            ("POST", "api/review/answer") => return self.review_answer(b),
+            ("POST", "api/courses") | ("POST", "api/placement") => {
+                let prompt = cap(b.get("prompt").map(text).unwrap_or_default().trim(), 2000);
+                let folder = string(&b["folder"]).trim().to_string();
+                if prompt.is_empty() && folder.is_empty() {
+                    return Err(Error::bad("Say what you want to learn first."));
+                }
+                if path == "api/placement" {
+                    return self.placement(&prompt, &folder, &b["answers"]);
+                }
+                let mut level = vec![cap(&b.get("level").map(text).unwrap_or_default(), 100)];
+                let answers = said(&b["answers"]);
+                if !answers.is_empty() {
+                    level.push("Placement check:".into());
+                    level.extend(answers);
+                }
+                let c = self.build_course(&prompt, &level.join("\n"), &folder)?;
+                self.save(&c)?;
+                self.prefetch(string(&c["id"]));
+                return Ok(c);
+            }
+            ("POST", "api/run") => {
+                let c = self.load(&text(&b["course"]))?;
+                let l = lesson(&c, &b["lesson"])?;
+                let ex = &l["practice"]["exercise"];
+                if !truth(ex) {
+                    return Err(Error::missing());
+                }
+                let tests = truth(&b["test"]);
+                let out = run_code(
+                    &string(&ex["lang"]),
+                    &cap(&b.get("code").map(text).unwrap_or_default(), 100000),
+                    if tests { ex["tests"].as_str() } else { None },
+                )?;
+                if tests && !truth(&out["missing"]) {
+                    let _guard = self.lock.lock().unwrap();
+                    let mut c = self.load(&text(&b["course"]))?;
+                    if !c["state"]["tests"].is_object() {
+                        c["state"]["tests"] = json!({});
+                    }
+                    let lid = string(&l["id"]);
+                    let t = &c["state"]["tests"][&lid];
+                    let t = json!({"runs":t["runs"].as_u64().unwrap_or(0)+1,"ok":truth(&t["ok"])||truth(&out["ok"])});
+                    c["state"]["tests"][lid] = t;
+                    self.save(&c)?;
+                }
+                return Ok(out);
+            }
+            ("POST", "api/import") => {
+                let f = (self.pick)("file");
+                return if f.is_empty() {
+                    Ok(json!({}))
+                } else {
+                    self.import_course(&f)
+                };
+            }
+            ("POST", "api/pick-folder") => return Ok(json!({"folder":(self.pick)("folder")})),
+            ("POST", "api/file") => {
+                let c = self.load(&text(&b["course"]))?;
+                return self
+                    .project_file(
+                        if truth(&c["folder"]) {
+                            c["folder"].as_str().unwrap_or("/nonexistent")
+                        } else {
+                            "/nonexistent"
+                        },
+                        &b["path"],
+                    )
+                    .map(|s| json!({"text":s}))
+                    .ok_or_else(Error::missing);
+            }
+            ("POST", "api/install") => return install_lang(&string(&b["lang"])),
+            ("POST", "api/chat") => {
+                let (c, l, ms) = self.chat_args(b)?;
+                return Ok(json!({"text":self.tutor(&c,&l,ms,&mut None)?}));
+            }
+            _ => {}
+        }
+        let re = regex::Regex::new(
+            r"^api/courses/([0-9a-f]{12})(/state|/videos|/practice|/paused|/adapt|/export|/work)?$",
+        )
+        .unwrap();
+        let m = re.captures(path).ok_or_else(Error::missing)?;
+        let cid = &m[1];
+        let sub = m.get(2).map(|m| m.as_str()).unwrap_or("");
+        match (method, sub) {
+            ("GET", "") => self.mark_known(self.load(cid)?),
+            ("DELETE", "") => {
+                let _guard = self.lock.lock().unwrap();
+                fs::remove_file(self.path_of(cid)?)?;
+                Ok(json!({}))
+            }
+            ("PUT", "/state") => {
+                if !["checks", "done", "notes"]
+                    .iter()
+                    .all(|k| b[*k].is_object())
+                {
+                    return Err(Error::bad("Bad progress data."));
+                }
+                let _guard = self.lock.lock().unwrap();
+                let mut c = self.load(cid)?;
+                let old = c["state"].clone();
+                let mut st = b.clone();
+                st["review"] = if truth(&old["review"]) {
+                    old["review"].clone()
+                } else {
+                    json!({})
+                };
+                st["tests"] = if truth(&old["tests"]) {
+                    old["tests"].clone()
+                } else {
+                    json!({})
+                };
+                if let Some(q) = b["quiz"].as_object() {
+                    for lid in q.keys() {
+                        if old["quiz"].get(lid).is_none() {
+                            let l = lesson(&c, &json!(lid))?;
+                            let pr = &l["practice"];
+                            let mut items = (0..list(&pr["quiz"]).len())
+                                .map(|i| (i.to_string(), 1))
+                                .collect::<Vec<_>>();
+                            items.push(("explain".into(), 2));
+                            if truth(&pr["exercise"]) {
+                                items.push(("code".into(), 4));
+                            }
+                            for (i, d) in items {
+                                let key = format!("{lid}#{i}");
+                                if st["review"].get(&key).is_none() {
+                                    st["review"][key] = json!({"step":-1,"due":self.today()+d});
+                                }
+                            }
+                        }
+                    }
+                }
+                c["state"] = st;
+                self.save(&c)?;
+                Ok(json!({}))
+            }
+            ("POST", "/adapt") => self.adapt(cid),
+            ("POST", "/export") => self.export_course(&self.load(cid)?),
+            ("PUT", "/work") => {
+                let clear = truth(&b["clear"]);
+                let folder = if clear {
+                    String::new()
+                } else {
+                    (self.pick)("folder")
+                };
+                if folder.is_empty() && !clear {
+                    return Ok(json!({"work":string(&self.load(cid)?["work"])}));
+                }
+                let root = if folder.is_empty() {
+                    String::new()
+                } else {
+                    self.read_project(&folder)?.0
+                };
+                let _guard = self.lock.lock().unwrap();
+                let mut c = self.load(cid)?;
+                c["work"] = json!(root);
+                self.save(&c)?;
+                Ok(json!({"work":root}))
+            }
+            ("PUT", "/paused") => {
+                let _guard = self.lock.lock().unwrap();
+                let mut c = self.load(cid)?;
+                c["paused"] = json!(truth(&b["paused"]));
+                self.save(&c)?;
+                Ok(json!({}))
+            }
+            ("POST", "/videos") => {
+                let c = self.load(cid)?;
+                let l = lesson(&c, &b["lesson"])?;
+                let old = list(&l["videos"]);
+                let fresh = truth(&b["fresh"]);
+                let vids = if fresh || old.is_empty() {
+                    self.find_videos(
+                        &c,
+                        l,
+                        &if fresh {
+                            old.iter().map(|v| string(&v["id"])).collect::<Vec<_>>()
+                        } else {
+                            vec![]
+                        },
+                    )?
+                } else {
+                    old.to_vec()
+                };
+                if !vids.is_empty() && (fresh || old.is_empty()) {
+                    let _guard = self.lock.lock().unwrap();
+                    let mut c = self.load(cid)?;
+                    lesson_mut(&mut c, &string(&l["id"]))?["videos"] = json!(vids);
+                    self.save(&c)?;
+                }
+                Ok(json!(if vids.is_empty() { old.to_vec() } else { vids }))
+            }
+            ("POST", "/practice") => {
+                let c = self.load(cid)?;
+                let l = lesson(&c, &b["lesson"])?;
+                if truth(&l["practice"]) && !truth(&b["fresh"]) {
+                    return Ok(l["practice"].clone());
+                }
+                let pr = self.build_practice(&c, l)?;
+                let _guard = self.lock.lock().unwrap();
+                let mut c = self.load(cid)?;
+                lesson_mut(&mut c, &string(&l["id"]))?["practice"] = pr.clone();
+                let mut r = c["state"]["review"]
+                    .as_object()
+                    .cloned()
+                    .unwrap_or_default();
+                let prefix = format!("{}#", text(&l["id"]));
+                r.retain(|k, _| !k.starts_with(&prefix));
+                c["state"]["review"] = json!(r);
+                self.save(&c)?;
+                Ok(pr)
+            }
+            _ => Err(Error::missing()),
+        }
+    }
+    pub fn serve(self: &Arc<Self>) -> Result<String> {
+        let listener = TcpListener::bind(("127.0.0.1", 0))?;
+        let port = listener.local_addr()?.port();
+        let server = tiny_http::Server::from_listener(listener, None)
+            .map_err(|e| Error::bad(e.to_string()))?;
+        let app = self.clone();
+        std::thread::spawn(move || {
+            for req in server.incoming_requests() {
+                let app = app.clone();
+                std::thread::spawn(move || {
+                    app.handle(req);
+                });
+            }
+        });
+        Ok(format!("http://127.0.0.1:{port}{}", self.prefix))
+    }
+    fn html(&self) -> Result<Vec<u8>> {
+        let mut candidates = vec![];
+        if let Ok(exe) = std::env::current_exe() {
+            if let Some(parent) = exe.parent() {
+                candidates.push(parent.join("index.html"));
+            }
+        }
+        candidates.extend([
+            PathBuf::from(concat!(env!("CARGO_MANIFEST_DIR"), "/index.html")),
+            PathBuf::from("/usr/share/roadmap-app/index.html"),
+        ]);
+        let f = candidates
+            .into_iter()
+            .find(|p| p.exists())
+            .ok_or_else(Error::missing)?;
+        Ok(fs::read_to_string(f)?
+            .replacen(
+                "data-theme=\"light\"",
+                &format!("data-theme=\"{}\"", self.theme()),
+                1,
+            )
+            .into_bytes())
+    }
+    fn handle(self: &Arc<Self>, mut req: tiny_http::Request) {
+        let prepared = (|| -> Result<(String, String, Value)> {
+            if !req.url().starts_with(&self.prefix) {
+                return Err(Error::missing());
+            }
+            if req.body_length().unwrap_or(0) > 1 << 20 {
+                return Err(Error {
+                    status: 413,
+                    message: "Too large".into(),
+                });
+            }
+            let mut bytes = vec![];
+            req.as_reader()
+                .take((1 << 20) + 1)
+                .read_to_end(&mut bytes)?;
+            if bytes.len() > 1 << 20 {
+                return Err(Error {
+                    status: 413,
+                    message: "Too large".into(),
+                });
+            }
+            let b = if bytes.is_empty() {
+                json!({})
+            } else {
+                serde_json::from_slice(&bytes)?
+            };
+            if !b.is_object() {
+                return Err(Error::bad("Bad request."));
+            }
+            Ok((
+                req.method().as_str().to_string(),
+                req.url()[self.prefix.len()..]
+                    .split('?')
+                    .next()
+                    .unwrap_or("")
+                    .into(),
+                b,
+            ))
+        })();
+        let (method, path, b) = match prepared {
+            Ok(x) => x,
+            Err(e) => {
+                reply(
+                    req,
+                    e.status,
+                    json!({"error":e.message}).to_string().into_bytes(),
+                    false,
+                );
+                return;
+            }
+        };
+        if method == "POST" && path == "api/chat" && truth(&b["stream"]) {
+            let (c, l, msgs) = match self.chat_args(&b) {
+                Ok(x) => x,
+                Err(e) => {
+                    reply(
+                        req,
+                        e.status,
+                        json!({"error":e.message}).to_string().into_bytes(),
+                        false,
+                    );
+                    return;
+                }
+            };
+            let mut writer = req.into_writer();
+            let mut started = false;
+            let result = {
+                let mut out =
+                    |s: &str| -> Result<()> { stream_piece(&mut writer, &mut started, s) };
+                self.tutor(&c, &l, msgs, &mut Some(&mut out))
+            };
+            match result {
+                Ok(text) => {
+                    if !started {
+                        let text = if text.is_empty() {
+                            "(No answer.)"
+                        } else {
+                            &text
+                        };
+                        let _ = stream_piece(&mut writer, &mut started, text);
+                    }
+                }
+                Err(e) => {
+                    if started {
+                        let _ = stream_piece(
+                            &mut writer,
+                            &mut started,
+                            &format!("\n\n(The answer was cut off: {e})"),
+                        );
+                    } else {
+                        let body = json!({"error":e.message}).to_string();
+                        let _=write!(writer,"HTTP/1.1 {} Error\r\nContent-Type: application/json\r\nContent-Length: {}\r\nCache-Control: no-store\r\nConnection: close\r\n\r\n{body}",e.status,body.len());
+                    }
+                }
+            }
+            if started {
+                let _ = writer.write_all(b"0\r\n\r\n");
+            }
+            let _ = writer.flush();
+            return;
+        }
+        let result = if method == "GET" && path.is_empty() {
+            self.html().map(|b| (b, true))
+        } else {
+            self.route(&method, &path, &b)
+                .map(|v| (v.to_string().into_bytes(), false))
+        };
+        match result {
+            Ok((b, html)) => reply(req, 200, b, html),
+            Err(e) => reply(
+                req,
+                e.status,
+                json!({"error":e.message}).to_string().into_bytes(),
+                false,
+            ),
+        }
+    }
+}
+fn stream_piece(writer: &mut dyn Write, started: &mut bool, text: &str) -> Result<()> {
+    if !*started {
+        writer.write_all(b"HTTP/1.1 200 OK\r\nContent-Type: text/plain; charset=utf-8\r\nCache-Control: no-store\r\nTransfer-Encoding: chunked\r\nConnection: close\r\n\r\n")?;
+        *started = true;
+    }
+    if !text.is_empty() {
+        write!(writer, "{:x}\r\n{text}\r\n", text.len())?;
+    }
+    writer.flush()?;
+    Ok(())
+}
+fn reply(req: tiny_http::Request, status: u16, data: Vec<u8>, html: bool) {
+    let r = tiny_http::Response::from_data(data)
+        .with_status_code(status)
+        .with_header(
+            tiny_http::Header::from_bytes(
+                "Content-Type",
+                if html {
+                    "text/html; charset=utf-8"
+                } else {
+                    "application/json"
+                },
+            )
+            .unwrap(),
+        )
+        .with_header(tiny_http::Header::from_bytes("Cache-Control", "no-store").unwrap());
+    let _ = req.respond(r);
+}
