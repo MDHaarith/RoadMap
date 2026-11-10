@@ -67,7 +67,7 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
     let view = webkit2gtk::WebView::with_user_content_manager(&manager);
     let settings = webkit2gtk::Settings::new();
     settings.set_hardware_acceleration_policy(webkit2gtk::HardwareAccelerationPolicy::Always);
-    settings.set_enable_smooth_scrolling(true);
+    settings.set_enable_smooth_scrolling(false);
     view.set_settings(&settings);
     let window = win.clone();
     manager.connect_script_message_received(Some("roadmapWindow"), move |_, result| {
