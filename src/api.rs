@@ -5,6 +5,9 @@ use crate::{
 };
 use std::{io::Write, net::TcpListener};
 impl App {
+    pub(crate) fn library_list(&self) -> Result<Value> {
+        Ok(json!(self.courses()?.iter().map(|c|{let ls=lessons(c).collect::<Vec<_>>();let next=ls.iter().find(|l|!truth(&c["state"]["done"][string(&l["id"])]));json!({"id":c["id"],"title":c["title"],"summary":c["summary"],"total":ls.len(),"done":c["state"]["done"].as_object().map(|o|o.values().filter(|v|truth(v)).count()).unwrap_or(0),"paused":truth(&c["paused"]),"project":truth(&c["folder"]),"next":next.map(|l|json!({"id":l["id"],"title":l["title"]}))})}).collect::<Vec<_>>()))
+    }
     pub(crate) fn reviewed(&self, cid: &str, lid: &str, i: &str, right: bool) -> Result<Value> {
         let _guard = self.guard();
         let mut c = self.load(cid)?;
@@ -208,7 +211,7 @@ impl App {
                 return Ok(json!({}));
             }
             ("GET", "api/courses") => {
-                return Ok(json!(self.courses()?.iter().map(|c|{let ls=lessons(c).collect::<Vec<_>>();let next=ls.iter().find(|l|!truth(&c["state"]["done"][string(&l["id"])]));json!({"id":c["id"],"title":c["title"],"summary":c["summary"],"total":ls.len(),"done":c["state"]["done"].as_object().map(|o|o.values().filter(|v|truth(v)).count()).unwrap_or(0),"paused":truth(&c["paused"]),"project":truth(&c["folder"]),"next":next.map(|l|json!({"id":l["id"],"title":l["title"]}))})}).collect::<Vec<_>>()));
+                return self.library_list();
             }
             ("PUT", "api/usage") => {
                 let _meter = self.meter.lock().unwrap_or_else(|e| e.into_inner());

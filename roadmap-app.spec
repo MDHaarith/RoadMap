@@ -1,6 +1,6 @@
 Name:           roadmap-app
 Version:        0.2.0
-Release:        6%{?dist}
+Release:        7%{?dist}
 Summary:        Learn anything by doing: AI-built courses with free YouTube lessons
 # No licence chosen yet. Replace before sharing the package.
 License:        LicenseRef-Not-Chosen
@@ -23,11 +23,13 @@ CARGO_TARGET_DIR=%{_builddir}/roadmap-target cargo build --release --locked
 
 %install
 install -Dm755 %{_builddir}/roadmap-target/release/roadmap-app %{buildroot}%{_bindir}/roadmap-app
+install -Dm755 %{_builddir}/roadmap-target/release/roadmap-mcp %{buildroot}%{_bindir}/roadmap-mcp
 install -Dm644 %{_sourcedir}/index.html %{buildroot}%{_datadir}/roadmap-app/index.html
 install -Dm644 %{_sourcedir}/roadmap-app.desktop %{buildroot}%{_datadir}/applications/roadmap-app.desktop
 install -Dm644 %{_sourcedir}/roadmap-app.svg %{buildroot}%{_datadir}/icons/hicolor/scalable/apps/roadmap-app.svg
 
 %files
+%{_bindir}/roadmap-mcp
 %{_bindir}/roadmap-app
 %{_datadir}/roadmap-app/
 %{_datadir}/applications/roadmap-app.desktop

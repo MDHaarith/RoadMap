@@ -34,7 +34,7 @@ fn course_schema(project: bool) -> Value {
     )
 }
 // Whether a size is planned as an outline first, and the size line the designer is given.
-fn size_rule(size: &str) -> (bool, &'static str) {
+pub(crate) fn size_rule(size: &str) -> (bool, &'static str) {
     match size {
         "sprint" => (false, "Size: a short sprint of about two weeks. Use 2 to 3 phases with 2 to 4 lessons each."),
         "deep" => (true, "Size: about three months of steady study. Use 3 stages, each with 3 to 5 phases of 3 to 5 lessons: 45 to 60 lessons in total."),
