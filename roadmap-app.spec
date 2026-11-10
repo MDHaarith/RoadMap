@@ -1,11 +1,14 @@
 Name:           roadmap-app
 Version:        0.2.0
-Release:        5%{?dist}
+Release:        6%{?dist}
 Summary:        Learn anything by doing: AI-built courses with free YouTube lessons
 # No licence chosen yet. Replace before sharing the package.
 License:        LicenseRef-Not-Chosen
-BuildArch:      noarch
-Requires:       python3 python3-gobject gtk3 webkit2gtk4.1 yt-dlp bubblewrap
+BuildRequires:  cargo >= 1.92 rust >= 1.92 gcc pkgconf-pkg-config gtk3-devel webkit2gtk4.1-devel
+Requires:       gtk3 webkit2gtk4.1 yt-dlp bubblewrap bash ca-certificates
+# Optional exercise interpreters are installed on demand; Python does not run the app.
+# Cargo downloads Cargo.lock's crates during this local RPM build (not vendored).
+%global debug_package %{nil}
 
 %description
 Describe a project or skill and Roadmap builds a step-by-step course: free
@@ -14,8 +17,12 @@ checks that gate each lesson, a placement check, notes,
 and an AI tutor that gives hints instead of answers. Works with any
 OpenAI-compatible AI service.
 
+%build
+cd %{_sourcedir}
+CARGO_TARGET_DIR=%{_builddir}/roadmap-target cargo build --release --locked
+
 %install
-install -Dm755 %{_sourcedir}/roadmap_app.py %{buildroot}%{_bindir}/roadmap-app
+install -Dm755 %{_builddir}/roadmap-target/release/roadmap-app %{buildroot}%{_bindir}/roadmap-app
 install -Dm644 %{_sourcedir}/index.html %{buildroot}%{_datadir}/roadmap-app/index.html
 install -Dm644 %{_sourcedir}/roadmap-app.desktop %{buildroot}%{_datadir}/applications/roadmap-app.desktop
 install -Dm644 %{_sourcedir}/roadmap-app.svg %{buildroot}%{_datadir}/icons/hicolor/scalable/apps/roadmap-app.svg
