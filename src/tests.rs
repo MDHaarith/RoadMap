@@ -117,6 +117,23 @@ impl FakeAI {
                             && !user.contains("node_modules")
                     );
                     json!({"title":"Understand demo","phases":[{"title":"Run it","lessons":[{"title":"Entry","files":["app.py",".env","../../etc/passwd","made_up.py"]}]}]}).to_string()
+                } else if system.contains("You plan a long course") {
+                    assert!(user.contains("Size: about six months"), "{user}");
+                    json!({"title":"Bake bread","summary":"s","stages":[{"title":"Basics","blurb":"Ends with a loaf.","phases":[{"title":"Dough","blurb":"b","lessons":[{"title":"Mix","goal":"Mix a dough."},{"title":"Knead","goal":"Knead it."}]}]},"junk",{"title":"","blurb":"","phases":[{"title":"Bake","blurb":"b","lessons":[{"title":"Heat","goal":"Heat it."}]}]}]}).to_string()
+                } else if system.contains("You write the lessons for one phase") {
+                    assert!(
+                        user.contains("outline only]. Goal: ")
+                            && user.contains("Write the lessons of this phase: "),
+                        "{user}"
+                    );
+                    json!({"lessons":[{"title":"","goal":"","concepts":["gluten"],"tasks":["t"],"done":["d"],"query":"how to mix bread dough","lookups":["l"],"warn":""},{"title":"No checks","goal":"g","concepts":[],"tasks":["t"],"done":[],"query":"q","lookups":[],"warn":""}]}).to_string()
+                } else if system.contains("has asked you to change it") {
+                    assert!(
+                        user.contains("My request: industry level")
+                            && user.contains("- 1.1 Mix [completed"),
+                        "{user}"
+                    );
+                    json!({"note":"Now industry.","drop":["1.1","2.1"],"add":[],"phases":[{"after":"1.2","title":"In industry","blurb":"b","lessons":[{"title":"Real ovens","goal":"g"},"junk"]},{"after":"","title":"Empty","blurb":"","lessons":[]}]}).to_string()
                 } else if system.contains("JSON object") {
                     format!("Here you go:\n```json\n{}\n```", course())
                 } else {
@@ -1079,5 +1096,114 @@ fn request_limits_legacy_files_and_project_symlinks() {
     assert_eq!(
         strs(&json!([null,true,["x"],{"x":false}]), 8),
         vec!["None", "True", "['x']", "{'x': False}"]
+    );
+}
+
+#[test]
+fn long_roadmap_outline_expand_and_revise() {
+    let tmp = tempfile::tempdir().unwrap();
+    let mut app = isolated_app(tmp.path());
+    let a = Arc::get_mut(&mut app).unwrap();
+    a.yt_program = tmp.path().join("yt-dlp");
+    fs::write(
+        &a.yt_program,
+        format!("#!/bin/sh\ncat <<'FIXTURE'\n{}\nFIXTURE\n", found()),
+    )
+    .unwrap();
+    fs::set_permissions(&a.yt_program, fs::Permissions::from_mode(0o755)).unwrap();
+    let ai = FakeAI::new();
+    app.write_config(&json!({"base":ai.base,"model":"m","key":"sk-test"}))
+        .unwrap();
+    // A broken file is skipped instead of hiding the library, and a panic does not block later saves.
+    fs::create_dir_all(&app.data).unwrap();
+    fs::write(app.data.join("aaaaaaaaaaaa.json"), "{broken").unwrap();
+    assert!(app.courses().unwrap().is_empty());
+    let held = app.clone();
+    let _ = thread::spawn(move || {
+        let _guard = held.guard();
+        panic!("expected: poisons the lock");
+    })
+    .join();
+    drop(app.guard());
+
+    let made = json!({"prompt":"bake bread","level":"Complete beginner","size":"mastery"});
+    let c = app.route("POST", "api/courses", &made).unwrap();
+    let cid = string(&c["id"]);
+    assert_eq!(
+        c["stages"],
+        json!([{"title":"Basics","blurb":"Ends with a loaf."},{"title":"Stage 2","blurb":""}])
+    );
+    assert_eq!(
+        list(&c["phases"])
+            .iter()
+            .map(|p| p["stage"].clone())
+            .collect::<Vec<_>>(),
+        [json!(0), json!(1)]
+    );
+    // The first phase is written at once. The empty title falls back to the outline; a lesson without checks stays an outline.
+    let first = &c["phases"][0]["lessons"];
+    assert_eq!(first[0]["title"], "Mix");
+    assert_eq!(first[0]["goal"], "Mix a dough.");
+    assert_eq!(first[0]["done"], json!(["d"]));
+    assert!(first[0].get("stub").is_none());
+    assert_eq!(first[1]["title"], "Knead");
+    assert_eq!(first[1]["stub"], true);
+    assert_eq!(c["phases"][1]["lessons"][0]["stub"], true);
+    let start = Instant::now();
+    while !truth(&app.load(&cid).unwrap()["phases"][0]["lessons"][0]["videos"]) {
+        assert!(start.elapsed() < Duration::from_secs(5), "no videos");
+        thread::sleep(Duration::from_millis(20));
+    }
+    assert!(!truth(&app.load(&cid).unwrap()["phases"][0]["lessons"][1]["videos"]));
+
+    let file = app.export_course(&app.load(&cid).unwrap()).unwrap();
+    let back = app.import_course(&string(&file["path"])).unwrap();
+    assert_eq!(back["stages"], c["stages"]);
+    assert_eq!(back["phases"][1]["stage"], 1);
+    assert_eq!(back["phases"][1]["lessons"][0]["stub"], true);
+    fs::remove_file(app.path_of(&string(&back["id"])).unwrap()).unwrap();
+
+    let path = format!("api/courses/{cid}");
+    let state = json!({"checks":{},"done":{"1.1":true},"notes":{}});
+    app.route("PUT", &format!("{path}/state"), &state).unwrap();
+    assert_eq!(
+        app.route("POST", &format!("{path}/revise"), &json!({"ask":" "}))
+            .unwrap_err()
+            .status,
+        400
+    );
+    let r = app
+        .route("POST", &format!("{path}/revise"), &json!({"ask":"industry level"}))
+        .unwrap();
+    assert_eq!(r["change"]["added"], json!(["In industry"]));
+    assert_eq!(r["change"]["dropped"], json!(["Heat"]));
+    let c = &r["course"];
+    assert_eq!(
+        text(&c["prompt"]),
+        "bake bread\nLater I also asked: industry level"
+    );
+    assert_eq!(
+        list(&c["phases"])
+            .iter()
+            .map(|p| (string(&p["title"]), p["stage"].clone()))
+            .collect::<Vec<_>>(),
+        [("Dough".to_string(), json!(0)), ("In industry".to_string(), json!(0))]
+    );
+    let new = &c["phases"][1]["lessons"];
+    assert_eq!(new, &json!([{"id":"3.1","title":"Real ovens","goal":"g","concepts":[],"tasks":[],"done":[],"query":"Real ovens","lookups":[],"files":[],"warn":"","stub":true,"added":true,"known":{}}]));
+
+    let c = app
+        .route("POST", &format!("{path}/expand"), &json!({"lesson":"3.1"}))
+        .unwrap();
+    let l = &c["phases"][1]["lessons"][0];
+    assert_eq!(l["title"], "Real ovens");
+    assert_eq!(l["lookups"], json!(["l"]));
+    assert_eq!(l["added"], true);
+    assert!(l.get("stub").is_none());
+    assert_eq!(
+        app.route("POST", &format!("{path}/expand"), &json!({"lesson":"9.9"}))
+            .unwrap_err()
+            .status,
+        404
     );
 }

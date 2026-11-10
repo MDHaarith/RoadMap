@@ -35,7 +35,7 @@ impl App {
         }
     }
     pub(crate) fn save_config(&self, b: &Value) -> Result<()> {
-        let _guard = self.lock.lock().unwrap();
+        let _guard = self.guard();
         let mut c = self.config();
         let base = string(&b["base"]).trim().to_string();
         if !matches(r"^https?://", &base) {
@@ -84,10 +84,12 @@ impl App {
         files.sort_by_cached_key(|p| {
             std::cmp::Reverse(p.metadata().and_then(|m| m.modified()).ok())
         });
-        files
+        // One unreadable file must not hide the whole library.
+        Ok(files
             .into_iter()
-            .map(|p| Ok(serde_json::from_slice(&fs::read(p)?)?))
-            .collect()
+            .filter_map(|p| serde_json::from_slice::<Value>(&fs::read(p).ok()?).ok())
+            .filter(Value::is_object)
+            .collect())
     }
     pub(crate) fn known(&self, skip: &str) -> Result<Vec<(String, String, bool)>> {
         let mut out = vec![];
@@ -195,7 +197,8 @@ impl App {
             .ok_or_else(|| Error::bad("That is not a roadmap file."))?;
         let mut phases = vec![];
         let mut ids = HashSet::new();
-        for p in list(&d["phases"]).iter().filter(|p| p.is_object()).take(30) {
+        let stages = clean_stages(&d["stages"]);
+        for p in list(&d["phases"]).iter().filter(|p| p.is_object()).take(60) {
             let mut ls = vec![];
             for l in list(&p["lessons"])
                 .iter()
@@ -211,10 +214,19 @@ impl App {
                 if l["practice"].is_object() {
                     x["practice"] = clean_practice(&l["practice"]);
                 }
+                for k in ["stub", "added"] {
+                    if l[k] == true {
+                        x[k] = json!(true);
+                    }
+                }
                 ls.push(x);
             }
             if !ls.is_empty() {
-                phases.push(json!({"title":cap(&if truth(&p["title"]){text(&p["title"])}else{"Phase".into()},200),"blurb":cap(&string(&p["blurb"]),600),"lessons":ls}));
+                let mut x = json!({"title":cap(&if truth(&p["title"]){text(&p["title"])}else{"Phase".into()},200),"blurb":cap(&string(&p["blurb"]),600),"lessons":ls});
+                if p["stage"].as_u64().is_some_and(|i| i < stages.len() as u64) {
+                    x["stage"] = p["stage"].clone();
+                }
+                phases.push(x);
             }
         }
         if phases.is_empty() {
@@ -262,7 +274,10 @@ impl App {
         } else {
             phases[0]["lessons"][0]["id"].clone()
         };
-        let c = json!({"id":random_hex(6)?,"prompt":cap(&string(&d["prompt"]),2000),"level":cap(&string(&d["level"]),3000),"folder":null,"title":cap(&if truth(&d["title"]){text(&d["title"])}else{"Imported roadmap".into()},200),"summary":cap(&string(&d["summary"]),600),"phases":phases,"state":state});
+        let mut c = json!({"id":random_hex(6)?,"prompt":cap(&string(&d["prompt"]),2000),"level":cap(&string(&d["level"]),3000),"folder":null,"title":cap(&if truth(&d["title"]){text(&d["title"])}else{"Imported roadmap".into()},200),"summary":cap(&string(&d["summary"]),600),"phases":phases,"state":state});
+        if !stages.is_empty() {
+            c["stages"] = json!(stages);
+        }
         self.save(&c)?;
         Ok(c)
     }

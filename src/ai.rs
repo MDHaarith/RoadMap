@@ -33,6 +33,15 @@ fn course_schema(project: bool) -> Value {
         json!({"title":s(),"summary":s(),"phases":arr(obj(json!({"title":s(),"blurb":s(),"lessons":arr(obj(l))})))}),
     )
 }
+// Whether a size is planned as an outline first, and the size line the designer is given.
+fn size_rule(size: &str) -> (bool, &'static str) {
+    match size {
+        "sprint" => (false, "Size: a short sprint of about two weeks. Use 2 to 3 phases with 2 to 4 lessons each."),
+        "deep" => (true, "Size: about three months of steady study. Use 3 stages, each with 3 to 5 phases of 3 to 5 lessons: 45 to 60 lessons in total."),
+        "mastery" => (true, "Size: about six months of steady study. Use 6 stages, each with 4 to 5 phases of 3 to 5 lessons: 90 to 120 lessons in total."),
+        _ => (false, ""),
+    }
+}
 fn practice_schema() -> Value {
     obj(
         json!({"quiz":arr(obj(json!({"q":s(),"options":arr(s()),"answer":{"type":"integer"},"why":s()}))),"exercise":{"anyOf":[{"type":"null"},obj(json!({"lang":{"type":"string","enum":LANGS.iter().map(|(l,_,_)|*l).collect::<Vec<_>>()},"title":s(),"prompt":s(),"starter":s(),"tests":s()}))]}}),
@@ -73,7 +82,7 @@ impl App {
         let mut extra = extra.as_object().cloned().unwrap_or_default();
         extra.insert("stream".into(), json!(on_text.is_some()));
         {
-            let off = self.off.lock().unwrap();
+            let off = self.off.lock().unwrap_or_else(|e| e.into_inner());
             extra.retain(|k, v| truth(v) && !off.contains(k));
         }
         body.as_object_mut().unwrap().extend(extra.clone());
@@ -107,7 +116,7 @@ impl App {
             Ok(r) => r,
             Err(ureq::Error::Status(code, r)) => {
                 if !extra.is_empty() && [400, 404, 422, 501].contains(&code) {
-                    self.off.lock().unwrap().extend(extra.keys().cloned());
+                    self.off.lock().unwrap_or_else(|e| e.into_inner()).extend(extra.keys().cloned());
                     return self.ask(msgs, on_text, json!({}));
                 }
                 let mut bytes = vec![];
@@ -226,7 +235,19 @@ impl App {
             json!({"done":false,"q":q,"options":strs(&d["options"],5)})
         })
     }
-    pub(crate) fn build_course(&self, prompt: &str, level: &str, folder: &str) -> Result<Value> {
+    pub(crate) fn build_course(
+        &self,
+        prompt: &str,
+        level: &str,
+        folder: &str,
+        size: &str,
+    ) -> Result<Value> {
+        // Project roadmaps are sized by the project, so a size applies to new builds only.
+        let (outline, rule) = if folder.is_empty() {
+            size_rule(size)
+        } else {
+            (false, "")
+        };
         let mut known = vec![];
         let mut root = folder.to_string();
         let mut rows;
@@ -250,32 +271,66 @@ impl App {
             rows.extend(self.learned("", 120)?);
             rows.extend([String::new(), digest]);
         } else {
-            system = COURSE_PROMPT;
+            system = if outline {
+                OUTLINE_PROMPT
+            } else {
+                COURSE_PROMPT
+            };
             rows = vec![
                 format!("What I want to learn or build: {prompt}"),
                 format!("My level: {level}"),
             ];
+            if !rule.is_empty() {
+                rows.push(rule.into());
+            }
             rows.extend(self.learned("", 120)?);
         }
+        let brief = || obj(json!({"title":s(),"goal":s()}));
         let d = parse(
             &self.llm(
                 messages(system, rows.join("\n")),
                 "course",
-                course_schema(!folder.is_empty()),
+                if outline {
+                    obj(json!({"title":s(),"summary":s(),"stages":arr(obj(json!({"title":s(),"blurb":s(),"phases":arr(obj(json!({"title":s(),"blurb":s(),"lessons":arr(brief())})))})))}))
+                } else {
+                    course_schema(!folder.is_empty())
+                },
             )?,
             "a course",
         )?;
+        // An outline nests phases in stages; the saved course keeps one flat phase list.
+        let staged = list(&d["stages"])
+            .iter()
+            .filter(|s| s.is_object())
+            .enumerate()
+            .flat_map(|(i, s)| list(&s["phases"]).iter().map(move |p| (json!(i), p)));
+        let plain = list(&d["phases"]).iter().map(|p| (Value::Null, p));
+        let found = if outline {
+            staged.collect::<Vec<_>>()
+        } else {
+            plain.collect()
+        };
         let mut phases = vec![];
-        for p in list(&d["phases"]).iter().filter(|p| p.is_object()) {
+        for (stage, p) in found.into_iter().filter(|(_, p)| p.is_object()) {
             let n = phases.len() + 1;
             let ls = list(&p["lessons"])
                 .iter()
                 .filter(|l| l.is_object())
                 .enumerate()
-                .map(|(i, l)| clean_lesson(l, &format!("{n}.{}", i + 1), &known))
+                .map(|(i, l)| {
+                    let mut x = clean_lesson(l, &format!("{n}.{}", i + 1), &known);
+                    if outline {
+                        x["stub"] = json!(true);
+                    }
+                    x
+                })
                 .collect::<Vec<_>>();
             if !ls.is_empty() {
-                phases.push(json!({"title":cap(&if truth(&p["title"]){text(&p["title"])}else{format!("Phase {n}")},200),"blurb":cap(&string(&p["blurb"]),600),"lessons":ls}));
+                let mut x = json!({"title":cap(&if truth(&p["title"]){text(&p["title"])}else{format!("Phase {n}")},200),"blurb":cap(&string(&p["blurb"]),600),"lessons":ls});
+                if outline {
+                    x["stage"] = stage;
+                }
+                phases.push(x);
             }
         }
         if phases.is_empty() {
@@ -283,9 +338,91 @@ impl App {
                 "The AI returned a course with no lessons. Try again, or use a stronger model.",
             ));
         }
-        Ok(
-            json!({"id":random_hex(6)?,"prompt":prompt,"level":level,"folder":root,"title":cap(&if truth(&d["title"]){text(&d["title"])}else{prompt.into()},200),"summary":cap(&string(&d["summary"]),600),"phases":phases,"state":{"checks":{},"done":{},"notes":{},"last":"1.1"}}),
-        )
+        let mut c = json!({"id":random_hex(6)?,"prompt":prompt,"level":level,"folder":root,"title":cap(&if truth(&d["title"]){text(&d["title"])}else{prompt.into()},200),"summary":cap(&string(&d["summary"]),600),"phases":phases,"state":{"checks":{},"done":{},"notes":{},"last":"1.1"}});
+        if outline {
+            c["stages"] = json!(clean_stages(&d["stages"]));
+        }
+        Ok(c)
+    }
+    // Writes the lessons of the phase holding `lid` that are still only a title and a goal.
+    pub(crate) fn expand(self: &Arc<Self>, cid: &str, lid: &Value) -> Result<Value> {
+        let c = self.load(cid)?;
+        let p = list(&c["phases"])
+            .iter()
+            .find(|p| list(&p["lessons"]).iter().any(|l| l["id"] == *lid))
+            .ok_or_else(Error::missing)?;
+        let stubs = list(&p["lessons"])
+            .iter()
+            .filter(|l| truth(&l["stub"]))
+            .collect::<Vec<_>>();
+        if stubs.is_empty() {
+            return self.mark_known(c);
+        }
+        let mut rows = vec![
+            format!("Course: {}", text(&c["title"])),
+            format!("The learner's goal: {}", text(&c["prompt"])),
+            format!("Level: {}", level(&c)),
+        ];
+        rows.extend(progress(&c));
+        rows.push(format!(
+            "Write the lessons of this phase: {}. {}",
+            text(&p["title"]),
+            string(&p["blurb"])
+        ));
+        rows.extend(stubs.iter().enumerate().map(|(i, l)| {
+            format!("{}. {}: {}", i + 1, text(&l["title"]), string(&l["goal"]))
+        }));
+        rows.extend(self.learned(cid, 60)?);
+        let d = parse(
+            &self.llm(
+                messages(EXPAND_PROMPT, rows.join("\n")),
+                "lessons",
+                obj(json!({"lessons":arr(obj(lesson_schema()))})),
+            )?,
+            "the lessons",
+        )?;
+        let ids = stubs
+            .iter()
+            .map(|l| string(&l["id"]))
+            .collect::<Vec<_>>();
+        let mut c;
+        {
+            let _guard = self.guard();
+            c = self.load(cid)?;
+            let mut changed = false;
+            for (lid, l) in ids.iter().zip(list(&d["lessons"])) {
+                let Ok(old) = lesson_mut(&mut c, lid) else {
+                    continue;
+                };
+                // A lesson without checks could be completed unread, so it stays an outline to retry.
+                if !truth(&old["stub"]) || !truth(&l["done"]) {
+                    continue;
+                }
+                let mut x = clean_lesson(l, lid, &[]);
+                for k in ["title", "goal"] {
+                    if !truth(&l[k]) {
+                        x[k] = old[k].clone();
+                    }
+                }
+                if truth(&old["added"]) {
+                    x["added"] = json!(true);
+                }
+                *old = x;
+                changed = true;
+            }
+            if changed {
+                self.save(&c)?;
+            } else if ids
+                .iter()
+                .all(|i| lesson(&c, &json!(i)).is_ok_and(|l| truth(&l["stub"])))
+            {
+                return Err(Error::bad(
+                    "The AI didn't write these lessons. Try again, or use a stronger model.",
+                ));
+            }
+        }
+        self.prefetch(cid.into());
+        self.mark_known(c)
     }
     pub(crate) fn build_practice(&self, c: &Value, l: &Value) -> Result<Value> {
         let mut rows = vec![
@@ -469,7 +606,7 @@ impl App {
     fn prefetch_inner(&self, cid: &str) -> Result<()> {
         let c = self.load(cid)?;
         let ls = lessons(&c)
-            .filter(|l| !truth(&l["videos"]))
+            .filter(|l| !truth(&l["videos"]) && !truth(&l["stub"]))
             .cloned()
             .collect::<Vec<_>>();
         let mut found = vec![];
@@ -495,7 +632,7 @@ impl App {
             });
             found.extend(more);
         }
-        let _guard = self.lock.lock().unwrap();
+        let _guard = self.guard();
         let mut c = self.load(cid)?;
         for (lid, vids) in found {
             if let Ok(l) = lesson_mut(&mut c, &lid) {
@@ -747,68 +884,41 @@ impl App {
             self.reviewed(&string(&c["id"]), &string(&l["id"]), "explain", right)?,
         ))
     }
-    pub(crate) fn adapt(self: &Arc<Self>, cid: &str) -> Result<Value> {
+    // With no `ask` the AI adjusts the course to the learner's results; with one it changes the course as asked.
+    pub(crate) fn adapt(self: &Arc<Self>, cid: &str, ask: &str) -> Result<Value> {
+        let revise = !ask.is_empty();
         let c = self.load(cid)?;
-        let st = &c["state"];
         let mut rows = vec![
             format!("Course: {}", text(&c["title"])),
             format!("The learner's goal: {}", text(&c["prompt"])),
             format!("Level: {}", level(&c)),
         ];
-        for (n, p) in list(&c["phases"]).iter().enumerate() {
-            rows.push(format!("Phase {}: {}", n + 1, text(&p["title"])));
-            for l in list(&p["lessons"]) {
-                let lid = string(&l["id"]);
-                let done = truth(&st["done"][&lid]);
-                let q = &st["quiz"][&lid];
-                let t = &st["tests"][&lid];
-                let mut facts = vec![if done {
-                    "completed"
-                } else if untouched(st, l) {
-                    "not started"
-                } else {
-                    "in progress"
-                }
-                .into()];
-                if q.is_object() {
-                    facts.push(format!(
-                        "quiz {} of {}",
-                        text(&q["score"]),
-                        text(&q["total"])
-                    ));
-                }
-                if t.is_object() {
-                    facts.push(format!(
-                        "exercise {} after {} test runs",
-                        if truth(&t["ok"]) {
-                            "passed"
-                        } else {
-                            "never passed"
-                        },
-                        text(&t["runs"])
-                    ));
-                }
-                if done
-                    && !(0..list(&l["done"]).len())
-                        .all(|i| truth(&st["checks"][format!("{lid}#{i}")]))
-                {
-                    facts.push("skipped the tasks by passing the quiz".into());
-                }
-                rows.push(format!(
-                    "- {lid} {} [{}]. Concepts: {}. Tasks: {}",
-                    text(&l["title"]),
-                    facts.join(", "),
-                    joined(&l["concepts"]),
-                    joined(&l["tasks"])
-                ));
-            }
+        rows.extend(progress(&c));
+        if revise {
+            rows.push(format!("My request: {ask}"));
         }
         rows.extend(self.learned(cid, 60)?);
-        let d=parse(&self.llm(messages(ADAPT_PROMPT,rows.join("\n")),"changes",obj(json!({"note":s(),"drop":arr(s()),"add":arr(obj(json!({"after":s(),"lesson":obj(lesson_schema())})))})))?,"a plan")?;
+        let mut shape = json!({"note":s(),"drop":arr(s()),"add":arr(obj(json!({"after":s(),"lesson":obj(lesson_schema())})))});
+        if revise {
+            shape["phases"] = arr(obj(
+                json!({"after":s(),"title":s(),"blurb":s(),"lessons":arr(obj(json!({"title":s(),"goal":s()})))}),
+            ));
+        }
+        let d = parse(
+            &self.llm(
+                messages(
+                    if revise { REVISE_PROMPT } else { ADAPT_PROMPT },
+                    rows.join("\n"),
+                ),
+                "changes",
+                obj(shape),
+            )?,
+            "a plan",
+        )?;
         let mut c;
         let change;
         {
-            let _guard = self.lock.lock().unwrap();
+            let _guard = self.guard();
             c = self.load(cid)?;
             let st = c["state"].clone();
             let mut ids = lessons(&c)
@@ -819,10 +929,12 @@ impl App {
             for a in list(&d["add"])
                 .iter()
                 .filter(|a| a.is_object() && a["lesson"].is_object())
-                .take(2)
+                .take(if revise { 8 } else { 2 })
             {
-                for (n, p) in c["phases"].as_array_mut().unwrap().iter_mut().enumerate() {
-                    let ls = p["lessons"].as_array_mut().unwrap();
+                for (n, p) in c["phases"].as_array_mut().into_iter().flatten().enumerate() {
+                    let Some(ls) = p["lessons"].as_array_mut() else {
+                        continue;
+                    };
                     if let Some(at) = ls.iter().position(|l| l["id"] == text(&a["after"])) {
                         let lid = (ls.len() + 1..999)
                             .map(|i| format!("{}.{i}", n + 1))
@@ -838,13 +950,58 @@ impl App {
                     }
                 }
             }
-            let gone = strs(&d["drop"], 20);
+            // New phases arrive as outlines; expand() writes them when the learner gets there.
+            for p in list(&d["phases"]).iter().filter(|p| p.is_object()).take(12) {
+                let n = ids
+                    .iter()
+                    .filter_map(|i| i.split('.').next()?.parse::<u32>().ok())
+                    .max()
+                    .unwrap_or(0)
+                    + 1;
+                let ls = list(&p["lessons"])
+                    .iter()
+                    .filter(|l| l.is_object() && truth(&l["title"]))
+                    .take(8)
+                    .enumerate()
+                    .map(|(i, l)| {
+                        let mut x = clean_lesson(l, &format!("{n}.{}", i + 1), &[]);
+                        x["stub"] = json!(true);
+                        x["added"] = json!(true);
+                        x
+                    })
+                    .collect::<Vec<_>>();
+                let Some(ps) = c["phases"].as_array_mut().filter(|_| !ls.is_empty()) else {
+                    continue;
+                };
+                ids.extend(ls.iter().map(|l| string(&l["id"])));
+                let at = ps
+                    .iter()
+                    .position(|q| {
+                        list(&q["lessons"])
+                            .iter()
+                            .any(|l| l["id"] == text(&p["after"]))
+                    })
+                    .map_or(ps.len(), |i| i + 1);
+                let mut x = json!({"title":cap(&if truth(&p["title"]){text(&p["title"])}else{"New phase".into()},200),"blurb":cap(&string(&p["blurb"]),600),"lessons":ls});
+                if let Some(stage) = at.checked_sub(1).map(|i| ps[i]["stage"].clone()) {
+                    if !stage.is_null() {
+                        x["stage"] = stage;
+                    }
+                }
+                added.push(x["title"].clone());
+                ps.insert(at, x);
+            }
+            let gone = strs(&d["drop"], if revise { 300 } else { 20 });
             let mut left = lessons(&c).count();
-            for p in c["phases"].as_array_mut().unwrap() {
-                p["lessons"].as_array_mut().unwrap().retain(|l| {
+            for p in c["phases"].as_array_mut().into_iter().flatten() {
+                let Some(ls) = p["lessons"].as_array_mut() else {
+                    continue;
+                };
+                ls.retain(|l| {
+                    // The learner may ask to undo an earlier change, so a request can drop added lessons too.
                     if gone.contains(&string(&l["id"]))
                         && untouched(&st, l)
-                        && !truth(&l["added"])
+                        && (revise || !truth(&l["added"]))
                         && left > 1
                     {
                         dropped.push(l["title"].clone());
@@ -855,16 +1012,22 @@ impl App {
                     }
                 });
             }
-            c["phases"]
-                .as_array_mut()
-                .unwrap()
-                .retain(|p| !list(&p["lessons"]).is_empty());
+            if let Some(ps) = c["phases"].as_array_mut() {
+                ps.retain(|p| !list(&p["lessons"]).is_empty());
+            }
             change = json!({"day":self.today(),"note":cap(&string(&d["note"]),600),"added":added,"dropped":dropped});
             if !added.is_empty() || !dropped.is_empty() {
                 let mut changes = list(&c["changes"]).to_vec();
                 changes.push(change.clone());
                 let start = changes.len().saturating_sub(20);
                 c["changes"] = json!(&changes[start..]);
+                if revise {
+                    // The tutor, practice and later phases read the goal, so it carries the new direction.
+                    c["prompt"] = json!(format!(
+                        "{}\nLater I also asked: {ask}",
+                        cap(&string(&c["prompt"]), 1300)
+                    ));
+                }
                 self.save(&c)?;
             }
         }
@@ -873,6 +1036,69 @@ impl App {
         }
         Ok(json!({"change":change,"course":self.mark_known(c)?}))
     }
+}
+// One line per lesson with what the learner did in it, for the prompts that change a course.
+fn progress(c: &Value) -> Vec<String> {
+    let st = &c["state"];
+    let mut rows = vec![];
+    for (n, p) in list(&c["phases"]).iter().enumerate() {
+        rows.push(format!("Phase {}: {}", n + 1, text(&p["title"])));
+        for l in list(&p["lessons"]) {
+            let lid = string(&l["id"]);
+            let done = truth(&st["done"][&lid]);
+            let q = &st["quiz"][&lid];
+            let t = &st["tests"][&lid];
+            let mut facts = vec![if done {
+                "completed"
+            } else if untouched(st, l) {
+                "not started"
+            } else {
+                "in progress"
+            }
+            .into()];
+            if q.is_object() {
+                facts.push(format!(
+                    "quiz {} of {}",
+                    text(&q["score"]),
+                    text(&q["total"])
+                ));
+            }
+            if t.is_object() {
+                facts.push(format!(
+                    "exercise {} after {} test runs",
+                    if truth(&t["ok"]) {
+                        "passed"
+                    } else {
+                        "never passed"
+                    },
+                    text(&t["runs"])
+                ));
+            }
+            if done
+                && !(0..list(&l["done"]).len())
+                    .all(|i| truth(&st["checks"][format!("{lid}#{i}")]))
+            {
+                facts.push("skipped the tasks by passing the quiz".into());
+            }
+            rows.push(if truth(&l["stub"]) {
+                format!(
+                    "- {lid} {} [{}, outline only]. Goal: {}",
+                    text(&l["title"]),
+                    facts.join(", "),
+                    string(&l["goal"])
+                )
+            } else {
+                format!(
+                    "- {lid} {} [{}]. Concepts: {}. Tasks: {}",
+                    text(&l["title"]),
+                    facts.join(", "),
+                    joined(&l["concepts"]),
+                    joined(&l["tasks"])
+                )
+            });
+        }
+    }
+    rows
 }
 fn proxy_for(url: &str) -> Option<String> {
     let (scheme, rest) = url.split_once("://")?;
