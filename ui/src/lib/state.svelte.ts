@@ -7,7 +7,7 @@ export const appState = $state({
   course: null as Course | null,
   current: null as Lesson | null,
   screen: 'loading', error: '', routeVersion: 0,
-  library: [] as LibraryCourse[], config: {} as Settings,
+  openVideo: undefined as string | undefined, library: [] as LibraryCourse[], config: {} as Settings,
   review: { count: 0, questions: [] } as ReviewData,
   toast: '', ideasOpen: false, ideas: null as string[] | null,
   busyKey: '', adapting: false,
@@ -138,7 +138,7 @@ export async function ask(text: string) {
   const key = keyFor(c, l);
   appState.chats[key] ||= [];
   const msgs = appState.chats[key]; msgs.push({ role: 'user', content: text });
-  const body = { course: c.id, lesson: l.id, messages: $state.snapshot(msgs), stream: true };
+  const body = { course: c.id, lesson: l.id, messages: $state.snapshot(msgs), stream: true, ...(appState.openVideo ? { video: appState.openVideo } : {}) };
   appState.busyKey = key;
   msgs.push({ role: 'assistant', content: '' });
   const m = msgs[msgs.length - 1];

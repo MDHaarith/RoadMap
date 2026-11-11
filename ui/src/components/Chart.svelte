@@ -3,7 +3,7 @@
   import Formatted from './Formatted.svelte';
   let { chart }: { chart: Chart } = $props();
   const W = 640, H = 300, L = 64, R = 16, T = 16, B = 48;
-  const COLORS = ['var(--fill)', 'var(--ink)', 'var(--success)', 'var(--danger)'];
+  const COLORS = ['var(--accent)', 'var(--muted)', 'var(--success)', 'var(--danger)'];
   let all = $derived(chart.series.flatMap(s => s.values));
   let lo = $derived(Math.min(0, ...all)), hi = $derived(Math.max(0, ...all) || 1);
   let ticks = $derived.by(() => {
@@ -41,14 +41,14 @@
 </figure>
 
 <style>
-  .chart { margin: 0 0 24px; padding: 16px; border: 1px solid var(--line); border-radius: var(--radius); background: var(--surface); }
+  .chart { margin: 0 0 var(--s5); padding: var(--s5); border: 1px solid var(--line); border-radius: var(--r-lg); background: var(--surface); }
   figcaption { margin-bottom: 8px; }
-  svg { width: 100%; height: auto; display: block; }
-  text { font-size: 12px; fill: var(--muted); }
+  svg { width: 100%; max-width: 640px; height: auto; display: block; margin-inline: auto; }
+  text { font-size: 11px; fill: var(--muted); }
   .axis-name { fill: var(--ink); }
   .grid { stroke: var(--line); }
   .axis { stroke: var(--line-strong); }
-  .legend { display: flex; flex-wrap: wrap; gap: 16px; font-size: 14px; margin-top: 8px; }
+  .legend { display: flex; flex-wrap: wrap; gap: var(--s5); font-size: var(--t-sm); margin-top: var(--s3); color: var(--ink-2); }
   .legend i { display: inline-block; width: 12px; height: 12px; border-radius: 3px; margin-right: 6px; vertical-align: -1px; }
   p { margin: 8px 0 0; }
 </style>

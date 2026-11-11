@@ -74,6 +74,7 @@ pub struct App {
     pub(crate) day_offset: AtomicI64,
     pub(crate) pick: Box<dyn Fn(&str) -> String + Send + Sync>,
     pub(crate) yt_program: PathBuf,
+    pub(crate) codex_program: PathBuf,
 }
 impl App {
     pub fn new(pick: impl Fn(&str) -> String + Send + Sync + 'static) -> Result<Arc<Self>> {
@@ -93,6 +94,8 @@ impl App {
             dirs::config_dir().ok_or_else(|| Error::bad("Config directory is unavailable."))?,
         );
         Ok(Arc::new(Self {
+            // An app started from the desktop menu may not have ~/.local/bin on PATH, where Codex installs itself.
+            codex_program: if cfg!(windows) || on_path("codex") { "codex".into() } else { home.join(".local/bin/codex") },
             data: data.join("roadmap-app"),
             conf: config.join("roadmap-app").join("config.json"),
             home,
@@ -212,6 +215,22 @@ pub(crate) fn joined(v: &Value) -> String {
 pub(crate) fn matches(re: &str, s: &str) -> bool {
     regex::Regex::new(re).unwrap().is_match(s)
 }
+/// No video with fewer views is searched for, picked or kept.
+pub(crate) const MIN_VIEWS: i64 = 1000;
+/// Removes saved videos known to be under MIN_VIEWS and says whether any went; a video with no view count (an imported one) stays.
+pub(crate) fn drop_obscure(c: &mut Value) -> bool {
+    let mut dropped = false;
+    for p in c["phases"].as_array_mut().into_iter().flatten() {
+        for l in p["lessons"].as_array_mut().into_iter().flatten() {
+            if let Some(vs) = l["videos"].as_array_mut() {
+                let n = vs.len();
+                vs.retain(|v| !v["views"].as_i64().is_some_and(|n| n < MIN_VIEWS));
+                dropped |= vs.len() != n;
+            }
+        }
+    }
+    dropped
+}
 pub(crate) fn lessons(c: &Value) -> impl Iterator<Item = &Value> {
     list(&c["phases"]).iter().flat_map(|p| list(&p["lessons"]))
 }
@@ -307,5 +326,5 @@ pub(crate) fn on_path(cmd: &str) -> bool {
                 false
             }))
 }
-#[cfg(all(test, target_os = "linux"))]
+#[cfg(test)]
 mod tests;

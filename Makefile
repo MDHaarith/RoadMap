@@ -18,3 +18,12 @@ bundle:
 # Output: dist/<architecture>/roadmap-app-*.rpm
 rpm:
 	rpmbuild -bb --define "_sourcedir $(CURDIR)" --define "_rpmdir $(CURDIR)/dist" roadmap-app.spec
+
+.PHONY: windows
+windows:
+	cargo xwin build --release --locked --target x86_64-pc-windows-msvc
+	npm --prefix ui run tauri -- build --runner cargo-xwin --target x86_64-pc-windows-msvc --no-bundle -- --locked
+
+.PHONY: release-check
+release-check:
+	python3 scripts/release-check.py

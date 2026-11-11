@@ -10,11 +10,19 @@ use std::os::unix::fs::{OpenOptionsExt, PermissionsExt};
 
 impl App {
     pub(crate) fn config(&self) -> Value {
-        fs::read(&self.conf)
+        let mut c = fs::read(&self.conf)
             .ok()
             .and_then(|b| serde_json::from_slice(&b).ok())
             .filter(Value::is_object)
-            .unwrap_or(json!({}))
+            .unwrap_or(json!({}));
+        // With nothing set up, the learner's own Codex login is the AI service: no key to paste.
+        if !truth(&c["base"]) {
+            c["base"] = json!("codex");
+        }
+        if c["base"] == "codex" && !truth(&c["model"]) {
+            c["model"] = json!("default");
+        }
+        c
     }
     pub(crate) fn write_config(&self, c: &Value) -> Result<()> {
         fs::create_dir_all(self.conf.parent().unwrap())?;
@@ -40,8 +48,8 @@ impl App {
         let _guard = self.guard();
         let mut c = self.config();
         let base = string(&b["base"]).trim().to_string();
-        if !matches(r"^https?://", &base) {
-            return Err(Error::bad("Base URL must start with http:// or https://"));
+        if base != "codex" && !matches(r"^https?://", &base) {
+            return Err(Error::bad("Base URL must start with http:// or https://, or be the word codex."));
         }
         c["base"] = json!(base);
         c["model"] = json!(b.get("model").map(text).unwrap_or_default().trim());

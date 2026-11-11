@@ -191,6 +191,16 @@ impl App {
     }
     pub fn route(self: &Arc<Self>, method: &str, path: &str, b: &Value) -> Result<Value> {
         match (method, path) {
+            ("GET", "api/models") => return self.models(),
+            ("PUT", "api/model") => {
+                let model = string(&b["model"]).trim().to_owned();
+                if model.is_empty() { return Err(Error::bad("Choose a model first.")); }
+                let _guard = self.guard();
+                let mut c = self.config();
+                c["model"] = json!(model);
+                self.write_config(&c)?;
+                return Ok(json!({}));
+            }
             ("GET", "api/settings") => {
                 let c = self.config();
                 return Ok(
@@ -340,14 +350,14 @@ impl App {
             ("POST", "api/install") => return install_lang(&string(&b["lang"])),
             ("POST", "api/chat") => {
                 let (c, l, ms) = self.chat_args(b)?;
-                let answer = self.tutor(&c, &l, ms.clone(), &mut None)?;
+                let answer = self.tutor(&c, &merge(l.clone(), json!({"watching":b["video"]})), ms.clone(), &mut None)?;
                 self.save_chat(&string(&c["id"]), &string(&l["id"]), &ms, &answer);
                 return Ok(json!({"text":answer}));
             }
             _ => {}
         }
         let re = regex::Regex::new(
-            r"^api/courses/([0-9a-f]{12})(/state|/videos|/practice|/paused|/adapt|/revise|/expand|/export|/summary|/setup|/work)?$",
+            r"^api/courses/([0-9a-f]{12})(/notes|/state|/videos|/practice|/paused|/adapt|/revise|/expand|/export|/summary|/setup|/work)?$",
         )
         .unwrap();
         let m = re.captures(path).ok_or_else(Error::missing)?;
@@ -357,9 +367,11 @@ impl App {
             ("GET", "") => {
                 let mut c = self.mark_known(self.load(cid)?)?;
                 // Roadmaps made outside the app (MCP, import) never searched for videos; start when first opened.
-                if lessons(&c).any(|l| !truth(&l["videos"]) && !truth(&l["stub"])) {
+                // Obscure picks saved before the view floor are hidden here and removed for good by the prefetch.
+                if drop_obscure(&mut c) | lessons(&c).any(|l| !truth(&l["videos"]) && !truth(&l["stub"])) {
                     self.prefetch(cid.to_string());
                 }
+                self.fetch_transcripts(lessons(&c).flat_map(|l| list(&l["videos"]).to_vec()).collect());
                 c["chats"] = self.read_side(&self.chat_file(cid)?);
                 Ok(c)
             }
@@ -421,6 +433,7 @@ impl App {
                 self.save(&c)?;
                 Ok(json!({}))
             }
+            ("POST", "/notes") => self.rewrite_notes(cid, b),
             ("POST", "/adapt") => self.adapt(cid, ""),
             ("POST", "/revise") => {
                 let ask = cap(b.get("ask").map(text).unwrap_or_default().trim(), 600);
@@ -492,6 +505,7 @@ impl App {
                     }
                     l["videos"] = json!(videos);
                     self.save(&c)?;
+                    self.fetch_transcripts(videos.clone());
                     return Ok(json!(videos));
                 }
                 let fresh = truth(&b["fresh"]);
@@ -514,6 +528,7 @@ impl App {
                     lesson_mut(&mut c, &string(&l["id"]))?["videos"] = json!(vids);
                     self.save(&c)?;
                 }
+                self.fetch_transcripts(vids.clone());
                 Ok(json!(if vids.is_empty() { old.to_vec() } else { vids }))
             }
             ("POST", "/practice") => {
@@ -552,7 +567,7 @@ impl App {
                 pieces.push_str(piece);
                 Ok(())
             };
-            self.tutor(&c, &l, msgs.clone(), &mut Some(&mut out))
+            self.tutor(&c, &merge(l.clone(), json!({"watching":body["video"]})), msgs.clone(), &mut Some(&mut out))
         };
         match result {
             Ok(text) => {

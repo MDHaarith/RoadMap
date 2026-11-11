@@ -1,0 +1,55 @@
+use std::{sync::Mutex, time::Duration};
+use serde::Serialize;
+use tauri::{AppHandle, State};
+use tauri_plugin_updater::{Update, UpdaterExt};
+
+#[derive(Clone, Default, Serialize)]
+pub struct Status { pub version: String, pub state: String, pub available: String }
+#[derive(Default)]
+pub struct Updates { status: Mutex<Status>, pending: Mutex<Option<(Update, Vec<u8>)>> }
+fn supported(bundle: Option<tauri::utils::config::BundleType>) -> bool {
+    use tauri::utils::config::BundleType::*;
+    matches!(bundle, Some(Nsis | AppImage | Deb | Rpm))
+}
+#[tauri::command]
+pub fn update_status(app: AppHandle, state: State<Updates>) -> Status {
+    let mut status = state.status.lock().unwrap().clone();
+    status.version = app.package_info().version.to_string(); status
+}
+#[tauri::command]
+pub async fn update_check(app: AppHandle, state: State<'_, Updates>) -> Result<(), String> {
+    { let mut s = state.status.lock().unwrap(); if s.state == "downloading" || s.state == "ready" { return Ok(()); } s.state = "downloading".into(); }
+    let result = async {
+        let updater = app.updater_builder().timeout(Duration::from_secs(120)).build().map_err(|e| e.to_string())?;
+        let update = updater.check().await.map_err(|e| e.to_string())?;
+        if let Some(update) = update {
+            state.status.lock().unwrap().available = update.version.clone();
+            if !cfg!(debug_assertions) && supported(tauri::utils::platform::bundle_type()) {
+                let bytes = update.download(|_, _| {}, || {}).await.map_err(|e| e.to_string())?;
+                *state.pending.lock().unwrap() = Some((update, bytes));
+                state.status.lock().unwrap().state = "ready".into();
+            } else { state.status.lock().unwrap().state = "download".into(); }
+        } else { state.status.lock().unwrap().state = "latest".into(); }
+        Ok::<(), String>(())
+    }.await;
+    if let Err(error) = &result { eprintln!("update check: {error}"); state.status.lock().unwrap().state = "error".into(); }
+    result
+}
+#[tauri::command]
+pub async fn update_install(app: AppHandle, state: State<'_, Updates>) -> Result<(), String> {
+    let pending = state.pending.lock().unwrap().take().ok_or("No update is ready")?;
+    let result = tauri::async_runtime::spawn_blocking(move || {
+        pending.0.install(&pending.1).map_err(|e| e.to_string())?; Ok::<(), String>(())
+    }).await.map_err(|e| e.to_string())?;
+    if let Err(error) = result { state.status.lock().unwrap().state = "error".into(); return Err(error); }
+    app.restart();
+}
+#[cfg(test)]
+mod tests {
+    #[test] fn self_updatable_packages() {
+        assert!(!super::supported(None));
+        use tauri::utils::config::BundleType::*;
+        for bundle in [Nsis, AppImage, Deb, Rpm] { assert!(super::supported(Some(bundle))); }
+        assert!(!super::supported(Some(Dmg)));
+    }
+}

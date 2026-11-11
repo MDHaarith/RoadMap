@@ -1,5 +1,8 @@
 #![cfg_attr(not(debug_assertions), windows_subsystem = "windows")]
 
+mod player;
+mod updates;
+
 use roadmap_app::{request_body, App, Error as ApiError};
 use serde_json::Value;
 use std::sync::Arc;
@@ -50,9 +53,34 @@ fn worker_error(error: tauri::Error) -> ApiError {
 }
 
 fn main() {
+    let mut context = tauri::generate_context!();
+    // The lesson page frames this origin; without it the CSP placeholder allows no frames and the page says why.
+    let player = match player::start() {
+        Ok(origin) => {
+            let security = &mut context.config_mut().app.security;
+            let csp = match &security.csp {
+                Some(tauri::utils::config::Csp::Policy(csp)) => csp.clone(),
+                _ => String::new(),
+            };
+            let narrowed = player::app_csp(&csp, &origin)
+                .unwrap_or_else(|| panic!("tauri.conf.json CSP lacks {}", player::CSP_PLACEHOLDER));
+            security.csp = Some(tauri::utils::config::Csp::Policy(narrowed));
+            origin
+        }
+        Err(error) => {
+            eprintln!("video player server did not start: {error}");
+            String::new()
+        }
+    };
     tauri::Builder::default()
+        .append_invoke_initialization_script(format!(
+            "Object.defineProperty(window, '__ROADMAP_PLAYER__', {{ value: {} }});",
+            serde_json::Value::String(player)
+        ))
         .plugin(tauri_plugin_dialog::init())
         .plugin(tauri_plugin_opener::init())
+        .plugin(tauri_plugin_updater::Builder::new().build())
+        .manage(updates::Updates::default())
         .setup(|app| {
             let handle = app.handle().clone();
             app.manage(App::new(move |kind| {
@@ -71,13 +99,9 @@ fn main() {
                     .map(|path| path.to_string_lossy().into_owned())
                     .unwrap_or_default()
             })?);
-            // The compact layout reads too small at 100%; the layout's breakpoints still adapt to the zoomed width.
-            if let Some(window) = app.get_webview_window("main") {
-                let _ = window.set_zoom(1.15);
-            }
             Ok(())
         })
-        .invoke_handler(tauri::generate_handler![api, chat_stream])
-        .run(tauri::generate_context!())
+        .invoke_handler(tauri::generate_handler![api, chat_stream, updates::update_status, updates::update_check, updates::update_install])
+        .run(context)
         .expect("run Roadmap");
 }

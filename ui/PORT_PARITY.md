@@ -26,9 +26,9 @@ Paths in this table are relative to `ui/src/`. Rendering functions are now decla
 | `save` | `lib/state.svelte.ts`: 400 ms debounced progress save, snapshot, error toast, flush before route changes/exports/close. |
 | `renderTop` | `components/TopBar.svelte`: reactive course title, full-map link, completion meter, and switcher visibility. |
 | `miniRoute` | `components/Progress.svelte`: original thin progress bar and accessible completion label. |
-| `creationForm`, `resetCreation`, `setCreationKind`, `showCreation` | `screens/Creation.svelte`, `screens/Library.svelte`: fresh local form state on entry, build/project switch, optional project prompt, examples, levels, duration, setup note, and cancel. |
+| `creationForm`, `resetCreation`, `setCreationKind`, `showCreation` | `screens/Creation.svelte`, `screens/Library.svelte`: fresh local form state on entry, build/project switch (segmented control above the goal box), optional project prompt, examples (a “Try:” row under the goal box), levels and duration (segmented controls; the chosen option's description shows under each), setup note, and cancel (“Back to library”, top right). |
 | `pickFolder` | `screens/Creation.svelte`: `POST api/pick-folder`, busy state, chosen path, retry/error handling, and privacy copy. |
-| `create` | `screens/Creation.svelte`: adaptive placement, previous answers, typed/custom answers, Enter submission, skip, build status, and navigation to the generated roadmap. Leaving the screen releases a pending placement answer and ignores stale responses. |
+| `create` | `screens/Creation.svelte`: adaptive placement (one question at a time, answers as full-width option buttons), previous answers, typed/custom answers, Enter submission, skip, build status (a `<Waiting>` with elapsed time and the usual time for the chosen size), and navigation to the generated roadmap. A failed build now shows its error next to the build button (it was a toast). Leaving the screen releases a pending placement answer and ignores stale responses. |
 | `library`, `renderLibrary` | `lib/state.svelte.ts::loadLibrary`, `screens/Library.svelte`: concurrent courses/settings/review loading, empty-library creation, Today, continuing courses, due review, active and paused cards. |
 | `libraryCard` | `components/LibraryCard.svelte`: card title/summary/progress, finished state, pause/resume, confirmed deletion, and reload. |
 | `adaptNow` | `lib/state.svelte.ts`: progress-driven adaptation and user-requested revision, busy guard, changed lessons, retained progress, result/error notices. `screens/Overview.svelte` retains a failed revision request for retry. |
@@ -59,7 +59,7 @@ Paths in this table are relative to `ui/src/`. Rendering functions are now decla
 | `quizQuestion` | `components/QuizQuestion.svelte`: shared lesson/review/exam options, answer colors, explanation, progress, next button, and review-save retry state. |
 | `conceptList` | `screens/Lesson.svelte`: numbered concepts, recap labels, and previously learned references. |
 | `loadFile` | `components/ProjectFiles.svelte`: same native file endpoint, first-file load, file selection, request-version guard, escaped numbered code lines, keyboard scrolling, empty files, and 404-specific message. |
-| `review`, `renderReview` | `screens/Review.svelte`: loading, empty state, question context, progress, completion, and another due set. |
+| `review`, `renderReview` | `screens/Review.svelte`: loading, empty state, question context, progress, completion, and another due set. When a session finishes, the title-bar Review count is lowered and then reloaded from `GET api/review`. |
 | `doItem` | `screens/Review.svelte`: explanation recall and code recall from starter, text/code editor, Tab insertion, checking/skipping, feedback/output, and next question. |
 | `reviewCheck` | `screens/Review.svelte`: `POST api/review/answer`, pending guard, answer text, skip, marking, and error state. |
 | `reviewAnswer`, `saveReviewAnswer`, `reviewNext` | `screens/Review.svelte`: MCQ answer recording, save retry, block advancement on failed/pending save, session scoring, and keyboard A–letter/1–number/Enter support. |
@@ -67,7 +67,7 @@ Paths in this table are relative to `ui/src/`. Rendering functions are now decla
 | `renderExercise` | `components/Exercise.svelte`: exercise title/prompt, language, saved code/starter, Tab insertion, run/tests/reset, output/result styling, missing-runtime installation, install errors, and tests disclosure. |
 | `answer`, `quizNext` | `components/Practice.svelte`: answer guards/scoring, mistake recording, question navigation/focus, and quiz-result save. |
 | `runCode`, `installLanguage` | `lib/state.svelte.ts`: original run/install endpoints, busy guards, saved code, run/test modes, failure counts, package-install status, and rerun after installation. |
-| `settings` | `screens/Settings.svelte`: appearance segments, provider presets, base URL, model, small model, saved-key semantics, save notice, and usage. |
+| `settings` | `screens/Settings.svelte`: appearance segments, a status card for the saved AI service (Codex = “nothing to set up”), and the service form (provider presets, base URL, model, small model, saved-key semantics, save notice) inside “Use a different AI service”, which starts open when the saved service is not Codex; usage. |
 | `usageHtml` | `components/Usage.svelte`: total/input/output tokens, request count, start date, estimate note, and reset. |
 | `search` | `screens/Search.svelte`, `components/TopBar.svelte`: encoded search route, query input, lesson/note/chat/idea results, snippets, empty state, and open-ideas results. |
 | `mistakes` | `screens/Mistakes.svelte`: open/fixed questions, picked/correct answers, explanations, failed coding exercises, counts, and lesson links. |
@@ -100,18 +100,20 @@ Paths in this table are relative to `ui/src/`. Rendering functions are now decla
 
 ## Style parity
 
-`src/app.css` is the complete original 53,270-byte style block, unchanged. The test checks byte-for-byte equality. This includes the warm charcoal/amber Signal pass, system/light/dark tokens, segmented switches, option chips, responsive grids, 42 px top bar, compact branding/links/window controls, borderless wash search input with 1 px focus outline, compact privacy note, build button’s 8 px top margin, hidden scrollbars with working scrolling, and final reduced-motion override. Standard `appearance` and `scrollbar-width` accompany the original WebKit compatibility declarations; there are no WebKitGTK bridge APIs.
+Superseded on 2026-11-11 by the redesign described in `DESIGN.md`. `src/app.css` no longer copies the old `index.html` style block, and the byte-equality test was removed. Moved, not removed: roadmap export/template/summary, adjust, change, connect folder and write-every-lesson are in the roadmap page’s “More” menu; the lesson step rail is a sticky stepper above the step; Mistakes and Import are secondary actions on the home page; a Review link with the due count is in the title bar.
 
-At a mocked browser viewport of **1366 × 768**, the project creation card ended at **720.125 px**, including the compact privacy note and chosen-folder field. The build creation form also fit, and the top-bar/search computed styles matched the compact overrides.
+Part 2 (2026-11-11): in the app’s own engine (offscreen WebKitGTK 4.1) at **1366 × 768**, the whole creation form fits without scrolling in the build variant, the project variant (chosen folder and privacy text) and with a build error shown. The AI service form moved into “Use a different AI service” on the Settings page.
 
 ## Verification
 
 - `npm install` completed using Node 24.18.0 and npm 11.16.0; `package-lock.json` is included.
 - `npm run check`: **0 errors, 0 warnings**.
 - `npm run build`: successful Vite production build.
-- `npm test`: three passing checks covering the native transport/error/stream contract, escaped rendering/exact stylesheet, and completion/stage/exam edge cases.
+- `npm test`: three passing checks covering the native transport/error/stream contract, escaped rendering, and completion/stage/exam edge cases.
 - `npm run dev`: started on strict port 5173. A temporary browser-only invoke mock exercised creation/placement/project selection, lesson-to-lesson routing, videos/embeds/chapters/tutor seeking, concepts/files/escaping, notes persistence, streaming chat, quizzes, code tests, completion, stage locks/exams/unlocks, review save failure/retry, all three review modes, settings/theme/key clearing, usage reset, search, ideas persistence, mistakes, library/continue cards, switcher focus/Escape, and opener calls. **No page runtime errors were recorded.**
 - The temporary mock was deleted, the preview tab closed, and the dev process stopped. Port 5173 was checked for a remaining listener.
 - `npm audit`: **three low-severity development dependency findings** in `@sveltejs/vite-plugin-svelte` / inspector / `deepmerge`, with no available npm fix. There were no moderate/high/critical findings. The affected package merges trusted build configuration, not user/AI runtime input, and is absent from the production application bundle.
 
 No active source feature remains unported. The intentionally omitted code was inactive in the final source: hidden loading SVGs/confetti and the unused old SVG-route measurement listener. Live native dialogs, actual AI services, real package installation/execution, YouTube playback/network behavior, and Windows/macOS native window interaction were not integration-tested; their fixed IPC contracts and UI states were ported and mocked. Backend and Tauri configuration verification belongs to the concurrent shell work.
+
+Pages now use a 1440px maximum with existing modest margins; reading copy remains constrained. The lesson composer grows from two to six lines, uses an arrow-only send control and a session-cached native model picker. Settings offers the same models with manual entry. Notes offers rewrite, elapsed waiting and Undo. Tutor requests include the selected video.
