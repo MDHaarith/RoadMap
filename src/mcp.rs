@@ -68,7 +68,7 @@ fn tool(app: &App, name: &str, a: &Value) -> Result<Value> {
                     let id = format!("{n}.{}", ls.len() + 1);
                     let x = cleaned(l, &id);
                     for k in [
-                        "title", "goal", "concepts", "tasks", "done", "query", "lookups", "warn",
+                        "title", "goal", "concepts", "tasks", "done", "query", "lookups", "warn", "charts",
                     ] {
                         if !l[k].is_null() && l[k] != x[k] {
                             changes.push(format!("Lesson {id}: cleaned or shortened {k}"));
@@ -170,6 +170,10 @@ fn tool(app: &App, name: &str, a: &Value) -> Result<Value> {
                         x[k] = old[k].clone();
                     }
                 }
+                // clean_lesson took the query from the input title, which the agent may have left out.
+                if !truth(&x["query"]) {
+                    x["query"] = x["title"].clone();
+                }
                 if truth(&old["added"]) {
                     x["added"] = json!(true);
                 }
@@ -201,8 +205,8 @@ fn tools() -> Value {
     let specs=[
         ("list_roadmaps","List saved roadmaps with id, title, summary, done/total lesson counts and next lesson.",json!({}),vec![]),
         ("get_roadmap","Read an outline without learner state, or one full lesson. id is the 12-hex roadmap id; lesson is an optional 1-based phase.lesson id.",json!({"id":{"type":"string"},"lesson":{"type":"string"}}),vec!["id"]),
-        ("create_roadmap","Create a learning-by-doing roadmap. Give title, summary, prompt (learner request), level, phases or stages containing phases, optional needs. Build toward a concrete goal; scaffold from learner level, give actionable tasks and observable done checks, no answers. Limits: 12 stages, 60 phases, 40 lessons/phase; title 200, summary/goal/blurb/warn 600, prompt 2000, level 3000 chars; concepts/tasks/done 8 entries, lookups 4. Lessons without tasks or done become outlines. IDs and empty progress are assigned. Returns id, counts and cleaning changes.",json!({"roadmap":{"type":"object","description":"Course with title, summary, prompt, level, phases [{title,blurb,lessons:[{title,goal,concepts,tasks,done,query,lookups,warn}]}] or stages [{title,blurb,phases}], optional needs [{name,kind,command,why}]. String arrays contain strings. query is a YouTube search; needs.command is a bare executable name, never shell code."}}),vec!["roadmap"]),
-        ("write_lessons","Fill only outline lessons. id is roadmap id; lessons are full lesson objects {id,title,goal,concepts,tasks,done,query,lookups,warn} where id is the existing phase.lesson id from get_roadmap (for example 3.2); title and goal may be left out to keep the outline's. Same cleaning limits as create_roadmap. Completed/written lessons are skipped; missing tasks/done remain outlines. Returns written IDs and skipped IDs with reasons.",json!({"id":{"type":"string"},"lessons":{"type":"array","items":{"type":"object"}}}),vec!["id","lessons"]),
+        ("create_roadmap","Create a learning-by-doing roadmap. Give title, summary, prompt (learner request), level, phases or stages containing phases, optional needs. Build toward a concrete goal; scaffold from learner level, give actionable tasks and observable done checks, no answers. Limits: 12 stages, 60 phases, 40 lessons/phase; title 200, summary/goal/blurb/warn 600, prompt 2000, level 3000 chars; concepts/tasks/done 8 entries, lookups 4. Lessons without tasks or done become outlines. IDs and empty progress are assigned. Returns id, counts and cleaning changes.",json!({"roadmap":{"type":"object","description":"Course with title, summary, prompt, level, phases [{title,blurb,lessons:[{title,goal,concepts,tasks,done,query,lookups,warn,charts}]}] or stages [{title,blurb,phases}], optional needs [{name,kind,command,why}]. String arrays contain strings. query is a YouTube search; charts is an optional list of up to 3 graphs drawn on the lesson page, each {title,kind:\"line\"|\"bar\",x,y,labels:[2-24 strings],series:[{name,values:[one number per label]}] (1-4 series),note}; needs.command is a bare executable name, never shell code."}}),vec!["roadmap"]),
+        ("write_lessons","Fill only outline lessons. id is roadmap id; lessons are full lesson objects {id,title,goal,concepts,tasks,done,query,lookups,warn,charts} where id is the existing phase.lesson id from get_roadmap (for example 3.2); title and goal may be left out to keep the outline's. Same cleaning limits as create_roadmap. Completed/written lessons are skipped; missing tasks/done remain outlines. Returns written IDs and skipped IDs with reasons.",json!({"id":{"type":"string"},"lessons":{"type":"array","items":{"type":"object"}}}),vec!["id","lessons"]),
         ("get_progress","Read completed flags, quiz scores, exercise test results and recorded mistakes for roadmap id. Excludes notes and tutor chats.",json!({"id":{"type":"string"}}),vec!["id"]),
         ("add_idea","Append nonempty text to idea notes. Maximum 200 notes, 4000 characters per note (longer text shortened). Returns notes; full collection is an error.",json!({"text":{"type":"string"}}),vec!["text"]),
         ("search","Search all words of query across roadmap lessons, learner notes, tutor chats and ideas. Returns the app search result objects.",json!({"query":{"type":"string"}}),vec!["query"]),

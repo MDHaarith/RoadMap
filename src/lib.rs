@@ -69,6 +69,8 @@ pub struct App {
     pub(crate) lock: Mutex<()>,
     pub(crate) off: Mutex<HashSet<String>>,
     pub(crate) meter: Mutex<()>,
+    // Roadmaps whose video search is running, so reopening one does not start a second search.
+    pub(crate) fetching: Mutex<HashSet<String>>,
     pub(crate) day_offset: AtomicI64,
     pub(crate) pick: Box<dyn Fn(&str) -> String + Send + Sync>,
     pub(crate) yt_program: PathBuf,
@@ -97,6 +99,7 @@ impl App {
             lock: Mutex::new(()),
             off: Mutex::new(HashSet::new()),
             meter: Mutex::new(()),
+            fetching: Mutex::new(HashSet::new()),
             day_offset: AtomicI64::new(0),
             pick: Box::new(pick),
             yt_program: if cfg!(windows) { "yt-dlp.exe" } else { "yt-dlp" }.into(),
@@ -249,7 +252,22 @@ pub(crate) fn clean_lesson(l: &Value, lid: &str, files: &[String]) -> Value {
     json!({"id":lid,"title":cap(&if truth(&l["title"]) { text(&l["title"]) } else {"Lesson".into()},200),"goal":cap(&string(&l["goal"]),600),
         "concepts":strs(&l["concepts"],8),"tasks":strs(&l["tasks"],8),"done":strs(&l["done"],8),
         "query":cap(&if truth(&l["query"]) {text(&l["query"])}else{string(&l["title"])},200),"lookups":strs(&l["lookups"],4),
-        "files":strs(&l["files"],6).into_iter().filter(|f|files.contains(f)).collect::<Vec<_>>(),"warn":cap(&string(&l["warn"]),600)})
+        "files":strs(&l["files"],6).into_iter().filter(|f|files.contains(f)).collect::<Vec<_>>(),"warn":cap(&string(&l["warn"]),600),
+        "charts":clean_charts(&l["charts"])})
+}
+// Graphs drawn on the lesson page: at most 3, each with 2 to 24 points and 1 to 4 series of that length.
+pub(crate) fn clean_charts(v: &Value) -> Vec<Value> {
+    list(v).iter().filter(|c| c.is_object()).take(3).filter_map(|c| {
+        let labels: Vec<String> = strs(&c["labels"], 24).iter().map(|s| cap(s, 40)).collect();
+        let series: Vec<Value> = list(&c["series"]).iter().filter(|s| s.is_object()).take(4)
+            .filter_map(|s| {
+                let values: Vec<f64> = list(&s["values"]).iter().filter_map(|x| x.as_f64().filter(|f| f.is_finite())).take(24).collect();
+                (values.len() == labels.len()).then(|| json!({"name":cap(&string(&s["name"]),80),"values":values}))
+            })
+            .collect();
+        (labels.len() >= 2 && !series.is_empty()).then(|| json!({"title":cap(&string(&c["title"]),200),"kind":if c["kind"]=="bar"{"bar"}else{"line"},
+            "x":cap(&string(&c["x"]),80),"y":cap(&string(&c["y"]),80),"labels":labels,"series":series,"note":cap(&string(&c["note"]),600)}))
+    }).collect()
 }
 // The stages of a long roadmap: about a month each, shown above their phases.
 pub(crate) fn clean_stages(v: &Value) -> Vec<Value> {

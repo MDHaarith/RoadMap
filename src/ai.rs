@@ -22,7 +22,9 @@ fn obj(p: Value) -> Value {
     json!({"type":"object","properties":p,"required":keys,"additionalProperties":false})
 }
 fn lesson_schema() -> Value {
-    json!({"title":s(),"goal":s(),"concepts":arr(s()),"tasks":arr(s()),"done":arr(s()),"query":s(),"lookups":arr(s()),"warn":s()})
+    json!({"title":s(),"goal":s(),"concepts":arr(s()),"tasks":arr(s()),"done":arr(s()),"query":s(),"lookups":arr(s()),"warn":s(),
+        "charts":arr(obj(json!({"title":s(),"kind":{"type":"string","enum":["line","bar"]},"x":s(),"y":s(),"labels":arr(s()),
+            "series":arr(obj(json!({"name":s(),"values":arr(json!({"type":"number"}))}))),"note":s()})))})
 }
 fn course_schema(project: bool) -> Value {
     let mut l = lesson_schema();
@@ -453,6 +455,10 @@ impl App {
                         x[k] = old[k].clone();
                     }
                 }
+                // clean_lesson took the query from the input title, which the model may have left out.
+                if !truth(&x["query"]) {
+                    x["query"] = x["title"].clone();
+                }
                 if truth(&old["added"]) {
                     x["added"] = json!(true);
                 }
@@ -670,7 +676,8 @@ impl App {
         Ok((out, cap(&string(&d["query"]), 200)))
     }
     pub(crate) fn find_videos(&self, c: &Value, l: &Value, skip: &[String]) -> Result<Vec<Value>> {
-        let query = string(&l["query"]);
+        // Lessons saved before the query fix can have an empty one; yt-dlp rejects an empty search.
+        let query = if truth(&l["query"]) { string(&l["query"]) } else { string(&l["title"]) };
         let vids = self.search_videos(&query, skip)?;
         let pick = || -> Result<Vec<Value>> {
             let (mut picks, better) = if vids.is_empty() {
@@ -729,9 +736,13 @@ impl App {
         })
     }
     pub(crate) fn prefetch(self: &Arc<Self>, cid: String) {
+        if !self.fetching.lock().unwrap_or_else(|e| e.into_inner()).insert(cid.clone()) {
+            return;
+        }
         let app = self.clone();
         std::thread::spawn(move || {
             let _ = app.prefetch_inner(&cid);
+            app.fetching.lock().unwrap_or_else(|e| e.into_inner()).remove(&cid);
         });
     }
     fn prefetch_inner(&self, cid: &str) -> Result<()> {

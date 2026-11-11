@@ -259,6 +259,7 @@ fn python_spec_end_to_end() {
         lock: Mutex::new(()),
         off: Mutex::new(HashSet::new()),
         meter: Mutex::new(()),
+        fetching: Mutex::new(std::collections::HashSet::new()),
         day_offset: AtomicI64::new(0),
         pick: Box::new(move |k| {
             if k == "file" {
@@ -1154,7 +1155,7 @@ fn long_roadmap_outline_expand_and_revise() {
         [("Dough".to_string(), json!(0)), ("In industry".to_string(), json!(0))]
     );
     let new = &c["phases"][1]["lessons"];
-    assert_eq!(new, &json!([{"id":"3.1","title":"Real ovens","goal":"g","concepts":[],"tasks":[],"done":[],"query":"Real ovens","lookups":[],"files":[],"warn":"","stub":true,"added":true,"known":{}}]));
+    assert_eq!(new, &json!([{"id":"3.1","title":"Real ovens","goal":"g","concepts":[],"tasks":[],"done":[],"query":"Real ovens","lookups":[],"files":[],"warn":"","charts":[],"stub":true,"added":true,"known":{}}]));
 
     let c = app
         .route("POST", &format!("{path}/expand"), &json!({"lesson":"3.1"}))
@@ -1331,6 +1332,7 @@ fn mcp_roadmap_lifecycle() {
     assert_eq!(result["written"],json!(["1.2"]));assert_eq!(list(&result["skipped"]).len(),2);
     // A lesson written without a title keeps the outline's title, and a second write cannot replace it.
     assert_eq!(app.load(id).unwrap()["phases"][0]["lessons"][1]["title"],"Bake");
+    assert_eq!(app.load(id).unwrap()["phases"][0]["lessons"][1]["query"],"Bake");
     let kept=call("write_lessons",json!({"id":id,"lessons":[{"id":"1.2","title":"Changed"}]}));
     assert_eq!(kept["written"],json!([]));assert_eq!(app.load(id).unwrap()["phases"][0]["lessons"][1]["title"],"Bake");
     let progress=call("get_progress",json!({"id":id}));assert_eq!(progress["lessons"][2]["completed"],true);assert!(!progress.to_string().contains("PRIVATE"));
@@ -1387,4 +1389,18 @@ fn chat_stream_fallback_empty_partial_and_early_errors() {
     assert_eq!(app.chat_stream(&body, &mut |piece| { pieces.push_str(piece); Ok(()) }).unwrap_err().status, 400);
     assert!(pieces.is_empty());
     worker.join().unwrap();
+}
+#[test]
+fn charts_are_cleaned() {
+    let c = clean_charts(&json!([
+        {"title":"Break-even","kind":"line","x":"Units","y":"£","labels":["0","100","200"],
+         "series":[{"name":"Revenue","values":[0,2500,5000]},{"name":"Short","values":[1]},{"name":"Bad","values":[1,"x",3]}],"note":"n"},
+        {"title":"One point","labels":["a"],"series":[{"name":"s","values":[1]}]},
+        {"title":"Kind falls back","kind":"pie","labels":["a","b"],"series":[{"name":"s","values":[1.5,2]}]},
+        "not a chart"
+    ]));
+    assert_eq!(c.len(), 2);
+    assert_eq!(c[0]["series"], json!([{"name":"Revenue","values":[0.0,2500.0,5000.0]}]));
+    assert_eq!(c[1]["kind"], "line");
+    assert!(clean_charts(&json!(null)).is_empty());
 }

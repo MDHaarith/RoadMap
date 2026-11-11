@@ -18,6 +18,7 @@
   }
 </script>
 <aside class="support" aria-label="Learning tools"><section class="panel tutor-panel"><h2><Icon name="Tutor" /> Tutor</h2>
+  {#if !appState.config.base || !appState.config.model}<p class="small">No AI service connected. <a href="#/settings">Open Settings</a> to use the tutor.</p>{/if}
   <!-- svelte-ignore a11y_click_events_have_key_events, a11y_no_noninteractive_element_interactions — Delegates clicks from the formatter’s keyboard-accessible seek buttons. -->
   <div id="log" class="log" role="log" bind:this={log} aria-live="polite" aria-relevant="additions text" onclick={e => { const target = (e.target as Element).closest<HTMLElement>('[data-seek]'); if (target) seek(Number(target.dataset.seek), Number(target.dataset.at)); }}>
     {#each msgs as m}<div class={`msg ${m.role === 'user' ? 'u' : 'a'}`}>{#if m.role === 'user'}{m.content}{:else}<Formatted text={m.content} tutor />{/if}</div>{/each}

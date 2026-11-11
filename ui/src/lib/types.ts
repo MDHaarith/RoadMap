@@ -5,7 +5,8 @@ export interface Message { role: 'user' | 'assistant'; content: string }
 export interface Quiz { q: string; options: string[]; answer: number; why: string }
 export interface Exercise { title: string; prompt: string; lang: string; starter: string; tests: string }
 export interface Video { id: string; title: string; channel: string; duration?: number; why?: string; searched?: boolean; chapters?: { t: number; title: string }[] }
-export interface Lesson { id: string; title: string; goal: string; query: string; concepts?: string[]; known?: string[]; tasks?: string[]; done?: string[]; lookups?: string[]; files?: string[]; warn?: string; stub?: boolean; added?: boolean; videos?: Video[]; practice?: { quiz?: Quiz[]; exercise?: Exercise } }
+export interface Chart { title: string; kind: 'line' | 'bar'; x: string; y: string; labels: string[]; series: { name: string; values: number[] }[]; note: string }
+export interface Lesson { id: string; title: string; goal: string; query: string; concepts?: string[]; known?: string[]; tasks?: string[]; done?: string[]; lookups?: string[]; files?: string[]; warn?: string; charts?: Chart[]; stub?: boolean; added?: boolean; videos?: Video[]; practice?: { quiz?: Quiz[]; exercise?: Exercise } }
 export interface Phase { title: string; blurb: string; stage?: number; lessons: Lesson[] }
 export interface Score { score: number; total: number }
 export interface CourseState { checks: Record<string, boolean>; done: Record<string, boolean>; notes: Record<string, string>; quiz: Record<string, Score>; code: Record<string, string>; last: string; exams?: Record<number, Score>; stageOpen?: Record<number, boolean>; have?: Record<number, boolean>; tests?: Record<string, { ok: boolean; runs: number }> }

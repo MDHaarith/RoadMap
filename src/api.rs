@@ -356,6 +356,10 @@ impl App {
         match (method, sub) {
             ("GET", "") => {
                 let mut c = self.mark_known(self.load(cid)?)?;
+                // Roadmaps made outside the app (MCP, import) never searched for videos; start when first opened.
+                if lessons(&c).any(|l| !truth(&l["videos"]) && !truth(&l["stub"])) {
+                    self.prefetch(cid.to_string());
+                }
                 c["chats"] = self.read_side(&self.chat_file(cid)?);
                 Ok(c)
             }
