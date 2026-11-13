@@ -24,6 +24,8 @@ interpreter; Fedora's yt-dlp package also has its own Python dependency.
 
 The root crate is also the Tauri app; `tauri.conf.json` points at `ui/dist`. The `api(method, path, body)` command runs the existing routes on a blocking worker. `chat_stream(body, onPiece)` sends tutor pieces over a Tauri channel and returns the final text. Both reject invalid bodies and preserve the 1 MiB limit. Errors serialize as `{ "status": 400, "message": "..." }`. File/folder selection uses native dialogs; window controls and HTTP(S) links use scoped Tauri capabilities.
 
+The AI service is the local `codex` command unless Settings names another: the app runs `codex exec` with the learner's ChatGPT sign-in, so there is no key to paste. In Settings this is the base `codex`; the model `default` keeps Codex's own model. Any OpenAI-compatible service can be set instead. With Codex an answer arrives whole instead of streamed, and each tutor tool call is one more Codex run. `cargo test real_ai -- --ignored --nocapture` runs the main flows against the real service (see the comment above that test).
+
 A new roadmap has a size: about two weeks, a month, three months or six months.
 The two long sizes are planned as an outline of stages, phases and lesson titles
 (`OUTLINE_PROMPT`). The lessons of a phase are written when the learner reaches it
@@ -45,3 +47,40 @@ command = "roadmap-mcp"
 ```
 
 From source, run `cargo build --release --locked --bin roadmap-mcp` and use the absolute path to `target/release/roadmap-mcp`. A roadmap created while the app is open appears after the library page is reopened.
+
+The model picker lists models from your AI provider, or the local Codex model cache, and lets you change the main model independently. Notes can be tidied by the AI without saving over the original. Video captions are fetched in the background and cached, including unavailable captions; the tutor receives cached captions for the selected video and can read other available transcripts with its tool.
+
+## Windows
+
+Windows users need WebView2 (included with current Windows 10/11), the signed-in Codex CLI, and yt-dlp on PATH. Exercises are unavailable on Windows.
+
+From Linux, install cargo-xwin and the Rust x86_64-pc-windows-msvc target, then run `make windows`. This compiles both executables and the Tauri frontend without bundling. Linux cannot run the Windows tests or build the NSIS installer here; CI runs tests and builds the installer on Windows.
+
+## Releasing
+
+Set the same version in `Cargo.toml`, `tauri.conf.json`, `roadmap-app.spec`, `ui/package.json`
+and the root package entries in `ui/package-lock.json`. The UI version matches
+for release validation; the running version comes from Tauri. Run `cargo check`
+to update the root package version in `Cargo.lock`, then `make release-check`.
+Commit the changes, run `git tag vX.Y.Z`, and `git push origin vX.Y.Z`.
+For a manual Actions run, select that tag, not a branch.
+
+Configure these repository Actions secrets once:
+
+- `TAURI_SIGNING_PRIVATE_KEY`: the signing private key content (never commit it).
+- `TAURI_SIGNING_PRIVATE_KEY_PASSWORD`: empty, since this key has no password.
+- `RELEASES_TOKEN`: a token with contents write access to the public
+  `MDHaarith/RoadMap-releases` repository.
+
+The release workflow builds signed NSIS and Linux AppImage/deb/rpm installers.
+A final job waits for both builds, assembles a manifest with all four package
+entries, uploads everything to a draft public release, then publishes it.
+This prevents clients from seeing an incomplete manifest. Check the Actions
+logs, the public release assets (including each `.sig` and `latest.json`), and
+that the latest-download endpoint resolves. Two published versions are needed
+to test an actual upgrade. Ordinary bundle builds do not require signing keys;
+only `--config tauri.release.conf.json` enables updater artifacts.
+
+The app checks after startup and every six hours, downloads signed updates,
+and waits for “Restart and update”. RPM/deb may request administrator approval.
+Development/unrecognized packages offer the public release download page.

@@ -7,11 +7,14 @@
   import Formatted from '../components/Formatted.svelte';
   import QuizQuestion from '../components/QuizQuestion.svelte';
   import Progress from '../components/Progress.svelte';
+  import Waiting from '../components/Waiting.svelte';
   let loading = $state(true), error = $state('');
   let s = $state<Session>({ index: 0, score: 0, selected: null, finished: false, pending: false, error: '' });
   let qs = $derived(appState.review.questions), q = $derived(qs[s.index]);
   let alive = true;
   onMount(() => { void review(); return () => { alive = false; }; });
+  // The title-bar count is loaded on the home screen; answered questions are no longer due, so refresh it here.
+  function refreshCount() { api<ReviewData>('GET', 'api/review').then(r => { if (alive) appState.review.count = r.count; }).catch(() => {}); }
   async function focus() { await tick(); (document.getElementById('review-next') || document.getElementById('question') || document.querySelector<HTMLElement>('.score'))?.focus({ preventScroll: true }); }
   async function review() {
     loading = true; error = '';
@@ -45,7 +48,7 @@
   }
   function reviewNext() {
     if (s.selected === null || s.pending || s.error || s.finished) return;
-    if (s.index === qs.length - 1) s.finished = true;
+    if (s.index === qs.length - 1) { s.finished = true; appState.review.count = Math.max(0, appState.review.count - qs.length); refreshCount(); }
     else { s.index++; s.selected = null; s.text = undefined; s.result = null; }
     void focus();
   }
@@ -58,15 +61,15 @@
   }
 </script>
 <svelte:window onkeydown={keyboard} />
-<div class="wrap review-wrap"><div class="intro"><div><div class="kicker"><Icon name="Practise" /> A little recall goes a long way</div><h1>Daily review</h1></div><a href="#/">Back to Today</a></div>
-  {#if loading}<div class="loading" role="status">Opening your review…</div>{:else if error}<p class="err" role="alert">{error}</p><button class="btn secondary" onclick={review}>Try again</button>
-  {:else if !qs.length}<div class="note"><h2>Nothing due today.</h2><p>You’re up to date. Your next lesson is waiting on Today.</p><a class="btn" href="#/">Back to Today</a></div>
-  {:else if s.finished}<div class="score" tabindex="-1"><strong>{s.score} / {qs.length}</strong><h3>Review complete.</h3><p>Right answers return later. Missed ones come back tomorrow, so you can try them again while they’re fresh.</p>{#if appState.review.count > qs.length}<p>{appState.review.count - qs.length} more questions are due today.</p><button class="btn secondary" id="review-more" onclick={review}>Review another set</button> {/if}<a class="btn" href="#/">Back to Today <Icon name="arrow" /></a></div>
-  {:else}<div class="review-progress"><Progress n={s.index} total={qs.length} wide={false} /></div><section class="lesson-content"><div class="review-context"><p>{q.roadmap}</p><h2>{q.lesson_title}</h2></div><div class="step-body">
-    {#if q.kind === 'explain' || q.kind === 'code'}{@const code = q.kind === 'code'}<div class="quiz-meta"><span>Question {s.index + 1} of {qs.length}</span><span>{s.score} correct so far</span></div><h3 class="question" id="question" tabindex="-1">{code ? 'Write it again from the starter: ' + q.title : 'Explain from memory, in your own words'}</h3><p class="recall">{#if code}{q.prompt}{:else}<Formatted text={q.q} />{/if}</p>
-      <textarea id="review-text" class:codebox={code} rows={code ? 12 : 5} spellcheck={!code} readonly={s.selected !== null || s.pending} aria-label="Your answer" value={s.text ?? (code ? q.starter : '')} oninput={e => s.text = e.currentTarget.value} onkeydown={e => { if (code && e.key === 'Tab' && !e.shiftKey) { e.preventDefault(); const el = e.currentTarget; el.setRangeText('    ', el.selectionStart, el.selectionEnd, 'end'); s.text = el.value; } e.stopPropagation(); }}></textarea>
-      {#if s.selected !== null}<div class="feedback" role="status"><strong>{s.result?.right ? 'That’s right.' : 'Not yet.'}</strong>{#if s.result?.feedback}<p><Formatted text={s.result.feedback} /></p>{/if}{#if s.result?.output}<pre>{s.result.output}</pre>{/if}</div><div class="row" style="margin-top:20px"><button class="btn" id="review-next" onclick={reviewNext}>{s.index === qs.length - 1 ? 'See my score' : 'Next question'} <Icon name="arrow" /></button></div>
-      {:else}<div class="row" style="margin-top:16px"><button class="btn" id="review-check" disabled={s.pending} onclick={() => reviewCheck()}>{s.pending ? 'Checking…' : code ? 'Run the tests' : 'Check my answer'}</button><button class="link" id="review-skip" disabled={s.pending} onclick={() => reviewCheck(true)}>I can’t remember</button></div>{#if s.error}<p class="err" role="alert">{s.error}</p>{/if}{/if}
-    {:else}<QuizQuestion {q} session={s} total={qs.length} answer={reviewAnswer} next={reviewNext} mode="review" retry={saveReviewAnswer} /><p class="keyboard-hint">A–{String.fromCharCode(64 + q.options.length)} or 1–{q.options.length} to answer · Enter to continue</p>{/if}
+<div class="wrap review-wrap"><a class="back-map" href="#/"><Icon name="back" /> Today</a><div class="session-head"><h1>Daily review</h1></div>
+  {#if loading}<Waiting title="Opening your review" />{:else if error}<p class="err" role="alert">{error}</p><button class="btn secondary" onclick={review}>Try again</button>
+  {:else if !qs.length}<div class="empty-state"><Icon name="check" /><h2>Nothing due today.</h2><p>You’re up to date. Your next lesson is waiting on Today.</p><a class="btn" href="#/">Back to Today</a></div>
+  {:else if s.finished}<div class="score" tabindex="-1"><span class="small">Review complete</span><strong>{s.score} / {qs.length}</strong><p>Right answers return later. Missed ones come back tomorrow, so you can try them again while they’re fresh.</p>{#if appState.review.count > 0}<p class="small">{appState.review.count} more question{appState.review.count === 1 ? ' is' : 's are'} due today.</p>{/if}<div class="row"><a class="btn" href="#/">Back to Today <Icon name="arrow" /></a>{#if appState.review.count > 0}<button class="btn secondary" id="review-more" onclick={review}>Review another set</button>{/if}</div></div>
+  {:else}<div class="session-bar"><Progress n={s.index} total={qs.length} wide={true} /></div><section class="lesson-content"><p class="review-context">{q.roadmap} · <b>{q.lesson_title}</b></p><div class="step-body">
+    {#if q.kind === 'explain' || q.kind === 'code'}{@const code = q.kind === 'code'}<div class="quiz-meta"><span>{code ? 'Code from memory' : 'Explain from memory'}</span><span>{s.score} correct so far</span></div><h3 class="question" id="question" tabindex="-1">{code ? 'Write it again from the starter: ' + q.title : 'Explain this in your own words'}</h3><div class="recall"><Formatted text={code ? q.prompt || '' : q.q} /></div>
+      <textarea id="review-text" class:codebox={code} rows={code ? 9 : 5} spellcheck={!code} readonly={s.selected !== null || s.pending} aria-label="Your answer" placeholder={code ? '' : 'Write what you remember. Short is fine.'} value={s.text ?? (code ? q.starter : '')} oninput={e => s.text = e.currentTarget.value} onkeydown={e => { if (code && e.key === 'Tab' && !e.shiftKey) { e.preventDefault(); const el = e.currentTarget; el.setRangeText('    ', el.selectionStart, el.selectionEnd, 'end'); s.text = el.value; } e.stopPropagation(); }}></textarea>
+      {#if s.selected !== null}<div class="feedback" class:right={s.result?.right} class:wrong={!s.result?.right} role="status"><strong>{s.result?.right ? 'That’s right.' : 'Not yet.'}</strong>{#if s.result?.feedback}<p><Formatted text={s.result.feedback} /></p>{/if}{#if s.result?.output}<pre>{s.result.output}</pre>{/if}</div><div class="row answer-row"><button class="btn" id="review-next" onclick={reviewNext}>{s.index === qs.length - 1 ? 'See my score' : 'Next question'} <Icon name="arrow" /></button></div>
+      {:else}<div class="row answer-row"><button class="btn" id="review-check" disabled={s.pending} onclick={() => reviewCheck()}>{s.pending ? 'Checking…' : code ? 'Run the tests' : 'Check my answer'}</button><button class="btn ghost" id="review-skip" disabled={s.pending} onclick={() => reviewCheck(true)}>I can’t remember</button>{#if s.pending}<Waiting inline title={code ? 'Running the tests' : 'Marking your answer'} />{/if}</div>{#if s.error}<p class="err" role="alert">{s.error}</p>{/if}{/if}
+    {:else}<QuizQuestion {q} session={s} total={qs.length} answer={reviewAnswer} next={reviewNext} mode="review" retry={saveReviewAnswer} /><p class="keyboard-hint">Press A–{String.fromCharCode(64 + q.options.length)} or 1–{q.options.length} to answer, Enter to go on.</p>{/if}
   </div></section>{/if}
 </div>

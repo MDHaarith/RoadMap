@@ -71,9 +71,12 @@ pub struct App {
     pub(crate) meter: Mutex<()>,
     // Roadmaps whose video search is running, so reopening one does not start a second search.
     pub(crate) fetching: Mutex<HashSet<String>>,
+    // Roadmaps whose unpicked videos were already searched again this run.
+    pub(crate) repicked: Mutex<HashSet<String>>,
     pub(crate) day_offset: AtomicI64,
     pub(crate) pick: Box<dyn Fn(&str) -> String + Send + Sync>,
     pub(crate) yt_program: PathBuf,
+    pub(crate) codex_program: PathBuf,
 }
 impl App {
     pub fn new(pick: impl Fn(&str) -> String + Send + Sync + 'static) -> Result<Arc<Self>> {
@@ -93,6 +96,8 @@ impl App {
             dirs::config_dir().ok_or_else(|| Error::bad("Config directory is unavailable."))?,
         );
         Ok(Arc::new(Self {
+            // An app started from the desktop menu may not have ~/.local/bin on PATH, where Codex installs itself.
+            codex_program: if cfg!(windows) || on_path("codex") { "codex".into() } else { home.join(".local/bin/codex") },
             data: data.join("roadmap-app"),
             conf: config.join("roadmap-app").join("config.json"),
             home,
@@ -100,6 +105,7 @@ impl App {
             off: Mutex::new(HashSet::new()),
             meter: Mutex::new(()),
             fetching: Mutex::new(HashSet::new()),
+            repicked: Mutex::new(HashSet::new()),
             day_offset: AtomicI64::new(0),
             pick: Box::new(pick),
             yt_program: if cfg!(windows) { "yt-dlp.exe" } else { "yt-dlp" }.into(),
@@ -212,6 +218,80 @@ pub(crate) fn joined(v: &Value) -> String {
 pub(crate) fn matches(re: &str, s: &str) -> bool {
     regex::Regex::new(re).unwrap().is_match(s)
 }
+/// No video with fewer views is searched for, picked or kept.
+pub(crate) const MIN_VIEWS: i64 = 1000;
+/// Removes saved videos known to be under MIN_VIEWS and says whether any went; a video with no view count (an imported one) stays.
+pub(crate) fn drop_obscure(c: &mut Value) -> bool {
+    let mut dropped = false;
+    for p in c["phases"].as_array_mut().into_iter().flatten() {
+        for l in p["lessons"].as_array_mut().into_iter().flatten() {
+            if let Some(vs) = l["videos"].as_array_mut() {
+                let n = vs.len();
+                vs.retain(|v| truth(&v["gem"]) || !v["views"].as_i64().is_some_and(|n| n < MIN_VIEWS));
+                dropped |= vs.len() != n;
+            }
+        }
+    }
+    dropped
+}
+/// The words that end most of a course's video queries (two or more, shared by at least half and at least three lessons),
+/// such as "small business beginner worked example tutorial". YouTube matches such filler instead of the topic.
+pub(crate) fn common_tail(c: &Value) -> Vec<String> {
+    let qs = lessons(c)
+        .map(|l| string(&l["query"]).to_lowercase().split_whitespace().map(String::from).collect::<Vec<_>>())
+        .filter(|q| !q.is_empty())
+        .collect::<Vec<_>>();
+    for k in (2..=8).rev() {
+        let mut seen: std::collections::HashMap<&[String], usize> = Default::default();
+        for q in qs.iter().filter(|q| q.len() > k) {
+            *seen.entry(&q[q.len() - k..]).or_default() += 1;
+        }
+        if let Some((tail, _)) = seen.into_iter().find(|(_, n)| *n >= 3 && *n * 2 >= qs.len()) {
+            return tail.to_vec();
+        }
+    }
+    vec![]
+}
+/// The query without that tail.
+pub(crate) fn strip_tail(query: &str, tail: &[String]) -> String {
+    let words = query.split_whitespace().collect::<Vec<_>>();
+    let n = words.len().saturating_sub(tail.len());
+    if tail.is_empty() || n == 0 || !words[n..].iter().map(|w| w.to_lowercase()).eq(tail.iter().cloned()) {
+        return query.to_string();
+    }
+    words[..n].join(" ")
+}
+/// Video preferences with unknown values blanked; a blank field means "the default" (or, per roadmap, "use Settings").
+pub(crate) fn clean_prefs(v: &Value) -> Value {
+    let one = |k: &str, ok: &[&str]| {
+        let s = string(&v[k]);
+        if ok.contains(&s.as_str()) { s } else { String::new() }
+    };
+    let lang = cap(string(&v["lang"]).trim(), 40);
+    json!({"style":one("style",&["popular","depth","gems"]),"length":one("length",&["short","medium","long"]),
+        "lang":if matches(r"^[\p{L} ()-]*$",&lang){lang}else{String::new()},"recent":one("recent",&["yes","no"])})
+}
+/// Lower view floor for the "hidden gems" style; such picks are marked `gem` so `drop_obscure` keeps them.
+pub(crate) const GEM_VIEWS: i64 = 100;
+/// Raw search results saved when the AI could not pick: no reason, not the learner's own search, and a view count (imports have none).
+pub(crate) fn unpicked(vs: &[Value]) -> bool {
+    !vs.is_empty()
+        && vs.iter().all(|v| !truth(&v["why"]) && !truth(&v["searched"]) && v["views"].is_number())
+}
+/// Whether the prefetch should search for this lesson: never searched, or (when `retry`) left with raw results.
+pub(crate) fn needs_videos(l: &Value, retry: bool) -> bool {
+    let vs = list(&l["videos"]);
+    !truth(&l["stub"]) && (vs.is_empty() && !truth(&l["novideos"]) || retry && unpicked(vs))
+}
+/// Saves a search outcome; an empty one records that nothing fits, so the lesson is not searched on every open.
+pub(crate) fn set_videos(l: &mut Value, vids: Vec<Value>) {
+    if vids.is_empty() {
+        l["novideos"] = json!(true);
+    } else if let Some(o) = l.as_object_mut() {
+        o.remove("novideos");
+    }
+    l["videos"] = json!(vids);
+}
 pub(crate) fn lessons(c: &Value) -> impl Iterator<Item = &Value> {
     list(&c["phases"]).iter().flat_map(|p| list(&p["lessons"]))
 }
@@ -307,5 +387,5 @@ pub(crate) fn on_path(cmd: &str) -> bool {
                 false
             }))
 }
-#[cfg(all(test, target_os = "linux"))]
+#[cfg(test)]
 mod tests;

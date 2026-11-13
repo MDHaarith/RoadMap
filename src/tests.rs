@@ -1,8 +1,11 @@
+#[cfg(unix)]
+use std::os::unix::fs::PermissionsExt;
 use super::*;
 use crate::exercise::{clean_practice, run_code};
+use crate::ai::min_cover;
 use std::{
     io::Write,
-    os::unix::fs::PermissionsExt,
+
     sync::atomic::{AtomicBool, Ordering},
     thread,
     time::{Duration, Instant},
@@ -19,7 +22,7 @@ fn practice() -> Value {
     json!({"quiz":[{"q":"What is hydration?","options":["Water to flour ratio","Oven heat"],"answer":0,"why":"It is a ratio."},{"q":"bad answer index","options":["a","b"],"answer":7}],"exercise":{"lang":"bash","title":"Double","prompt":"Write double(x).","starter":STARTER,"tests":"source ./main.sh\ngot=$(double 2)\nif [ \"$got\" != 4 ]; then\n echo \"double(2): expected 4, got $got\"; exit 1\nfi\necho 'All tests passed'"}})
 }
 fn found() -> Value {
-    json!({"entries":[{"id":"aaaaaaaaaaa","title":"Full lesson","channel":"Baker","duration":900.0,"view_count":1200,"description":"Flour and\nwater"},{"id":"bbbbbbbbbbb","title":"A Short","duration":40},{"id":"ccccccccccc","title":"live now","duration":900,"live_status":"is_live"},{"id":"<script>","title":"bad id","duration":900}],"chapters":[{"start_time":0.0,"title":"Intro"},{"start_time":75.5,"title":"Mixing"},{"title":"no time"}]})
+    json!({"entries":[{"id":"aaaaaaaaaaa","title":"Full lesson","channel":"Baker","duration":900.0,"view_count":1200,"description":"Flour and\nwater"},{"id":"bbbbbbbbbbb","title":"A Short","duration":40},{"id":"ddddddddddd","title":"Obscure upload","channel":"Nobody","duration":900,"view_count":52},{"id":"ccccccccccc","title":"live now","duration":900,"live_status":"is_live"},{"id":"<script>","title":"bad id","duration":900}],"chapters":[{"start_time":0.0,"title":"Intro"},{"start_time":75.5,"title":"Mixing"},{"title":"no time"}]})
 }
 struct FakeAI {
     base: String,
@@ -86,6 +89,15 @@ impl FakeAI {
                         json!({"done":false,"q":"Baked before?","options":["No, never","Yes",3]})
                     }
                     .to_string()
+                } else if system.contains("verify the videos") {
+                    // The transcript check: the fixture has chapters and no captions.
+                    assert!(user.contains("Concepts (numbered for covers): 0. "), "{user}");
+                    assert!(user.contains("--- Video 0: Full lesson | Baker | 15 min | 1200 views\nChapters: 0:00 Intro; 1:15 Mixing\nTranscript: none available"), "{user}");
+                    if user.contains("Lesson: Nothing fits") {
+                        json!({"picks":[]}).to_string()
+                    } else {
+                        json!({"picks":[{"i":0,"why":"","start":75,"covers":[0,7]},{"i":0,"why":"twice","start":0,"covers":[0]},{"i":9,"why":"made up","start":0,"covers":[0]}]}).to_string()
+                    }
                 } else if system.contains("choose the videos") {
                     assert!(
                         user.contains(
@@ -94,7 +106,11 @@ impl FakeAI {
                             && !user.contains("live now"),
                         "{user}"
                     );
-                    json!({"picks":[{"i":0,"why":"Covers hydration."},{"i":99,"why":"made up"},"junk"],"query":""}).to_string()
+                    if user.contains("Lesson: Nothing fits") {
+                        json!({"picks":[],"query":"better words"}).to_string()
+                    } else {
+                        json!({"picks":[{"i":0,"why":"Covers hydration."},{"i":99,"why":"made up"},"junk"],"query":""}).to_string()
+                    }
                 } else if system.contains("mark one review answer") {
                     assert!(user.contains("Concept to explain: hydration"));
                     json!({"right":user.split("answer:").nth(1).unwrap().contains("water"),"feedback":"It is the water to flour ratio."}).to_string()
@@ -136,7 +152,13 @@ impl FakeAI {
                             && user.contains("- 1.1 Mix [completed"),
                         "{user}"
                     );
-                    json!({"note":"Now industry.","drop":["1.1","2.1"],"add":[],"phases":[{"after":"1.2","title":"In industry","blurb":"b","lessons":[{"title":"Real ovens","goal":"g"},"junk"]},{"after":"","title":"Empty","blurb":"","lessons":[]}]}).to_string()
+                    json!({"options":[
+                        {"label":"Industry phase","note":"Now industry.","drop":["1.1","2.1"],"add":[],"phases":[{"after":"1.2","title":"In industry","blurb":"b","lessons":[{"title":"Real ovens","goal":"g"},"junk"]},{"after":"","title":"Empty","blurb":"","lessons":[]}]},
+                        {"label":"Nothing","note":"No change.","drop":["1.1"],"add":[],"phases":[]},
+                        {"label":"Smaller","note":"Drop only.","drop":["2.1"],"add":[],"phases":[]}]}).to_string()
+                } else if system.contains("wants one lesson they have not started yet changed") {
+                    assert!(user.contains("The lesson to change: ") && user.contains("Make it harder"), "{user}");
+                    json!({"options":[{"label":"Harder: timed","lesson":{"title":"Knead faster","goal":"g2","concepts":["windowpane"],"tasks":["t2"],"done":["d2"],"query":"bread windowpane test","lookups":[],"warn":""}}]}).to_string()
                 } else if system.contains("JSON object") {
                     format!("Here you go:\n```json\n{}\n```", course())
                 } else {
@@ -234,6 +256,7 @@ fn wait_videos(base: &Arc<App>, cid: &str) {
     }
 }
 #[test]
+#[cfg(unix)] // Uses Unix shell fixtures, permissions or symlinks.
 fn python_spec_end_to_end() {
     let tmp = tempfile::tempdir().unwrap();
     let proj = tmp.path().join("demo");
@@ -260,6 +283,7 @@ fn python_spec_end_to_end() {
         off: Mutex::new(HashSet::new()),
         meter: Mutex::new(()),
         fetching: Mutex::new(std::collections::HashSet::new()),
+        repicked: Mutex::new(HashSet::new()),
         day_offset: AtomicI64::new(0),
         pick: Box::new(move |k| {
             if k == "file" {
@@ -269,6 +293,7 @@ fn python_spec_end_to_end() {
             }
         }),
         yt_program: tmp.path().join("yt-dlp"),
+        codex_program: tmp.path().join("codex"),
     };
     fs::write(
         &app.yt_program,
@@ -277,6 +302,15 @@ fn python_spec_end_to_end() {
     .unwrap();
     fs::set_permissions(&app.yt_program, fs::Permissions::from_mode(0o755)).unwrap();
     let app = Arc::new(app);
+    app.write_config(&json!({"base":"codex","model":"default","key":"keep","small":"cheap"})).unwrap();
+    app.route("PUT", "api/model", &json!({"model":"chosen"})).unwrap();
+    assert_eq!(app.config(), json!({"base":"codex","model":"chosen","key":"keep","small":"cheap"}));
+    assert_eq!(app.route("PUT", "api/model", &json!({"model":" "})).unwrap_err().status, 400);
+    let models = app.route("GET", "api/models", &json!({})).unwrap();
+    assert_eq!(models["models"][0], json!({"id":"default","name":"Codex default"}));
+    assert_eq!(models["current"], "chosen");
+    assert_eq!(app.route("POST", "api/courses/aaaaaaaaaaaa/notes", &json!({"lesson":"1.1","notes":" "})).unwrap_err().message, "Write some notes first.");
+
     let ai = FakeAI::new();
     let base = app.clone();
     assert_eq!(
@@ -328,7 +362,7 @@ fn python_spec_end_to_end() {
     );
     assert_eq!(
         call(&base, "GET", "api/settings", json!({})).1,
-        json!({"base":ai.base,"model":"m","small":"","usage":{},"key_set":true,"theme":"dark"})
+        json!({"base":ai.base,"model":"m","small":"","usage":{},"key_set":true,"theme":"dark","videos":{"style":"","length":"","lang":"","recent":""}})
     );
     assert_eq!(
         fs::metadata(&app.conf).unwrap().permissions().mode() & 0o777,
@@ -416,6 +450,8 @@ fn python_spec_end_to_end() {
     assert_eq!(vids[0]["id"], "aaaaaaaaaaa");
     assert_eq!(list(&vids).len(), 1);
     assert_eq!(vids[0]["why"], "Covers hydration.");
+    assert_eq!(vids[0]["start"], 75);
+    assert_eq!(vids[0]["covers"], json!(["hydration"]));
     assert_eq!(
         vids[0]["chapters"],
         json!([{"t":0,"title":"Intro"},{"t":75,"title":"Mixing"}])
@@ -819,7 +855,7 @@ fn python_spec_end_to_end() {
     assert_eq!(status, 200, "{ad}");
     assert_eq!(
         ad["change"],
-        json!({"day":app.today(),"note":"Added practice.","added":["Mix again"],"dropped":[]})
+        json!({"day":app.today(),"note":"Added practice.","added":["Mix again"],"dropped":[],"changed":[]})
     );
     assert_eq!(
         lessons(&ad["course"])
@@ -1000,6 +1036,7 @@ fn sse_tool_fragments_stream_fallback_and_ai_errors() {
     worker.join().unwrap();
 }
 #[test]
+#[cfg(unix)] // Uses Unix shell fixtures, permissions or symlinks.
 fn request_limits_legacy_files_and_project_symlinks() {
     let tmp = tempfile::tempdir().unwrap();
     let app = isolated_app(tmp.path());
@@ -1065,6 +1102,7 @@ fn request_limits_legacy_files_and_project_symlinks() {
 }
 
 #[test]
+#[cfg(unix)] // Uses Unix shell fixtures, permissions or symlinks.
 fn long_roadmap_outline_expand_and_revise() {
     let tmp = tempfile::tempdir().unwrap();
     let mut app = isolated_app(tmp.path());
@@ -1137,8 +1175,18 @@ fn long_roadmap_outline_expand_and_revise() {
             .status,
         400
     );
-    let r = app
+    // Options are previews: nothing is saved until one is applied. One that changes nothing (1.1 is completed) is left out.
+    let before = app.load(&cid).unwrap();
+    let o = app
         .route("POST", &format!("{path}/revise"), &json!({"ask":"industry level"}))
+        .unwrap();
+    assert_eq!(app.load(&cid).unwrap(), before);
+    let opts = list(&o["options"]);
+    assert_eq!(opts.iter().map(|x| string(&x["label"])).collect::<Vec<_>>(), ["Industry phase", "Smaller"]);
+    assert_eq!(opts[0]["added"][0]["lessons"], json!(["Real ovens"]));
+    assert_eq!(opts[0]["dropped"], json!(["Heat"]));
+    let r = app
+        .route("POST", &format!("{path}/apply"), &json!({"plan":opts[0]["plan"],"ask":"industry level"}))
         .unwrap();
     assert_eq!(r["change"]["added"], json!(["In industry"]));
     assert_eq!(r["change"]["dropped"], json!(["Heat"]));
@@ -1156,6 +1204,22 @@ fn long_roadmap_outline_expand_and_revise() {
     );
     let new = &c["phases"][1]["lessons"];
     assert_eq!(new, &json!([{"id":"3.1","title":"Real ovens","goal":"g","concepts":[],"tasks":[],"done":[],"query":"Real ovens","lookups":[],"files":[],"warn":"","charts":[],"stub":true,"added":true,"known":{}}]));
+
+    // One lesson: a started one stays; an unstarted one gets previewed options, and applying one rewrites it in place.
+    let edit = format!("{path}/edit");
+    assert_eq!(app.route("POST", &edit, &json!({"lesson":"1.1","action":"harder"})).unwrap_err().status, 400);
+    assert_eq!(app.route("POST", &edit, &json!({"lesson":"1.2","action":"explode"})).unwrap_err().status, 400);
+    let rm = app.route("POST", &edit, &json!({"lesson":"1.2","action":"remove"})).unwrap();
+    assert_eq!(rm["options"][0]["dropped"], json!(["Knead"]));
+    let o = app.route("POST", &edit, &json!({"lesson":"1.2","action":"harder"})).unwrap();
+    assert_eq!(o["options"][0]["changed"], json!([{"from":"Knead","title":"Knead faster","goal":"g2"}]));
+    assert_eq!(app.load(&cid).unwrap()["phases"][0]["lessons"][1]["title"], "Knead");
+    let r = app.route("POST", &format!("{path}/apply"), &json!({"plan":o["options"][0]["plan"]})).unwrap();
+    assert_eq!(r["change"]["changed"], json!(["Knead faster"]));
+    let l = &r["course"]["phases"][0]["lessons"][1];
+    assert_eq!((&l["id"], &l["title"], &l["done"]), (&json!("1.2"), &json!("Knead faster"), &json!(["d2"])));
+    assert!(l.get("stub").is_none());
+    assert_eq!(app.route("POST", &format!("{path}/apply"), &json!({})).unwrap_err().status, 400);
 
     let c = app
         .route("POST", &format!("{path}/expand"), &json!({"lesson":"3.1"}))
@@ -1219,7 +1283,7 @@ fn ideas_mistakes_search_setup_and_exports() {
 
     assert_eq!(
         r("POST", &at("/setup"), json!({})).unwrap(),
-        json!({"found":{"sh":true,"no-such-tool-xyz":false}})
+        json!({"found":{"sh":on_path("sh"),"no-such-tool-xyz":false}})
     );
     let file = |v: Value| fs::read_to_string(v["path"].as_str().unwrap()).unwrap();
     let t: Value = serde_json::from_str(&file(r("POST", &at("/export"), json!({"template":true})).unwrap())).unwrap();
@@ -1257,6 +1321,7 @@ fn deep_project() {
 }
 
 #[test]
+#[cfg(unix)] // Uses Unix shell fixtures, permissions or symlinks.
 fn topic_videos() {
     let tmp = tempfile::tempdir().unwrap();
     let mut app = isolated_app(tmp.path());
@@ -1267,7 +1332,13 @@ fn topic_videos() {
     let cid = "0123456789ab";
     let mut videos = vec![json!({"id":"original"})];
     for i in 0..7 { videos.push(json!({"id":format!("old{i}"),"searched":true})); }
-    app.save(&json!({"id":cid,"phases":[{"lessons":[{"id":"1.1","videos":videos}]}]})).unwrap();
+    // A pick saved before the view floor: the prefetch removes it and keeps the rest.
+    let mut stale = videos.clone();
+    stale.push(json!({"id":"junk","views":52}));
+    app.save(&json!({"id":cid,"phases":[{"lessons":[{"id":"1.1","videos":stale}]}]})).unwrap();
+    assert_eq!(app.route("GET",&format!("api/courses/{cid}"),&json!({})).unwrap()["phases"][0]["lessons"][0]["videos"], json!(videos));
+    app.prefetch_inner(cid).unwrap();
+    assert_eq!(app.load(cid).unwrap()["phases"][0]["lessons"][0]["videos"], json!(videos));
     let path = format!("api/courses/{cid}/videos");
     assert_eq!(app.route("POST",&path,&json!({"lesson":"1.1","query":"  "})).unwrap_err().status,400);
     let v = app.route("POST",&path,&json!({"lesson":"1.1","query":"some topic"})).unwrap();
@@ -1275,6 +1346,101 @@ fn topic_videos() {
     assert_eq!(list(&v).len(),8);
     assert!(list(&v).iter().skip(1).all(|x| truth(&x["searched"])));
     assert!(!list(&v).iter().any(|x| x["id"] == "old0"));
+    assert!(!list(&v).iter().any(|x| x["id"] == "ddddddddddd"), "a 52-view video was offered");
+}
+
+#[test]
+#[cfg(unix)] // Uses Unix shell fixtures, permissions or symlinks.
+fn video_picks_are_never_padded() {
+    let setup = |ai: Option<&FakeAI>| {
+        let tmp = tempfile::tempdir().unwrap();
+        let mut app = isolated_app(tmp.path());
+        let a = Arc::get_mut(&mut app).unwrap();
+        a.yt_program = tmp.path().join("yt-dlp");
+        a.codex_program = tmp.path().join("no-codex"); // never the real CLI
+        fs::write(&a.yt_program, format!("#!/bin/sh\ncat <<'FIXTURE'\n{}\nFIXTURE\n", found())).unwrap();
+        fs::set_permissions(&a.yt_program, fs::Permissions::from_mode(0o755)).unwrap();
+        if let Some(ai) = ai {
+            app.write_config(&json!({"base":ai.base,"model":"m","key":"sk-test"})).unwrap();
+        }
+        (tmp, app)
+    };
+    let cid = "0123456789ac";
+    let raw = json!([{"id":"eeeeeeeeeee","title":"Postman API testing","views":5000}]);
+    let imported = json!([{"id":"fffffffffff","title":"Imported"}]);
+    let course = json!({"id":cid,"phases":[{"lessons":[
+        {"id":"1.1","title":"Nothing fits","query":"q"},
+        {"id":"1.2","title":"Mix","query":"q","videos":raw},
+        {"id":"1.3","title":"Knead","query":"q","videos":imported}]}]});
+
+    // With the AI: "nothing fits" stays empty and is not searched on every open; raw results get picked again.
+    let ai = FakeAI::new();
+    let (_tmp, app) = setup(Some(&ai));
+    app.save(&course).unwrap();
+    app.prefetch_inner(cid).unwrap();
+    let c = app.load(cid).unwrap();
+    let ls = &c["phases"][0]["lessons"];
+    assert_eq!((&ls[0]["videos"], &ls[0]["novideos"]), (&json!([]), &json!(true)));
+    assert!(!needs_videos(&ls[0], true));
+    assert_eq!(ls[1]["videos"][0]["why"], "Covers hydration.");
+    assert_eq!(ls[2]["videos"], imported);
+    let path = format!("api/courses/{cid}/videos");
+    let asked = ai.seen.lock().unwrap().len();
+    assert_eq!(app.route("POST", &path, &json!({"lesson":"1.1"})).unwrap(), json!([]));
+    assert_eq!(ai.seen.lock().unwrap().len(), asked, "searched again although nothing fits");
+    // Preferences: Settings cleaned, a roadmap's own choice on top, and the picker is told.
+    app.route("PUT", "api/video-prefs", &json!({"style":"gems","length":"long","lang":"<b>","recent":"maybe"})).unwrap();
+    assert_eq!(app.route("GET", "api/settings", &json!({})).unwrap()["videos"], json!({"style":"gems","length":"long","lang":"","recent":""}));
+    app.route("PUT", &format!("api/courses/{cid}/prefs"), &json!({"style":"popular","lang":"Hindi","refresh":true})).unwrap();
+    let c = app.load(cid).unwrap();
+    assert_eq!(app.video_prefs(&c), json!({"style":"popular","length":"long","lang":"Hindi","recent":""}));
+    let start = Instant::now();
+    while !truth(&app.load(cid).unwrap()["phases"][0]["lessons"][1]["videos"]) {
+        assert!(start.elapsed() < Duration::from_secs(5), "videos not picked again");
+        thread::sleep(Duration::from_millis(20));
+    }
+    let user = string(&ai.last()["messages"][1]["content"]);
+    assert!(user.contains("preferences: popular: prefer the most watched videos that fit; long videos or full courses, over 30 minutes; videos in Hindi"), "{user}");
+
+    // Without the AI: raw results are kept as a fallback, marked unpicked, and retried once per run.
+    let (_tmp, app) = setup(None);
+    app.save(&course).unwrap();
+    app.prefetch_inner(cid).unwrap();
+    let c = app.load(cid).unwrap();
+    let ls = &c["phases"][0]["lessons"];
+    assert_eq!(ls[0]["videos"][0]["id"], "aaaaaaaaaaa");
+    assert!(unpicked(list(&ls[0]["videos"])));
+    assert_eq!(ls[1]["videos"], raw);
+    assert!(!lessons(&c).any(|l| needs_videos(l, false)));
+}
+
+#[test]
+fn video_count_follows_coverage() {
+    let sets = |v: &[&[usize]]| v.iter().map(|c| c.iter().copied().collect::<HashSet<_>>()).collect::<Vec<_>>();
+    // One video that teaches everything is enough, even when it is ranked second.
+    assert_eq!(min_cover(&sets(&[&[0], &[0, 1, 2], &[1]])), [1]);
+    // Each video kept adds a concept; one that adds nothing new is left out.
+    assert_eq!(min_cover(&sets(&[&[0, 1], &[1], &[2], &[0, 2]])), [0, 2]);
+    // A tie goes to the higher-ranked video; videos that cover nothing are never shown.
+    assert_eq!(min_cover(&sets(&[&[], &[0], &[0]])), [1]);
+    assert!(min_cover(&sets(&[&[], &[]])).is_empty());
+    // At most six, however many concepts.
+    assert_eq!(min_cover(&sets(&(0..8).map(|i| vec![i]).collect::<Vec<_>>().iter().map(|v| v.as_slice()).collect::<Vec<_>>())).len(), 6);
+}
+
+#[test]
+fn query_filler_tail_is_stripped() {
+    let course = |qs: &[&str]| json!({"phases":[{"lessons":qs.iter().map(|q| json!({"query":q})).collect::<Vec<_>>()}]});
+    let c = course(&["Demand testing small business beginner tutorial", "Cash runway Small Business beginner tutorial", "Pricing small business beginner tutorial", "unit economics explained"]);
+    let tail = common_tail(&c);
+    assert_eq!(tail, ["small", "business", "beginner", "tutorial"]);
+    assert_eq!(strip_tail("Cash runway Small Business beginner tutorial", &tail), "Cash runway");
+    assert_eq!(strip_tail("unit economics explained", &tail), "unit economics explained");
+    // The tail alone is kept: an empty search finds nothing.
+    assert_eq!(strip_tail("small business beginner tutorial", &tail), "small business beginner tutorial");
+    // Different endings, or too few lessons, are not filler.
+    assert!(common_tail(&course(&["c pointers explained", "c arrays explained", "c structs explained", "makefile basics"])).is_empty());
+    assert!(common_tail(&course(&["a b c", "x b c"])).is_empty());
 }
 
 #[test]
@@ -1403,4 +1569,146 @@ fn charts_are_cleaned() {
     assert_eq!(c[0]["series"], json!([{"name":"Revenue","values":[0.0,2500.0,5000.0]}]));
     assert_eq!(c[1]["kind"], "line");
     assert!(clean_charts(&json!(null)).is_empty());
+}
+
+// Smoke run against the real AI and real yt-dlp. It spends real requests, so it is ignored by default:
+// REAL_AI_OUT=<dir> REAL_AI_PROMPT=<what to learn> REAL_AI_SIZE=<sprint|deep|mastery|empty> cargo test real_ai -- --ignored --nocapture
+// It uses the signed-in Codex command. For an HTTP service, also set REAL_AI_BASE, REAL_AI_MODEL and REAL_AI_KEY_FILE.
+// Every answer is written to REAL_AI_OUT as JSON for reading; the test fails if any step errors.
+#[test]
+#[ignore]
+fn real_ai() {
+    let env = |k: &str| std::env::var(k).unwrap_or_default();
+    let out = std::path::PathBuf::from(env("REAL_AI_OUT"));
+    fs::create_dir_all(&out).unwrap();
+    let tmp = tempfile::tempdir().unwrap();
+    let app = isolated_app(tmp.path());
+    if !env("REAL_AI_BASE").is_empty() {
+        let key = fs::read_to_string(env("REAL_AI_KEY_FILE")).unwrap_or_default();
+        app.save_config(&json!({"base":env("REAL_AI_BASE"),"model":env("REAL_AI_MODEL"),"small":env("REAL_AI_SMALL"),"key":key}))
+            .unwrap();
+    }
+    let prompt = env("REAL_AI_PROMPT");
+    let mut failed: Vec<String> = vec![];
+    let mut step = |name: &str, method: &str, path: &str, body: Value| -> Value {
+        let t = Instant::now();
+        let (code, v) = call(&app, method, path, body);
+        println!("{name}: {code} in {:.1}s", t.elapsed().as_secs_f32());
+        fs::write(out.join(format!("{name}.json")), serde_json::to_string_pretty(&json!({"seconds":t.elapsed().as_secs(),"answer":v})).unwrap()).unwrap();
+        if code != 200 {
+            failed.push(format!("{name}: {code} {v}"));
+        }
+        v
+    };
+    let q = step("1-placement", "POST", "api/placement", json!({"prompt":prompt,"answers":[]}));
+    let answers = json!([{"q":q["q"],"a":q["options"][0]}]);
+    let c = step(
+        "2-course",
+        "POST",
+        "api/courses",
+        json!({"prompt":prompt,"level":"I can write small programs. New to this topic.","size":env("REAL_AI_SIZE"),"answers":answers}),
+    );
+    let cid = string(&c["id"]);
+    if cid.is_empty() {
+        panic!("no roadmap was made: {failed:?}");
+    }
+    let path = format!("api/courses/{cid}");
+    let lid = lessons(&c).next().map(|l| l["id"].clone()).unwrap_or_default();
+    step("3-practice", "POST", &format!("{path}/practice"), json!({"lesson":lid}));
+    let ask = |text: &str| json!({"course":cid,"lesson":lid,"messages":[{"role":"user","content":text}]});
+    step("4-tutor-solution", "POST", "api/chat", ask("I am stuck. Write the complete finished solution for this lesson's tasks for me so I can paste it."));
+    step("5-tutor-hint", "POST", "api/chat", ask("Give me a hint for the first task."));
+    step("6-videos", "POST", &format!("{path}/videos"), json!({"lesson":lid}));
+    step("7-explain", "POST", "api/review/answer", json!({"course":cid,"lesson":lid,"i":"explain","answer":"I am not sure, I think it is a kind of variable."}));
+    if let Some(stub) = lessons(&c).find(|l| truth(&l["stub"])) {
+        step("8-expand", "POST", &format!("{path}/expand"), json!({"lesson":stub["id"]}));
+    }
+    let ask = "Add industry-level practice at the end, with real-world use cases.";
+    let options = step("9-revise", "POST", &format!("{path}/revise"), json!({"ask":ask}));
+    if options["options"][0]["plan"].is_object() {
+        step("9b-apply", "POST", &format!("{path}/apply"), json!({"plan":options["options"][0]["plan"],"ask":ask}));
+    } else {
+        step("9b-apply", "POST", &format!("{path}/apply"), json!({}));
+    }
+    let last = lessons(&c).filter(|l| !truth(&l["stub"])).last().map(|l| l["id"].clone()).unwrap_or_default();
+    step("9c-edit", "POST", &format!("{path}/edit"), json!({"lesson":last,"action":"harder"}));
+    step("10-final", "GET", &path, json!({}));
+    assert!(failed.is_empty(), "{failed:#?}");
+}
+
+// Real Codex and real YouTube: the model list, a notes rewrite, and a tutor answer about the open video.
+// cargo test real_notes_and_captions -- --ignored --nocapture
+#[test]
+#[ignore]
+fn real_notes_and_captions() {
+    let tmp = tempfile::tempdir().unwrap();
+    let app = isolated_app(tmp.path());
+    println!("models: {}", call(&app, "GET", "api/models", json!({})).1);
+    let mut c = course();
+    c["id"] = json!("0123456789ab");
+    c["phases"][0]["lessons"][0]["id"] = json!("1.1");
+    app.save(&c).unwrap();
+    let path = "api/courses/0123456789ab";
+    let (code, n) = call(&app, "POST", &format!("{path}/notes"), json!({"lesson":"1.1","notes":"hydration = water / flour?? more watr = stickier dough. autolyse 30 min b4 salt. why does my dough tear"}));
+    println!("notes {code}: {}", text(&n["notes"]));
+    assert_eq!(code, 200);
+    let (code, v) = call(&app, "POST", &format!("{path}/videos"), json!({"lesson":"1.1","query":"sourdough hydration explained"}));
+    assert_eq!(code, 200, "{v}");
+    let id = string(&v[0]["id"]);
+    println!("video {id}: {} ({} views)", text(&v[0]["title"]), v[0]["views"]);
+    let t = Instant::now();
+    let (code, r) = call(&app, "POST", "api/chat", json!({"course":"0123456789ab","lesson":"1.1","video":id,"messages":[{"role":"user","content":"Quote one exact sentence the speaker says in the first minute of the video I am watching, with its time."}]}));
+    println!("tutor {code} in {:.0}s: {}", t.elapsed().as_secs_f32(), text(&r["text"]));
+    assert_eq!(code, 200);
+    println!("captions on disk: {}", app.data.join("transcripts").join(format!("{id}.json")).exists());
+}
+
+#[test]
+#[cfg(unix)] // Uses Unix shell fixtures, permissions or symlinks.
+fn codex_is_the_default_service_and_can_call_tutor_tools() {
+    let tmp = tempfile::tempdir().unwrap();
+    let mut app = isolated_app(tmp.path());
+    let a = Arc::get_mut(&mut app).unwrap();
+    // A stand-in for the Codex command: it keeps each prompt and schema it was given, and answers from numbered files.
+    a.codex_program = tmp.path().join("codex");
+    fs::write(
+        &a.codex_program,
+        "#!/bin/sh\nd=$(dirname \"$0\")\nn=$(cat \"$d/n\" 2>/dev/null || echo 0)\nn=$((n+1))\necho $n > \"$d/n\"\ncat > \"$d/prompt$n\"\necho \"$*\" > \"$d/args$n\"\necho '{\"type\":\"thread.started\"}'\ncat \"$d/answer$n\"\necho\necho '{\"type\":\"turn.completed\",\"usage\":{\"input_tokens\":7,\"output_tokens\":3}}'\n",
+    )
+    .unwrap();
+    fs::set_permissions(&a.codex_program, fs::Permissions::from_mode(0o755)).unwrap();
+    let said = |n: u8, text: Value| {
+        fs::write(tmp.path().join(format!("answer{n}")), json!({"type":"item.completed","item":{"type":"agent_message","text":text.to_string()}}).to_string()).unwrap()
+    };
+    let read = |name: &str| fs::read_to_string(tmp.path().join(name)).unwrap();
+    assert_eq!(call(&app, "GET", "api/settings", json!({})).1["base"], "codex");
+    said(1, json!({"done":false,"q":"Have you used a terminal?","options":["No, never","Yes"]}));
+    let (code, q) = call(&app, "POST", "api/placement", json!({"prompt":"bake bread","answers":[]}));
+    assert_eq!((code, q["q"].as_str()), (200, Some("Have you used a terminal?")), "{q}");
+    assert!(read("prompt1").contains("What I want: bake bread"));
+    assert!(read("args1").contains("--output-schema") && !read("args1").contains("-m "));
+    // The tutor asks for a tool in its first answer; the app runs it and asks again with the result.
+    let mut c = course();
+    c["id"] = json!("0123456789ab");
+    c["phases"][0]["lessons"][0]["id"] = json!("1.1");
+    app.save(&c).unwrap();
+    said(2, json!({"reply":"","tool":"get_lesson","arguments":"{\"id\":\"1.1\"}"}));
+    said(3, json!({"reply":"Look at the water.","tool":"","arguments":""}));
+    let (code, r) = call(&app, "POST", "api/chat", json!({"course":"0123456789ab","lesson":"1.1","messages":[{"role":"user","content":"help"}]}));
+    assert_eq!((code, r["text"].as_str()), (200, Some("Look at the water.")));
+    assert!(read("prompt2").contains("- get_lesson:") && read("prompt3").contains("Tool result:\nLesson 1.1: Mix"));
+    assert_eq!(app.read_side("usage.json")["in"], 21);
+    // The open video's captions reach the tutor in its first prompt, with no tool call.
+    c["phases"][0]["lessons"][0]["videos"] = json!([{"id":"aaaaaaaaaaa","title":"Full lesson","channel":"Baker"}]);
+    app.save(&c).unwrap();
+    fs::create_dir_all(app.data.join("transcripts")).unwrap();
+    fs::write(app.data.join("transcripts/aaaaaaaaaaa.json"), r#"[[65,"Fold the dough gently"]]"#).unwrap();
+    said(4, json!({"reply":"Fold it.","tool":"","arguments":""}));
+    let (code, _) = call(&app, "POST", "api/chat", json!({"course":"0123456789ab","lesson":"1.1","video":"aaaaaaaaaaa","messages":[{"role":"user","content":"what does the video say?"}]}));
+    assert_eq!(code, 200);
+    assert!(read("prompt4").contains("the video the learner is watching") && read("prompt4").contains("[1:05] Fold the dough gently"));
+    // No answer line at all is an error the learner can act on.
+    let (code, e) = call(&app, "POST", "api/placement", json!({"prompt":"bake bread","answers":[]}));
+    assert_eq!(code, 400);
+    assert!(text(&e["error"]).contains("codex login"));
 }

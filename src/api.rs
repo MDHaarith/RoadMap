@@ -191,11 +191,28 @@ impl App {
     }
     pub fn route(self: &Arc<Self>, method: &str, path: &str, b: &Value) -> Result<Value> {
         match (method, path) {
+            ("GET", "api/models") => return self.models(),
+            ("PUT", "api/model") => {
+                let model = string(&b["model"]).trim().to_owned();
+                if model.is_empty() { return Err(Error::bad("Choose a model first.")); }
+                let _guard = self.guard();
+                let mut c = self.config();
+                c["model"] = json!(model);
+                self.write_config(&c)?;
+                return Ok(json!({}));
+            }
             ("GET", "api/settings") => {
                 let c = self.config();
                 return Ok(
-                    json!({"base":c.get("base").unwrap_or(&json!("")),"model":c.get("model").unwrap_or(&json!("")),"small":string(&c["small"]),"usage":self.read_side("usage.json"),"key_set":truth(&c["key"]),"theme":self.theme()}),
+                    json!({"base":c.get("base").unwrap_or(&json!("")),"model":c.get("model").unwrap_or(&json!("")),"small":string(&c["small"]),"usage":self.read_side("usage.json"),"key_set":truth(&c["key"]),"theme":self.theme(),"videos":clean_prefs(&c["videos"])}),
                 );
+            }
+            ("PUT", "api/video-prefs") => {
+                let _guard = self.guard();
+                let mut c = self.config();
+                c["videos"] = clean_prefs(b);
+                self.write_config(&c)?;
+                return Ok(json!({}));
             }
             ("PUT", "api/theme") => {
                 if !["light", "dark", "system"].iter().any(|t| b["theme"] == *t) {
@@ -340,14 +357,14 @@ impl App {
             ("POST", "api/install") => return install_lang(&string(&b["lang"])),
             ("POST", "api/chat") => {
                 let (c, l, ms) = self.chat_args(b)?;
-                let answer = self.tutor(&c, &l, ms.clone(), &mut None)?;
+                let answer = self.tutor(&c, &merge(l.clone(), json!({"watching":b["video"]})), ms.clone(), &mut None)?;
                 self.save_chat(&string(&c["id"]), &string(&l["id"]), &ms, &answer);
                 return Ok(json!({"text":answer}));
             }
             _ => {}
         }
         let re = regex::Regex::new(
-            r"^api/courses/([0-9a-f]{12})(/state|/videos|/practice|/paused|/adapt|/revise|/expand|/export|/summary|/setup|/work)?$",
+            r"^api/courses/([0-9a-f]{12})(/notes|/state|/videos|/practice|/paused|/adapt|/revise|/expand|/export|/summary|/setup|/work|/edit|/apply|/prefs)?$",
         )
         .unwrap();
         let m = re.captures(path).ok_or_else(Error::missing)?;
@@ -357,9 +374,12 @@ impl App {
             ("GET", "") => {
                 let mut c = self.mark_known(self.load(cid)?)?;
                 // Roadmaps made outside the app (MCP, import) never searched for videos; start when first opened.
-                if lessons(&c).any(|l| !truth(&l["videos"]) && !truth(&l["stub"])) {
+                // Obscure picks saved before the view floor are hidden here and removed for good by the prefetch.
+                let retry = !self.repicked.lock().unwrap_or_else(|e| e.into_inner()).contains(cid);
+                if drop_obscure(&mut c) | lessons(&c).any(|l| needs_videos(l, retry)) {
                     self.prefetch(cid.to_string());
                 }
+                self.fetch_transcripts(lessons(&c).flat_map(|l| list(&l["videos"]).to_vec()).collect());
                 c["chats"] = self.read_side(&self.chat_file(cid)?);
                 Ok(c)
             }
@@ -421,13 +441,53 @@ impl App {
                 self.save(&c)?;
                 Ok(json!({}))
             }
-            ("POST", "/adapt") => self.adapt(cid, ""),
+            ("POST", "/notes") => self.rewrite_notes(cid, b),
+            ("POST", "/adapt") => self.adapt(cid),
             ("POST", "/revise") => {
                 let ask = cap(b.get("ask").map(text).unwrap_or_default().trim(), 600);
                 if ask.is_empty() {
                     return Err(Error::bad("Say what you want to change first."));
                 }
-                self.adapt(cid, &ask)
+                self.revise_options(cid, &ask)
+            }
+            ("POST", "/edit") => self.lesson_options(cid, &string(&b["lesson"]), &string(&b["action"])),
+            ("POST", "/apply") => {
+                if !b["plan"].is_object() {
+                    return Err(Error::bad("Choose one of the options first."));
+                }
+                let ask = cap(b.get("ask").map(text).unwrap_or_default().trim(), 600);
+                self.apply_plan(cid, &b["plan"], &ask, true)
+            }
+            ("PUT", "/prefs") => {
+                let refresh = truth(&b["refresh"]);
+                {
+                    let _guard = self.guard();
+                    let mut c = self.load(cid)?;
+                    c["prefs"] = clean_prefs(b);
+                    // New preferences: unfinished lessons get their videos picked again; the learner's own searches stay.
+                    if refresh {
+                        let done = c["state"]["done"].clone();
+                        for p in c["phases"].as_array_mut().into_iter().flatten() {
+                            for l in p["lessons"].as_array_mut().into_iter().flatten() {
+                                if truth(&done[string(&l["id"])]) {
+                                    continue;
+                                }
+                                let own = list(&l["videos"]).iter().filter(|v| truth(&v["searched"])).cloned().collect::<Vec<_>>();
+                                if own.is_empty() {
+                                    if let Some(o) = l.as_object_mut() {
+                                        o.remove("videos");
+                                        o.remove("novideos");
+                                    }
+                                }
+                            }
+                        }
+                    }
+                    self.save(&c)?;
+                }
+                if refresh {
+                    self.prefetch(cid.to_string());
+                }
+                Ok(json!({}))
             }
             ("POST", "/expand") => self.expand(cid, &b["lesson"]),
             ("POST", "/export") => self.export_course(&self.load(cid)?, truth(&b["template"])),
@@ -479,7 +539,7 @@ impl App {
                 if let Some(query) = b["query"].as_str() {
                     let query = cap(query.trim(), 200);
                     if query.is_empty() { return Err(Error::bad("Enter a video search query.")); }
-                    let found = self.query_videos(&query, &old.iter().map(|v| string(&v["id"])).collect::<Vec<_>>())?;
+                    let found = self.query_videos(&c, &query, &old.iter().map(|v| string(&v["id"])).collect::<Vec<_>>())?;
                     if found.is_empty() { return Err(Error::bad("No videos found.")); }
                     let _guard = self.guard();
                     let mut c = self.load(cid)?;
@@ -492,9 +552,14 @@ impl App {
                     }
                     l["videos"] = json!(videos);
                     self.save(&c)?;
+                    self.fetch_transcripts(videos.clone());
                     return Ok(json!(videos));
                 }
                 let fresh = truth(&b["fresh"]);
+                // An earlier search found nothing that fits; only "Search again" (fresh) tries once more.
+                if !fresh && old.is_empty() && truth(&l["novideos"]) {
+                    return Ok(json!([]));
+                }
                 let vids = if fresh || old.is_empty() {
                     self.find_videos(
                         &c,
@@ -508,12 +573,13 @@ impl App {
                 } else {
                     old.to_vec()
                 };
-                if !vids.is_empty() && (fresh || old.is_empty()) {
+                if !vids.is_empty() && fresh || old.is_empty() {
                     let _guard = self.guard();
                     let mut c = self.load(cid)?;
-                    lesson_mut(&mut c, &string(&l["id"]))?["videos"] = json!(vids);
+                    set_videos(lesson_mut(&mut c, &string(&l["id"]))?, vids.clone());
                     self.save(&c)?;
                 }
+                self.fetch_transcripts(vids.clone());
                 Ok(json!(if vids.is_empty() { old.to_vec() } else { vids }))
             }
             ("POST", "/practice") => {
@@ -552,7 +618,7 @@ impl App {
                 pieces.push_str(piece);
                 Ok(())
             };
-            self.tutor(&c, &l, msgs.clone(), &mut Some(&mut out))
+            self.tutor(&c, &merge(l.clone(), json!({"watching":body["video"]})), msgs.clone(), &mut Some(&mut out))
         };
         match result {
             Ok(text) => {

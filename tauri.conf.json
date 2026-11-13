@@ -18,11 +18,12 @@
         "height": 880,
         "minWidth": 900,
         "minHeight": 600,
-        "decorations": false
+        "decorations": false,
+        "maximized": true
       }
     ],
     "security": {
-      "csp": "default-src 'self'; script-src 'self'; style-src 'self' 'unsafe-inline'; connect-src ipc: http://ipc.localhost; img-src 'self' https: data:; frame-src https://www.youtube-nocookie.com https://www.youtube.com"
+      "csp": "default-src 'self'; frame-src http://127.0.0.1; script-src 'self'; style-src 'self' 'unsafe-inline'; connect-src ipc: http://ipc.localhost; img-src 'self' https: data:"
     }
   },
   "bundle": {
@@ -58,4 +59,6 @@
       }
     }
   }
+,
+  "plugins": {"updater": {"endpoints": ["https://github.com/MDHaarith/RoadMap-releases/releases/latest/download/latest.json"], "pubkey": "dW50cnVzdGVkIGNvbW1lbnQ6IG1pbmlzaWduIHB1YmxpYyBrZXk6IDZFODJEMzNFMDc4RDZCOTcKUldTWGE0MEhQdE9DYmkrNXkweWRXQm9YcE1WUmVUektHZDFQVktLcnNHQnNsaktlWDFjSTNSSlgK"}}
 }

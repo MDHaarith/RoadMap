@@ -7,7 +7,7 @@ export const appState = $state({
   course: null as Course | null,
   current: null as Lesson | null,
   screen: 'loading', error: '', routeVersion: 0,
-  library: [] as LibraryCourse[], config: {} as Settings,
+  openVideo: undefined as string | undefined, library: [] as LibraryCourse[], config: {} as Settings,
   review: { count: 0, questions: [] } as ReviewData,
   toast: '', ideasOpen: false, ideas: null as string[] | null,
   busyKey: '', adapting: false,
@@ -108,17 +108,29 @@ export async function flushIdeas() {
   try { if (appState.ideas) await api('PUT', 'api/ideas', { notes: $state.snapshot(appState.ideas) }); }
   catch (error) { toast("Couldn't save your ideas: " + message(error)); }
 }
-export async function adaptNow(loud: boolean, ask = '') {
-  if (appState.adapting) { if (ask) toast('Your roadmap is being updated. Try again in a moment.'); return false; }
+export async function applyPlan(plan: object, ask = '') {
+  const c = appState.course;
+  if (!c) throw new Error('No roadmap open.');
+  await flushSave();
+  const r = await api<{ course: Course; change: { note: string } }>('POST', 'api/courses/' + enc(c.id) + '/apply', { plan, ...(ask ? { ask } : {}) });
+  const id = appState.current?.id;
+  Object.assign(c, r.course);
+  if (id) {
+    appState.current = lessons(c).find(l => l.id === id) || null;
+    if (!appState.current) location.hash = href(c.id);
+  }
+  toast(r.change.note || 'Roadmap updated.');
+}
+export async function adaptNow(loud: boolean) {
+  if (appState.adapting) return false;
   const c = appState.course; if (!c) return false;
   appState.adapting = true;
   try {
-    const r = await api<{ course: Course; change: { added: string[]; dropped: string[]; note: string } }>('POST', 'api/courses/' + enc(c.id) + (ask ? '/revise' : '/adapt'), ask ? { ask } : undefined);
-    const changed = r.change.added.length || r.change.dropped.length;
-    if (changed) {
-      c.phases = r.course.phases; c.changes = r.course.changes; c.prompt = r.course.prompt;
-      if (appState.course === c && appState.current) appState.current = lessons(c).find(l => l.id === appState.current!.id) || appState.current;
-    }
+    await flushSave();
+    const r = await api<{ course: Course; change: { added: string[]; dropped: string[]; changed?: string[]; note: string } }>('POST', 'api/courses/' + enc(c.id) + '/adapt');
+    const changed = r.change.added.length || r.change.dropped.length || r.change.changed?.length;
+    Object.assign(c, r.course);
+    if (appState.current) appState.current = lessons(c).find(l => l.id === appState.current!.id) || appState.current;
     if (loud || changed) toast((changed ? 'Roadmap updated. ' : '') + (r.change.note || 'No changes needed.'));
     return true;
   } catch (error) { if (loud) toast(message(error)); return false; }
@@ -138,7 +150,7 @@ export async function ask(text: string) {
   const key = keyFor(c, l);
   appState.chats[key] ||= [];
   const msgs = appState.chats[key]; msgs.push({ role: 'user', content: text });
-  const body = { course: c.id, lesson: l.id, messages: $state.snapshot(msgs), stream: true };
+  const body = { course: c.id, lesson: l.id, messages: $state.snapshot(msgs), stream: true, ...(appState.openVideo ? { video: appState.openVideo } : {}) };
   appState.busyKey = key;
   msgs.push({ role: 'assistant', content: '' });
   const m = msgs[msgs.length - 1];

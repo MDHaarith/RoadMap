@@ -6,6 +6,7 @@
   import QuizQuestion from './QuizQuestion.svelte';
   import Exercise from './Exercise.svelte';
   import Icon from './Icon.svelte';
+  import Waiting from './Waiting.svelte';
   let { c, l }: { c: Course; l: Lesson } = $props();
   let key = $derived(keyFor(c, l)), p = $derived(l.practice), s = $derived(appState.sessions[key]);
   let view = $derived(appState.practiceViews[key] || 'quiz');
@@ -36,9 +37,9 @@
 </script>
 <div id="practice">
   {#if !p && (!appState.config.base || !appState.config.model)}<div class="note setup"><div><strong>No AI service connected</strong><p>Practice questions are written by an AI service. Add one in Settings.</p></div><a class="btn secondary" href="#/settings">Open Settings</a></div>
-  {:else if appState.practiceBusy[key]}<div class="loading" role="status"><h3>Preparing your practice.</h3><p>The AI is writing questions{(/python|code|program|javascript/i.test(c.prompt || '')) ? ' and an exercise' : ''} for this lesson. This often takes many seconds.</p><span class="small">Your notes and tutor are still available.</span></div>
-  {:else if appState.practiceErrors[key]}<div class="err" role="alert"><strong>Practice couldn’t load.</strong><p>{appState.practiceErrors[key]}</p><button id="retry-practice" class="btn secondary" onclick={() => loadPractice(!!appState.practiceFresh[key])}>Try again</button></div>
-  {:else if !p}<div class="practice-start"><h3>Put it to the test.</h3><p>A few questions to check what stuck. No rush, and no penalty for getting it wrong.</p><button class="btn" id="load-practice" onclick={() => loadPractice()}>Get practice <Icon name="arrow" /></button><p class="small" style="margin:16px 0 0">Created for this lesson. It can take a little while.</p></div>
+  {:else if appState.practiceBusy[key]}<Waiting title={`Writing questions${(/python|code|program|javascript/i.test(c.prompt || '')) ? ' and an exercise' : ''} for this lesson`} hint="this usually takes about 30 seconds"><p>Your notes and the tutor still work while you wait.</p></Waiting>
+  {:else if appState.practiceErrors[key]}<div class="err" role="alert"><strong>Practice couldn’t load.</strong><p>{appState.practiceErrors[key]}</p><button id="retry-practice" class="btn secondary" style="margin-top:8px" onclick={() => loadPractice(!!appState.practiceFresh[key])}>Try again</button></div>
+  {:else if !p}<div class="practice-start"><h3>Put it to the test.</h3><p>A few questions to check what stuck. No rush, and no penalty for getting it wrong.</p><button class="btn" id="load-practice" onclick={() => loadPractice()}>Get practice questions <Icon name="arrow" /></button><p class="small" style="margin:var(--s5) 0 0">Written for this lesson by the AI. Takes about 30 seconds.</p></div>
   {:else}
     {#if fails >= 3 || low}<div class="note stuck"><strong>Stuck on this one?</strong><p>{fails >= 3 ? `The tests have failed ${fails} times.` : 'That quiz went badly.'} Take a smaller step on the same idea, then come back.</p><div class="row"><button class="btn secondary" onclick={() => ask('I’m stuck on this lesson. Give me a smaller warm-up problem on the same idea, and take me through it one step at a time.')}>Ask the tutor for a smaller step</button><button class="btn secondary" id="stuck-adapt" disabled={appState.adapting} title="The AI reads your results and may add a short practice lesson before the next one" onclick={() => adaptNow(true)}>Add practice to my roadmap</button></div></div>{/if}
     {#if p.exercise}<div class="practice-nav" role="group" aria-label="Practice activities"><button aria-pressed={view === 'quiz'} onclick={() => appState.practiceViews[key] = 'quiz'}>Quiz{q ? ` · ${q.score}/${q.total}` : ''}</button><button aria-pressed={view === 'code'} onclick={() => appState.practiceViews[key] = 'code'}>Code exercise</button></div>{/if}

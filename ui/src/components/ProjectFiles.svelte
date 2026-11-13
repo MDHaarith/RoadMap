@@ -14,7 +14,6 @@
     finally { if (id === request) loading = false; }
   }
 </script>
-<p class="muted">Read these files from your project. Use your notes to trace what happens before you change anything.</p>
 <div class="file-list" role="group" aria-label="Lesson files">{#each l.files || [] as f, i}<button aria-pressed={selected === i} onclick={() => loadFile(i)}>{f}</button>{/each}</div>
 <div id="file-content">{#if loading}<p class="muted" role="status">Reading file…</p>{:else if error}<p class="err" role="alert">{error}</p>{:else}<p class="file-heading">{l.files?.[selected]}</p><!-- svelte-ignore a11y_no_noninteractive_tabindex -->
 <div class="code-viewer" tabindex="0" role="region" aria-label={`${l.files?.[selected]} — read-only code, scroll to read`}>{#if text}{#each text.split('\n') as line}<span class="code-line">{line || ' '}</span>{/each}{/if}</div>{/if}</div>

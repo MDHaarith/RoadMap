@@ -25,3 +25,10 @@ export async function chatStream(body: object, onPiece: (piece: string) => void)
     throw apiError(error);
   }
 }
+
+export function updateCommand<T>(command: 'update_status' | 'update_check' | 'update_install'): Promise<T> {
+  return invoke<T>(command);
+}
+export function updateState(state: string, manualError: boolean): string {
+  return state === 'error' && !manualError ? '' : state;
+}

@@ -200,8 +200,21 @@ pub(crate) fn process(
     cmd: &mut Command,
     secs: u64,
 ) -> std::io::Result<(i32, String, String, bool)> {
+    process_with(cmd, secs, Stdio::null())
+}
+// The same, with a standard input: Codex reads its prompt from a file there.
+pub(crate) fn process_with(
+    cmd: &mut Command,
+    secs: u64,
+    input: Stdio,
+) -> std::io::Result<(i32, String, String, bool)> {
+    #[cfg(windows)]
+    {
+        use std::os::windows::process::CommandExt;
+        cmd.creation_flags(0x08000000);
+    }
     let mut child = cmd
-        .stdin(Stdio::null())
+        .stdin(input)
         .stdout(Stdio::piped())
         .stderr(Stdio::piped())
         .spawn()?;

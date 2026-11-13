@@ -5,6 +5,7 @@
   import { href } from '../lib/format';
   import Icon from '../components/Icon.svelte';
   import LibraryCard from '../components/LibraryCard.svelte';
+  import Progress from '../components/Progress.svelte';
   import Creation from './Creation.svelte';
   let importing = $state(false);
   let alive = true;
@@ -18,12 +19,13 @@
   }
 </script>
 {#if !appState.library.length}<Creation empty />
-{:else}<div class="wrap narrow">
-  <div class="intro"><div><div class="kicker">Your next step is ready</div><h1>Today</h1></div><div class="row"><a class="btn secondary" href="#/mistakes">Mistakes</a><button id="import-roadmap" class="btn secondary" title="Open a roadmap file saved with Export" disabled={importing} onclick={importRoadmap}>Import</button><button id="add-roadmap" class="btn" onclick={() => appState.screen = 'creation'}><Icon name="plus" /> Add roadmap</button></div></div>
-  {#if continuing.length}<section class="today-board" aria-labelledby="continue-heading"><div class="today-heading"><h2 id="continue-heading">Continue</h2></div>{#each continuing as c, i}<div class:primary={i === 0} class="continue-row"><span class="step-number">{i + 1}</span><div><span class="small">{c.title}</span><h3>{c.next!.title}</h3><p>{c.done} of {c.total} lessons complete{i === 0 ? ' · Your most recent roadmap' : ''}</p></div><a class={i ? 'link' : 'btn'} href={href(c.id, c.next!.id)}>{i ? 'Resume' : 'Continue learning'} <Icon name="arrow" /></a></div>{/each}</section>{:else}<p class="nothing-due">No lessons waiting. Revisit a finished roadmap or start something new.</p>{/if}
-  {#if appState.review.count}<section class="review-entry"><div><h2>{appState.review.count} question{appState.review.count === 1 ? '' : 's'} to review today</h2><p>Bring back what you’ve learned, a question at a time.</p></div><a class="btn secondary" href="#/review">Start review <Icon name="arrow" /></a></section>{:else}<p class="nothing-due">Nothing due for review today.</p>{/if}
-  <div class="library-title"><h2>Your library</h2><span>{active.length} roadmap{active.length === 1 ? '' : 's'}</span></div>
+{:else}{@const first = continuing[0]}<div class="wrap home-workspace"><div class="today-column">
+  <div class="home-head"><h1>Today</h1></div>
+  {#if first}<section class="hero" aria-labelledby="continue-heading"><div class="kicker">Up next in {first.title}</div><h2 id="continue-heading">{first.next!.title}</h2><div class="hero-meta"><Progress n={first.done} total={first.total} /><span>{first.done} of {first.total} lessons complete</span></div><a class="btn big" href={href(first.id, first.next!.id)}>{first.done ? 'Continue learning' : 'Start the first lesson'} <Icon name="arrow" /></a></section>
+  {:else}<section class="hero hero-empty"><div class="kicker">All caught up</div><h2>No lessons waiting.</h2><p class="muted">Revisit a finished roadmap or start something new.</p><button class="btn big" onclick={() => appState.screen = 'creation'}><Icon name="plus" /> New roadmap</button></section>{/if}
+  <div class="side-actions">{#if appState.review.count}<a class="side-action" href="#/review"><Icon name="review" /><span class="grow"><b>{appState.review.count} question{appState.review.count === 1 ? '' : 's'} to review today</b><span>Bring back what you’ve learned, a question at a time.</span></span><Icon name="arrow" /></a>{:else}<div class="side-action"><Icon name="review" /><span class="grow"><b>Review</b><span>Nothing due for review today.</span></span></div>{/if}<a class="side-action" href="#/mistakes"><Icon name="Practise" /><span class="grow"><b>Mistakes notebook</b><span>Questions that tripped you up.</span></span><Icon name="arrow" /></a></div>
+  {#if continuing.length > 1}<div class="section-title"><h2>Also in progress</h2></div><nav class="resume-list" aria-label="Other roadmaps in progress">{#each continuing.slice(1) as c}<a class="resume-row" href={href(c.id, c.next!.id)}><span class="grow"><small>{c.title}</small><b>{c.next!.title}</b></span><Progress n={c.done} total={c.total} /><span class="count">{c.done} / {c.total}</span><Icon name="arrow" /></a>{/each}</nav>{/if}
+  </div><div class="library-column"><div class="section-title"><h2>Your library</h2><div class="row"><button id="import-roadmap" class="btn ghost sm" title="Open a roadmap file saved with Export" disabled={importing} onclick={importRoadmap}>{importing ? 'Importing…' : 'Import'}</button><button id="add-roadmap" class="btn secondary sm" onclick={() => appState.screen = 'creation'}><Icon name="plus" /> New roadmap</button></div><span>{active.length} roadmap{active.length === 1 ? '' : 's'}</span></div>
   {#if active.length}<div class="cards">{#each active as c (c.id)}<LibraryCard course={c} />{/each}</div>{:else}<p class="muted">Your roadmaps are paused. Resume one below when you’re ready.</p>{/if}
-  {#if paused.length}<div class="library-title"><h2>Paused</h2><span>Ready whenever you are</span></div><div class="cards paused-cards">{#each paused as c (c.id)}<LibraryCard course={c} />{/each}</div>{/if}
-  <p class="library-caption"><Icon name="Do it yourself" /> Made for learning by doing. Start small. Keep going.</p>
-</div>{/if}
+  {#if paused.length}<div class="section-title"><h2>Paused</h2><span>Ready whenever you are</span></div><div class="cards paused-cards">{#each paused as c (c.id)}<LibraryCard course={c} />{/each}</div>{/if}
+</div></div>{/if}
