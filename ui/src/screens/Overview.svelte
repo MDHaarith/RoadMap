@@ -4,7 +4,10 @@
   import { appState, save, toast, message, adaptNow, expandPhase, flushSave } from '../lib/state.svelte';
   import { lessons, nextLesson, status, locked, stageOpen, stageLessons } from '../lib/progress';
   import { enc, href } from '../lib/format';
-  import type { Course } from '../lib/types';
+  import type { Course, PlanPreview } from '../lib/types';
+  import PlanOptions from '../components/PlanOptions.svelte';
+  import VideoPrefs from '../components/VideoPrefs.svelte';
+  import LessonActions from '../components/LessonActions.svelte';
   import Icon from '../components/Icon.svelte';
   import Progress from '../components/Progress.svelte';
   import ExamRow from '../components/ExamRow.svelte';
@@ -15,6 +18,7 @@
   let found = $state<Record<string, boolean> | false | undefined>(undefined);
   let reviseOpen = $state(false), ask = $state(''), menuOpen = $state(false), menuEl = $state<HTMLDetailsElement>();
   let bulk = $state<{ stop: boolean; text: string; error: string } | null>(null);
+  let preview = $state<PlanPreview>(), revising = $state(false), prefsOpen = $state(false), originalAsk = $state('');
   let alive = true;
   onMount(() => {
     let timer: ReturnType<typeof setTimeout>;
@@ -48,7 +52,9 @@
   }
   async function revise() {
     if (!ask.trim()) return;
-    if (await adaptNow(true, ask.trim())) { reviseOpen = false; ask = ''; }
+    revising = true; preview = undefined; originalAsk = ask.trim();
+    try { await flushSave(); preview = await api<PlanPreview>('POST', 'api/courses/' + enc(c.id) + '/revise', { ask: originalAsk }); }
+    catch (error) { toast(message(error)); } finally { revising = false; }
   }
   async function exportCourse(kind: string) {
     try {
@@ -90,6 +96,7 @@
   <div class="overview-head"><a class="back-map" href="#/"><Icon name="back" /> Your roadmaps</a>
     <div class="head-row"><h1>{c.title}</h1>
       <details class="menu" bind:this={menuEl} bind:open={menuOpen}><summary class="btn secondary sm" aria-label="More roadmap actions"><Icon name="more" /> More</summary><div class="menu-list">
+        <button onclick={() => act(() => { prefsOpen = !prefsOpen; })}>Video preferences for this roadmap</button>
         <button id="adapt" disabled={appState.adapting} onclick={() => act(() => adaptNow(true))}>{appState.adapting ? 'Reading your results…' : 'Adjust to my progress'}<small>Add practice or drop lessons, based on your quiz and exercise results</small></button>
         <button id="revise-open" aria-expanded={reviseOpen} aria-controls="revise" onclick={() => act(async () => { reviseOpen = !reviseOpen; await tick(); if (reviseOpen) document.getElementById('ask')?.focus(); })}>Change my roadmap<small>Take the lessons you have not started somewhere else</small></button>
         {#if ls.some(l => l.stub) && !bulk?.text}<button id="write-all" onclick={() => act(writeEveryLesson)}>Write every lesson now<small>Writes the remaining phases now. Uses many AI tokens.</small></button>{/if}
@@ -110,16 +117,21 @@
   <div class="overview-main">
   {#if appState.adapting}<Waiting inline title="Reading your results and updating the roadmap. This can take a minute." />{/if}
   {#if bulk?.text || bulk?.error}<div class="row" style="margin-bottom:var(--s5)">{#if bulk?.text}{#key bulk.text}<Waiting inline title={`${bulk.text}. Each phase takes about a minute.`} />{/key}<button class="btn secondary sm" id="stop-writing" disabled={bulk.stop} onclick={() => { if (bulk) bulk.stop = true; }}>{bulk.stop ? 'Stopping after this phase…' : 'Stop'}</button>{/if}{#if bulk?.error}<p class="err">{bulk.error}</p>{/if}</div>{/if}
-  <form id="revise" class="note" hidden={!reviseOpen} onsubmit={e => { e.preventDefault(); void revise(); }}><strong>Change my roadmap</strong><p>Say what should change in the lessons you have not started. Your progress stays.</p><div class="own"><input id="ask" required maxlength="600" aria-label="What should change in the lessons you have not started?" placeholder="For example: show me how this is used in industry, with real applications" bind:value={ask} /><button class="btn" disabled={appState.adapting}>{appState.adapting ? 'Changing your roadmap…' : 'Change it'} <Icon name="arrow" /></button></div><button type="button" class="link" style="margin-top:8px;font-size:var(--t-sm)" onclick={() => reviseOpen = false}>Cancel</button></form>
+  {#if prefsOpen}<section class="note" id="video-prefs"><h2>Video preferences for this roadmap</h2><VideoPrefs initial={c.prefs} course={c} /></section>{/if}
+  {#if revising}<Waiting title="Preparing roadmap options" hint="this can take about a minute" />{/if}
+  {#if preview}<PlanOptions {preview} ask={originalAsk} cancel={() => preview = undefined} applied={() => { preview = undefined; reviseOpen = false; ask = ''; }} />{/if}
+  <form id="revise" class="note" hidden={!reviseOpen} onsubmit={e => { e.preventDefault(); void revise(); }}><strong>Change my roadmap</strong><p>Say what should change in the lessons you have not started. Your progress stays.</p><div class="own"><input id="ask" required maxlength="600" aria-label="What should change in the lessons you have not started?" placeholder="For example: show me how this is used in industry, with real applications" bind:value={ask} /><button class="btn" disabled={revising}>{revising ? 'Preparing options…' : 'Preview changes'} <Icon name="arrow" /></button></div><button type="button" class="link" style="margin-top:8px;font-size:var(--t-sm)" onclick={() => reviseOpen = false}>Cancel</button></form>
   <div id="video-status">{#if pending}<p class="video-status"><Icon name="Watch" /> Videos may still be arriving for {pending} of {ls.length} lessons. Open any lesson to search again if needed.</p>{/if}</div>
-  {#if c.changes?.length}{@const x = c.changes[c.changes.length - 1]}<div class="note change"><strong>Roadmap updated</strong><p>{x.note}</p>{#if x.added.length}<p class="small">Added: {x.added.join(', ')}</p>{/if}{#if x.dropped.length}<p class="small">Removed: {x.dropped.join(', ')}</p>{/if}</div>{/if}
+  {#if c.changes?.length}{@const x = c.changes[c.changes.length - 1]}<div class="note change"><strong>Roadmap updated</strong><p>{x.note}</p>{#if x.added.length}<p class="small">Added: {x.added.join(', ')}</p>{/if}{#if x.dropped.length}<p class="small">Removed: {x.dropped.join(', ')}</p>{/if}{#if x.changed?.length}<p class="small">Rewritten: {x.changed.join(', ')}</p>{/if}</div>{/if}
   {#if c.needs?.length}<details class="needs" open={!n}><summary>Before you start: {c.needs.length} thing{c.needs.length === 1 ? '' : 's'} to have ready</summary><ul id="needs">{#each c.needs as x, i}<li><label><input type="checkbox" checked={!!c.state.have?.[i]} onchange={e => { if (e.currentTarget.checked) (c.state.have ||= {})[i] = true; else delete c.state.have?.[i]; save(c); }} /><span><b>{x.name}</b>{#if x.why}<small>{x.why}</small>{/if}</span></label>{#if x.kind === 'tool' && x.command && found !== false}<span class="tag" class:ok={found?.[x.command]}>{!found ? 'Checking…' : found[x.command] ? 'Installed' : 'Not found on this computer'}</span>{/if}</li>{/each}</ul></details>{/if}
   <section class="route-board" aria-labelledby="lessons-heading"><div class="route-heading"><h2 id="lessons-heading">Lessons</h2><span class="small">{c.phases.length} phases</span></div>
     {#each c.phases as p, pi}
       {#if c.stages && p.stage !== undefined && c.phases[pi - 1]?.stage !== p.stage}{@const st = c.stages[p.stage]}{@const sl = stageLessons(c, p.stage)}<button type="button" class="stage-head" aria-expanded={stageOpen(c, p.stage)} onclick={() => toggleStage(p.stage!)}><span><span class="stage-label">Stage {p.stage + 1}</span><strong>{st.title}</strong>{#if st.blurb}<span class="blurb">{st.blurb}</span>{/if}</span><span class="stage-count">{doneIn(sl)} / {sl.length} lessons <Icon name="chevron" /></span></button>{/if}
-      <section class="route-phase" hidden={!!c.stages && p.stage !== undefined && !stageOpen(c, p.stage)} id={`phase-${pi + 1}`}><div class="phase-flag"><h3><span>Phase {pi + 1}</span>{p.title}</h3><b class="small">{doneIn(p.lessons)} / {p.lessons.length}{p.lessons.every(l => c.state.done[l.id]) ? ' · Complete' : ''}</b></div>{#if p.blurb}<p class="phase-blurb">{p.blurb}</p>{/if}<div class="lesson-list">{#each p.lessons as l, li}{@const st = rowState(l)}<a class={`lesson-row ${st}`} href={href(c.id, l.id)} aria-current={st === 'next' ? 'step' : undefined}><span class="state" aria-hidden="true">{#if st === 'done'}<Icon name="check" />{:else if st === 'locked'}<Icon name="lock" />{/if}</span><span class="num">{pi + 1}.{li + 1}</span><span class="stop-title">{l.title}{#if l.added} <span class="tag accent">Added for you</span>{/if}</span><span class="stop-meta">{META[st]}</span></a>{/each}</div></section>
+      <section class="route-phase" hidden={!!c.stages && p.stage !== undefined && !stageOpen(c, p.stage)} id={`phase-${pi + 1}`}><div class="phase-flag"><h3><span>Phase {pi + 1}</span>{p.title}</h3><b class="small">{doneIn(p.lessons)} / {p.lessons.length}{p.lessons.every(l => c.state.done[l.id]) ? ' · Complete' : ''}</b></div>{#if p.blurb}<p class="phase-blurb">{p.blurb}</p>{/if}<div class="lesson-list">{#each p.lessons as l, li}{@const st = rowState(l)}<div class="lesson-action-row"><a class={`lesson-row ${st}`} href={href(c.id, l.id)} aria-current={st === 'next' ? 'step' : undefined}><span class="state" aria-hidden="true">{#if st === 'done'}<Icon name="check" />{:else if st === 'locked'}<Icon name="lock" />{/if}</span><span class="num">{pi + 1}.{li + 1}</span><span class="stop-title">{l.title}{#if l.added} <span class="tag accent">Added for you</span>{/if}</span><span class="stop-meta">{META[st]}</span></a><LessonActions {c} {l} compact /></div>{/each}</div></section>
       {#if c.stages && p.stage !== undefined && c.phases[pi + 1]?.stage !== p.stage && stageOpen(c, p.stage)}<ExamRow {c} stage={p.stage} />{/if}
     {/each}
   </section>
   </div>
 </div>
+
+<style>.lesson-action-row{display:flex;align-items:center;flex-wrap:wrap;gap:6px}.lesson-action-row > :global(a){flex:1;min-width:0}</style>

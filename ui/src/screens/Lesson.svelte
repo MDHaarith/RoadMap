@@ -4,6 +4,7 @@
   import { lessons, checked, passed, locked, stageLessons, examPool } from '../lib/progress';
   import { href, enc } from '../lib/format';
   import type { Course, Lesson } from '../lib/types';
+  import LessonActions from '../components/LessonActions.svelte';
   import Icon from '../components/Icon.svelte';
   import Formatted from '../components/Formatted.svelte';
     import Videos from '../components/Videos.svelte';
@@ -80,7 +81,7 @@
 {:else}{@const nextL = ls[i + 1]}<div class="lesson-layout">
   <article class="lesson-article">
     <div class="lesson-crumb"><a href={href(c.id)}><Icon name="back" /> {c.title}</a><span aria-hidden="true">·</span><span>Phase {pn + 1}: {c.phases[pn].title}</span><span aria-hidden="true">·</span><span>Lesson {i + 1} of {ls.length}</span></div>
-    <h1 class="lesson-title">{l.title}</h1><p class="goal"><Formatted text={l.goal} /></p><span id="completed" class="tag ok" hidden={!c.state.done[l.id]}><Icon name="check" /> Lesson complete</span>
+    <div class="row between"><h1 class="lesson-title">{l.title}</h1><LessonActions {c} {l} /></div><p class="goal"><Formatted text={l.goal} /></p><span id="completed" class="tag ok" hidden={!c.state.done[l.id]}><Icon name="check" /> Lesson complete</span>
     <nav class="lesson-steps" id="lesson-rail" aria-label="Lesson steps">{#each steps as s, j}<button aria-current={step === s.id ? 'step' : undefined} class:visited={appState.visited[key]?.includes(s.id)} title={s.title} onclick={() => showStep(s.id)}><span class="step-number">{j + 1}</span><span>{s.short}</span></button>{/each}</nav>
     {#key step}<div id="lesson-content" class="lesson-content"><div class="step-heading"><span class="small">Step {si + 1} of {steps.length}</span><h2 id="step-title" tabindex="-1"><Icon name={steps[si].title} /> {steps[si].title}</h2><p><Formatted text={steps[si].what} /></p></div><div class="step-body">
       {#if step === 'watch'}<Videos {c} {l} {seek} />

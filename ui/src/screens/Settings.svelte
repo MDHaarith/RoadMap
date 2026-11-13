@@ -7,6 +7,7 @@
   import { updates, checkUpdate } from '../lib/updates.svelte';
   import UpdateStatus from '../components/UpdateStatus.svelte';
   import Usage from '../components/Usage.svelte';
+  import VideoPrefs from '../components/VideoPrefs.svelte';
   import Icon from '../components/Icon.svelte';
   let config = $state<Settings>(), error = $state(''), key = $state(''), busy = $state(false), saved = $state('');
   // What is saved now (the status line), and whether the other-service form is open.
@@ -30,5 +31,6 @@
       <form id="settings" onsubmit={e => { e.preventDefault(); void saveSettings(); }}><p class="small">Any OpenAI-compatible service works. Its key stays on this computer.</p><p class="small quick-label">Quick fill</p><div class="examples">{#each [['codex', 'Codex (ChatGPT sign-in)'], ['gemini', 'Google Gemini'], ['openrouter', 'OpenRouter'], ['ollama', 'Ollama on this computer']] as [k, n]}<button type="button" onclick={() => { config!.base = bases[k]; if (k === 'codex') config!.model = 'default'; }}>{n}</button>{/each}</div><label for="base">Base URL</label><input type="text" id="base" required bind:value={config.base} placeholder="Your service’s API base URL, or codex" /><label for="model">Model name</label><input id="model" list="service-models" onfocus={() => void loadModels()} required bind:value={config.model} placeholder="With Codex, default means its own model" /><datalist id="service-models">{#each models.items as m}<option value={m.id}>{modelName(m.id)}</option>{/each}</datalist>{#if models.error}<p class="small">{models.error}</p>{/if}<label for="small">Small model (optional)</label><input id="small" bind:value={config.small} placeholder="Leave empty to use the model above" /><p class="small field-note">A cheaper, faster model for quizzes, video picks, marking and placement questions. Roadmaps and the tutor keep the main model.</p><label for="key">API key</label><input id="key" type="password" autocomplete="off" bind:value={key} placeholder={config.key_set ? 'Saved. Leave empty to keep it.' : 'Not needed for Codex or a local Ollama model'} /><p class="save row"><button class="btn" disabled={busy}>Save settings</button><span id="saved" role="status">{saved}</span></p></form>
     </details>
   </div></section>
+  <section class="settings-layout" id="video-prefs"><div><h2>Videos</h2><p>Default preferences for video picks.</p></div><VideoPrefs initial={config.videos} /></section>
   <section class="settings-layout"><div><h2>Usage</h2><p>What this app has sent to and received from your AI service.</p></div><Usage usage={config.usage} /></section>{/if}
 </div>

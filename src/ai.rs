@@ -680,6 +680,10 @@ impl App {
     }
     // What is said in a video, as (second, text) rows, kept on disk after the first read.
     fn transcript(&self, id: &str) -> Result<Vec<(i64, String)>> {
+        self.transcript_with(id, None)
+    }
+    // `meta` is the video's yt-dlp metadata when the caller already has it, which saves a second fetch.
+    fn transcript_with(&self, id: &str, meta: Option<&Value>) -> Result<Vec<(i64, String)>> {
         if !matches(r"^[\p{L}\p{N}_-]{11}$", id) {
             return Err(Error::missing());
         }
@@ -693,11 +697,15 @@ impl App {
         {
             return Ok(v);
         }
-        let d = self.yt(&[
-            "--skip-download".into(),
-            format!("https://www.youtube.com/watch?v={id}"),
-        ])?;
-        let Some(url) = caption_url(&d) else {
+        let fetched;
+        let d = match meta {
+            Some(d) => d,
+            None => {
+                fetched = self.yt(&["--skip-download".into(), format!("https://www.youtube.com/watch?v={id}")])?;
+                &fetched
+            }
+        };
+        let Some(url) = caption_url(d) else {
             fs::create_dir_all(self.data.join("transcripts"))?;
             fs::write(&f, b"[]")?;
             return Ok(vec![]);
@@ -754,7 +762,21 @@ impl App {
             }
         ))
     }
-    fn search_videos(&self, query: &str, skip: &[String]) -> Result<Vec<Value>> {
+    /// The learner's video preferences: Settings, with this roadmap's own choices on top.
+    pub(crate) fn video_prefs(&self, c: &Value) -> Value {
+        let mut p = clean_prefs(&self.config()["videos"]);
+        let own = clean_prefs(&c["prefs"]);
+        for (k, v) in own.as_object().into_iter().flatten() {
+            if truth(v) {
+                p[k] = v.clone();
+            }
+        }
+        p
+    }
+    fn search_videos(&self, query: &str, skip: &[String], p: &Value) -> Result<Vec<Value>> {
+        let lang = string(&p["lang"]);
+        // YouTube has no language filter; the language's name in the query steers results toward it.
+        let query = if lang.is_empty() || lang.eq_ignore_ascii_case("english") { query.to_string() } else { format!("{query} {lang}") };
         let d = self.yt(&["--flat-playlist".into(), format!("ytsearch20:{query}")])?;
         let mut out = vec![];
         for e in list(&d["entries"]) {
@@ -774,9 +796,36 @@ impl App {
             out.push(json!({"id":id,"title":cap(&string(&e["title"]),200),"channel":cap(&if truth(&e["channel"]){text(&e["channel"])}else{string(&e["uploader"])},100),"duration":duration,"views":e["view_count"].as_f64().unwrap_or(0.) as i64,"about":cap(&string(&e["description"]).split_whitespace().collect::<Vec<_>>().join(" "),200)}));
         }
         // Obscure uploads never reach the picker: 5,000 views, or MIN_VIEWS when a niche topic leaves fewer than three.
+        // Hidden gems lowers it to GEM_VIEWS and leaves quality to the AI.
         let known = |v: &Value, n: i64| v["views"].as_i64().unwrap_or(0) >= n;
-        let floor = if out.iter().filter(|v| known(v, 5000)).count() >= 3 { 5000 } else { MIN_VIEWS };
+        let floor = if p["style"] == "gems" {
+            GEM_VIEWS
+        } else if out.iter().filter(|v| known(v, 5000)).count() >= 3 {
+            5000
+        } else {
+            MIN_VIEWS
+        };
         out.retain(|v| known(v, floor));
+        // Length preference in minutes; skipped when it would leave fewer than three (unknown length passes).
+        let (lo, hi) = match string(&p["length"]).as_str() {
+            "short" => (0, 20),
+            "medium" => (10, 60),
+            "long" => (30, i64::MAX),
+            // No preference: a full, clear explanation rarely fits in under ten minutes.
+            _ => (10, i64::MAX),
+        };
+        let fits = |v: &Value| {
+            let m = v["duration"].as_i64().unwrap_or(0) / 60;
+            m == 0 || (lo..=hi).contains(&m)
+        };
+        if out.iter().filter(|v| fits(v)).count() >= 3 {
+            out.retain(fits);
+        }
+        // Recency and depth need the upload year and chapters, which flat search results lack.
+        if p["recent"] == "yes" || p["style"] == "depth" {
+            out.truncate(12);
+            out = self.video_details(out);
+        }
         Ok(out)
     }
     fn pick_videos(
@@ -785,6 +834,7 @@ impl App {
         l: &Value,
         vids: &[Value],
         query: &str,
+        p: &Value,
     ) -> Result<(Vec<Value>, String)> {
         let mut rows = vec![
             format!("Course: {}", text(&c["title"])),
@@ -793,11 +843,19 @@ impl App {
             format!("Goal: {}", text(&l["goal"])),
             format!("Concepts: {}", joined(&l["concepts"])),
             format!("The search that was used: {query}"),
+            format!("The learner's video preferences: {}", prefs_text(p)),
             "Results:".into(),
         ];
         rows.extend(vids.iter().enumerate().map(|(i, v)| {
+            let mut extra = String::new();
+            if let Some(y) = v["year"].as_i64() {
+                extra += &format!(" | uploaded {y}");
+            }
+            if v["chapters"].is_array() {
+                extra += &format!(" | {} chapters", list(&v["chapters"]).len());
+            }
             format!(
-                "{i}. {} | {} | {} min | {} views | {}",
+                "{i}. {} | {} | {} min | {} views{extra} | {}",
                 text(&v["title"]),
                 text(&v["channel"]),
                 v["duration"].as_i64().unwrap_or(0) / 60,
@@ -816,52 +874,187 @@ impl App {
             {
                 if used.insert(i) {
                     let mut v = vids[i].clone();
-                    v["why"] = json!(cap(&string(&k["why"]), 300));
+                    // A reason marks the video as AI-picked; see `unpicked`.
+                    let why = cap(&string(&k["why"]), 300);
+                    v["why"] = json!(if why.trim().is_empty() { "Chosen for this lesson.".into() } else { why });
+                    if v["views"].as_i64().is_some_and(|n| n < MIN_VIEWS) {
+                        v["gem"] = json!(true);
+                    }
+                    if let Some(o) = v.as_object_mut() {
+                        o.remove("year");
+                    }
                     out.push(v);
                 }
             }
         }
-        out.truncate(4);
+        out.truncate(8);
         Ok((out, cap(&string(&d["query"]), 200)))
     }
     pub(crate) fn find_videos(&self, c: &Value, l: &Value, skip: &[String]) -> Result<Vec<Value>> {
         // Lessons saved before the query fix can have an empty one; yt-dlp rejects an empty search.
-        let query = if truth(&l["query"]) { string(&l["query"]) } else { string(&l["title"]) };
-        let vids = self.search_videos(&query, skip)?;
-        let pick = || -> Result<Vec<Value>> {
-            let (mut picks, better) = if vids.is_empty() {
-                (vec![], String::new())
-            } else {
-                self.pick_videos(c, l, &vids, &query)?
-            };
-            if picks.len() < 2 && !better.is_empty() && better != query {
-                let more = self
-                    .search_videos(&better, skip)?
-                    .into_iter()
-                    .filter(|v| !vids.iter().any(|x| x["id"] == v["id"]))
-                    .collect::<Vec<_>>();
-                if !more.is_empty() {
-                    picks.extend(self.pick_videos(c, l, &more, &better)?.0);
-                }
-                picks.truncate(4);
-            }
-            Ok(picks)
+        let pr = self.video_prefs(c);
+        let title = string(&l["title"]);
+        let mut query = strip_tail(&if truth(&l["query"]) { string(&l["query"]) } else { title.clone() }, &common_tail(c));
+        let mut vids = self.search_videos(&query, skip, &pr)?;
+        if vids.is_empty() && !title.is_empty() && title != query {
+            query = title;
+            vids = self.search_videos(&query, skip, &pr)?;
+        }
+        if vids.is_empty() {
+            return Ok(vec![]);
+        }
+        // One retry: a model call that fails once usually works the second time.
+        let Ok((mut picks, better)) = self
+            .pick_videos(c, l, &vids, &query, &pr)
+            .or_else(|_| self.pick_videos(c, l, &vids, &query, &pr))
+        else {
+            // No AI: the top raw results, saved without a reason so a later open picks again (see `unpicked`).
+            return self.video_chapters(vids.into_iter().take(4).collect());
         };
-        let mut picks = pick().unwrap_or_default();
+        // Fewer than two fits: up to two more searches with the AI's better words. An empty result is kept, never padded with misfits.
+        let mut seen = vids;
+        let mut tried = vec![query];
+        let mut better = better;
+        for _ in 0..2 {
+            if picks.len() >= 2 || better.is_empty() || tried.contains(&better) {
+                break;
+            }
+            let more = self
+                .search_videos(&better, skip, &pr)
+                .unwrap_or_default()
+                .into_iter()
+                .filter(|v| !seen.iter().any(|x| x["id"] == v["id"]))
+                .collect::<Vec<_>>();
+            tried.push(std::mem::take(&mut better));
+            if more.is_empty() {
+                break;
+            }
+            // Every search so far, so the next suggestion differs from all of them.
+            let Ok((p, next)) = self.pick_videos(c, l, &more, &tried.join("; "), &pr) else { break };
+            picks.extend(p);
+            seen.extend(more);
+            better = next;
+        }
+        picks.truncate(8);
+        // Titles undersell good videos: give the transcript check eight to judge, topped up in search order.
+        for v in seen {
+            if picks.len() >= 8 {
+                break;
+            }
+            if !picks.iter().any(|x| x["id"] == v["id"]) {
+                picks.push(v);
+            }
+        }
+        Ok(self.check_videos(c, l, picks, &pr))
+    }
+    /// The shortlist judged by what is said in each video: its transcript decides, not its title.
+    /// Keeps up to five that pass, those covering the concepts between them first, each with a reason, what it covers and the second where the useful part starts.
+    fn check_videos(&self, c: &Value, l: &Value, picks: Vec<Value>, p: &Value) -> Vec<Value> {
         if picks.is_empty() {
-            picks = vids.into_iter().take(4).collect();
+            return picks;
+        }
+        // Metadata in parallel (chapters, caption address); captions one at a time, as `transcript` requires.
+        let metas = std::thread::scope(|scope| {
+            let handles = picks
+                .iter()
+                .map(|v| scope.spawn(move || self.yt(&["--skip-download".into(), format!("https://www.youtube.com/watch?v={}", text(&v["id"]))]).ok()))
+                .collect::<Vec<_>>();
+            handles.into_iter().map(|h| h.join().unwrap()).collect::<Vec<_>>()
+        });
+        let mut picks = picks;
+        // What the videos must cover between them; a lesson without concepts has its goal as the one thing.
+        let mut concepts = strs(&l["concepts"], 8);
+        if concepts.is_empty() {
+            concepts.push(if truth(&l["goal"]) { string(&l["goal"]) } else { string(&l["title"]) });
+        }
+        let mut rows = vec![
+            format!("Course: {}", text(&c["title"])),
+            format!("Level: {}", level(c)),
+            format!("Lesson: {}", text(&l["title"])),
+            format!("Goal: {}", text(&l["goal"])),
+            format!("Concepts (numbered for covers): {}", concepts.iter().enumerate().map(|(i, k)| format!("{i}. {k}")).collect::<Vec<_>>().join("; ")),
+            format!("The learner's video preferences: {}", prefs_text(p)),
+        ];
+        for (i, (v, d)) in picks.iter_mut().zip(&metas).enumerate() {
+            if let Some(d) = d {
+                v["chapters"] = chapters_of(d);
+            }
+            let said = self.transcript_with(&string(&v["id"]), d.as_ref()).unwrap_or_default();
+            rows.push(format!(
+                "\n--- Video {i}: {} | {} | {} min | {} views\nChapters: {}\nTranscript: {}",
+                text(&v["title"]),
+                text(&v["channel"]),
+                v["duration"].as_i64().unwrap_or(0) / 60,
+                text(&v["views"]),
+                list(&v["chapters"]).iter().map(|m| format!("{} {}", clock(m["t"].as_i64().unwrap_or(0)), text(&m["title"]))).collect::<Vec<_>>().join("; "),
+                if said.is_empty() { "none available".into() } else { transcript_sample(&said) }
+            ));
+        }
+        let checked = self
+            .llm(
+                messages(VIDEO_CHECK_PROMPT, rows.join("\n")),
+                "videos",
+                obj(json!({"picks":arr(obj(json!({"i":{"type":"integer"},"why":s(),"start":{"type":"integer"},"covers":arr(json!({"type":"integer"}))})))})),
+            )
+            .and_then(|r| parse(&r, "a video choice"));
+        // The check failed: the title-based shortlist stands.
+        let Ok(d) = checked else {
+            picks.truncate(4);
+            return picks;
+        };
+        // Coverage decides the order: the fewest videos that teach every concept come first, then the other passing ones in the check's order.
+        let mut used = HashSet::new();
+        let ranked = list(&d["picks"])
+            .iter()
+            .filter_map(|k| {
+                let i = k["i"].as_u64().map(|i| i as usize).filter(|i| *i < picks.len() && used.insert(*i))?;
+                let covers = list(&k["covers"]).iter().filter_map(|n| n.as_u64().map(|n| n as usize)).filter(|n| *n < concepts.len()).collect::<HashSet<_>>();
+                Some((k, i, covers))
+            })
+            .collect::<Vec<_>>();
+        let mut out = vec![];
+        let mut keep = min_cover(&ranked.iter().map(|r| r.2.clone()).collect::<Vec<_>>());
+        // Passed but mapped to no concept (concepts too specific for any video): the top pick still teaches the lesson.
+        if keep.is_empty() && !ranked.is_empty() {
+            keep.push(0);
+        }
+        keep.extend((0..ranked.len()).filter(|j| !keep.contains(j)).collect::<Vec<_>>());
+        keep.truncate(5);
+        for j in keep {
+            let (k, i, covers) = &ranked[j];
+            let mut v = picks[*i].clone();
+            let mut covers = covers.iter().copied().collect::<Vec<_>>();
+            covers.sort();
+            v["covers"] = json!(covers.iter().map(|n| cap(&concepts[*n], 120)).collect::<Vec<_>>());
+            let why = cap(&string(&k["why"]), 300);
+            if !why.trim().is_empty() {
+                v["why"] = json!(why);
+            }
+            let start = k["start"].as_i64().unwrap_or(0);
+            // A start in the last tenth, or past the end, is a mistake: play from the beginning.
+            let len = v["duration"].as_i64().unwrap_or(0);
+            if start > 0 && (len == 0 || start < len * 9 / 10) {
+                v["start"] = json!(start);
+            }
+            out.push(v);
+        }
+        out
+    }
+    pub(crate) fn query_videos(&self, c: &Value, query: &str, skip: &[String]) -> Result<Vec<Value>> {
+        let mut picks = self.search_videos(query, skip, &self.video_prefs(c))?;
+        picks.truncate(4);
+        for v in &mut picks {
+            v["searched"] = json!(true);
+            if let Some(o) = v.as_object_mut() {
+                o.remove("year");
+            }
         }
         self.video_chapters(picks)
     }
-    pub(crate) fn query_videos(&self, query: &str, skip: &[String]) -> Result<Vec<Value>> {
-        let mut picks = self.search_videos(query, skip)?;
-        picks.truncate(4);
-        for v in &mut picks { v["searched"] = json!(true); }
-        self.video_chapters(picks)
-    }
-    fn video_chapters(&self, picks: Vec<Value>) -> Result<Vec<Value>> {
+    // Upload year and chapters for search results, fetched in parallel.
+    fn video_details(&self, vids: Vec<Value>) -> Vec<Value> {
         std::thread::scope(|scope| {
-            let handles = picks
+            let handles = vids
                 .into_iter()
                 .map(|mut v| {
                     scope.spawn(move || {
@@ -869,13 +1062,33 @@ impl App {
                             "--skip-download".into(),
                             format!("https://www.youtube.com/watch?v={}", text(&v["id"])),
                         ]) {
-                            v["chapters"] = json!(list(&d["chapters"])
-                                .iter()
-                                .filter_map(|m| m["start_time"].as_f64().map(
-                                    |n| json!({"t":n as i64,"title":cap(&string(&m["title"]),120)})
-                                ))
-                                .take(40)
-                                .collect::<Vec<_>>());
+                            v["chapters"] = chapters_of(&d);
+                            if let Some(y) = string(&d["upload_date"]).get(..4).and_then(|y| y.parse::<i64>().ok()) {
+                                v["year"] = json!(y);
+                            }
+                        }
+                        v
+                    })
+                })
+                .collect::<Vec<_>>();
+            handles.into_iter().map(|h| h.join().unwrap()).collect()
+        })
+    }
+    fn video_chapters(&self, picks: Vec<Value>) -> Result<Vec<Value>> {
+        std::thread::scope(|scope| {
+            let handles = picks
+                .into_iter()
+                .map(|mut v| {
+                    scope.spawn(move || {
+                        // Already fetched by video_details.
+                        if v["chapters"].is_array() {
+                            return v;
+                        }
+                        if let Ok(d) = self.yt(&[
+                            "--skip-download".into(),
+                            format!("https://www.youtube.com/watch?v={}", text(&v["id"])),
+                        ]) {
+                            v["chapters"] = chapters_of(&d);
                         }
                         v
                     })
@@ -901,8 +1114,10 @@ impl App {
         let mut c = self.load(cid)?;
         // Roadmaps saved before the view floor can hold obscure picks: drop them so those lessons are searched again.
         drop_obscure(&mut c);
+        // Lessons left with raw results by an AI failure are picked again once per app run.
+        let retry = self.repicked.lock().unwrap_or_else(|e| e.into_inner()).insert(cid.to_string());
         let ls = lessons(&c)
-            .filter(|l| !truth(&l["videos"]) && !truth(&l["stub"]))
+            .filter(|l| needs_videos(l, retry))
             .cloned()
             .collect::<Vec<_>>();
         let mut found = vec![];
@@ -916,7 +1131,7 @@ impl App {
                         scope.spawn(move || {
                             (
                                 string(&l["id"]),
-                                self.find_videos(c, l, &[]).unwrap_or_default(),
+                                self.find_videos(c, l, &[]).ok(),
                             )
                         })
                     })
@@ -931,10 +1146,13 @@ impl App {
         let _guard = self.guard();
         let mut c = self.load(cid)?;
         drop_obscure(&mut c);
-        for (lid, vids) in found {
+        // A failed search (None) changes nothing, so the lesson is tried again later.
+        for (lid, vids) in found.into_iter().filter_map(|(lid, v)| Some((lid, v?))) {
             if let Ok(l) = lesson_mut(&mut c, &lid) {
-                if !vids.is_empty() && !truth(&l["videos"]) {
-                    l["videos"] = json!(vids);
+                let old = list(&l["videos"]);
+                // Raw results never replace raw results; anything else (picks, or "nothing fits") does.
+                if old.is_empty() || unpicked(old) && (vids.is_empty() || !unpicked(&vids)) {
+                    set_videos(l, vids);
                 }
             }
         }
@@ -1235,157 +1453,227 @@ impl App {
         ))
     }
     // With no `ask` the AI adjusts the course to the learner's results; with one it changes the course as asked.
-    pub(crate) fn adapt(self: &Arc<Self>, cid: &str, ask: &str) -> Result<Value> {
-        let revise = !ask.is_empty();
-        let c = self.load(cid)?;
+    fn plan_rows(&self, cid: &str, c: &Value, ask: &str) -> Result<Vec<String>> {
         let mut rows = vec![
             format!("Course: {}", text(&c["title"])),
             format!("The learner's goal: {}", text(&c["prompt"])),
-            format!("Level: {}", level(&c)),
+            format!("Level: {}", level(c)),
         ];
-        rows.extend(progress(&c));
-        if revise {
+        rows.extend(progress(c));
+        if !ask.is_empty() {
             rows.push(format!("My request: {ask}"));
         }
         rows.extend(self.learned(cid, 60)?);
-        let mut shape = json!({"note":s(),"drop":arr(s()),"add":arr(obj(json!({"after":s(),"lesson":obj(lesson_schema())})))});
-        if revise {
-            shape["phases"] = arr(obj(
-                json!({"after":s(),"title":s(),"blurb":s(),"lessons":arr(obj(json!({"title":s(),"goal":s()})))}),
-            ));
-        }
+        Ok(rows)
+    }
+    /// "Adjust to my progress": the AI's small changes, applied at once.
+    pub(crate) fn adapt(self: &Arc<Self>, cid: &str) -> Result<Value> {
+        let c = self.load(cid)?;
+        let rows = self.plan_rows(cid, &c, "")?;
+        let shape = json!({"note":s(),"drop":arr(s()),"add":arr(obj(json!({"after":s(),"lesson":obj(lesson_schema())})))});
+        let d = parse(&self.llm(messages(ADAPT_PROMPT, rows.join("\n")), "changes", obj(shape))?, "a plan")?;
+        self.apply_plan(cid, &d, "", false)
+    }
+    /// "Change my roadmap": two or three different ways to do what was asked, each previewed. Nothing is saved.
+    pub(crate) fn revise_options(&self, cid: &str, ask: &str) -> Result<Value> {
+        let c = self.load(cid)?;
+        let rows = self.plan_rows(cid, &c, ask)?;
+        let plan = json!({"label":s(),"note":s(),"drop":arr(s()),"add":arr(obj(json!({"after":s(),"lesson":obj(lesson_schema())}))),
+            "phases":arr(obj(json!({"after":s(),"title":s(),"blurb":s(),"lessons":arr(obj(json!({"title":s(),"goal":s()})))})))});
         let d = parse(
-            &self.llm(
-                messages(
-                    if revise { REVISE_PROMPT } else { ADAPT_PROMPT },
-                    rows.join("\n"),
-                ),
-                "changes",
-                obj(shape),
-            )?,
+            &self.llm(messages(REVISE_PROMPT, rows.join("\n")), "changes", obj(json!({"options":arr(obj(plan))})))?,
             "a plan",
         )?;
+        previews(&c, list(&d["options"]).iter().take(3).cloned().collect())
+    }
+    /// A change to one lesson that has not been started: removed, or rewritten in up to three ways. Nothing is saved.
+    pub(crate) fn lesson_options(&self, cid: &str, lid: &str, action: &str) -> Result<Value> {
+        let c = self.load(cid)?;
+        let l = lesson(&c, &json!(lid))?;
+        if !untouched(&c["state"], l) {
+            return Err(Error::bad("You have started this lesson, so it stays as it is. Change the lessons after it instead."));
+        }
+        let how = match action {
+            "remove" => return previews(&c, vec![json!({"label":"Remove this lesson","note":"","drop":[lid]})]),
+            "swap" => "Replace it with a different lesson that fills the same place in the course: something else worth learning at this point. Give three clearly different options.",
+            "harder" => "Make it harder: more demanding tasks and checks, the same place in the course. Give one option.",
+            "easier" => "Make it easier: smaller steps, simpler tasks and checks, the same topic. Give one option.",
+            "deeper" => "Go deeper into the same topic: more advanced concepts and a more thorough task. Give one option.",
+            _ => return Err(Error::bad("Unknown change.")),
+        };
+        let mut rows = self.plan_rows(cid, &c, "")?;
+        let brief = json!({"id":l["id"],"title":l["title"],"goal":l["goal"],"concepts":l["concepts"],"tasks":l["tasks"],"done":l["done"],"query":l["query"]});
+        rows.push(format!("The lesson to change: {brief}"));
+        rows.push(format!("What the learner wants: {how}"));
+        let d = parse(
+            &self.llm(
+                messages(LESSON_PROMPT, rows.join("\n")),
+                "lesson",
+                obj(json!({"options":arr(obj(json!({"label":s(),"lesson":obj(lesson_schema())})))})),
+            )?,
+            "a lesson",
+        )?;
+        let plans = list(&d["options"])
+            .iter()
+            .take(3)
+            .map(|o| json!({"label":o["label"],"note":"","replace":[{"id":lid,"lesson":o["lesson"]}]}))
+            .collect();
+        previews(&c, plans)
+    }
+    /// Saves a plan: one the learner chose from the options, or the one "Adjust to my progress" made.
+    pub(crate) fn apply_plan(self: &Arc<Self>, cid: &str, d: &Value, ask: &str, revise: bool) -> Result<Value> {
         let mut c;
         let change;
         {
             let _guard = self.guard();
             c = self.load(cid)?;
-            let st = c["state"].clone();
-            let mut ids = lessons(&c)
-                .map(|l| string(&l["id"]))
-                .collect::<HashSet<_>>();
-            let mut added = vec![];
-            let mut dropped = vec![];
-            for a in list(&d["add"])
-                .iter()
-                .filter(|a| a.is_object() && a["lesson"].is_object())
-                .take(if revise { 8 } else { 2 })
-            {
-                for (n, p) in c["phases"].as_array_mut().into_iter().flatten().enumerate() {
-                    let Some(ls) = p["lessons"].as_array_mut() else {
-                        continue;
-                    };
-                    if let Some(at) = ls.iter().position(|l| l["id"] == text(&a["after"])) {
-                        let lid = (ls.len() + 1..999)
-                            .map(|i| format!("{}.{i}", n + 1))
-                            .find(|s| !ids.contains(s))
-                            .ok_or_else(|| Error::bad("Too many lessons."))?;
-                        ids.insert(lid.clone());
-                        let mut l = clean_lesson(&a["lesson"], &lid, &[]);
-                        l["added"] = json!(true);
-                        if truth(&a["lesson"]["title"]) {
-                            added.push(l["title"].clone());
-                        }
-                        ls.insert(at + 1, l);
-                    }
-                }
-            }
-            // New phases arrive as outlines; expand() writes them when the learner gets there.
-            for p in list(&d["phases"]).iter().filter(|p| p.is_object()).take(12) {
-                let n = ids
-                    .iter()
-                    .filter_map(|i| i.split('.').next()?.parse::<u32>().ok())
-                    .max()
-                    .unwrap_or(0)
-                    + 1;
-                let ls = list(&p["lessons"])
-                    .iter()
-                    .filter(|l| l.is_object() && truth(&l["title"]))
-                    .take(8)
-                    .enumerate()
-                    .map(|(i, l)| {
-                        let mut x = clean_lesson(l, &format!("{n}.{}", i + 1), &[]);
-                        x["stub"] = json!(true);
-                        x["added"] = json!(true);
-                        x
-                    })
-                    .collect::<Vec<_>>();
-                let Some(ps) = c["phases"].as_array_mut().filter(|_| !ls.is_empty()) else {
-                    continue;
-                };
-                ids.extend(ls.iter().map(|l| string(&l["id"])));
-                let at = ps
-                    .iter()
-                    .position(|q| {
-                        list(&q["lessons"])
-                            .iter()
-                            .any(|l| l["id"] == text(&p["after"]))
-                    })
-                    .map_or(ps.len(), |i| i + 1);
-                let mut x = json!({"title":cap(&if truth(&p["title"]){text(&p["title"])}else{"New phase".into()},200),"blurb":cap(&string(&p["blurb"]),600),"lessons":ls});
-                if let Some(stage) = at.checked_sub(1).map(|i| ps[i]["stage"].clone()) {
-                    if !stage.is_null() {
-                        x["stage"] = stage;
-                    }
-                }
-                added.push(x["title"].clone());
-                ps.insert(at, x);
-            }
-            let gone = strs(&d["drop"], if revise { 300 } else { 20 });
-            let mut left = lessons(&c).count();
-            for p in c["phases"].as_array_mut().into_iter().flatten() {
-                let Some(ls) = p["lessons"].as_array_mut() else {
-                    continue;
-                };
-                ls.retain(|l| {
-                    // The learner may ask to undo an earlier change, so a request can drop added lessons too.
-                    if gone.contains(&string(&l["id"]))
-                        && untouched(&st, l)
-                        && (revise || !truth(&l["added"]))
-                        && left > 1
-                    {
-                        dropped.push(l["title"].clone());
-                        left -= 1;
-                        false
-                    } else {
-                        true
-                    }
-                });
-            }
-            if let Some(ps) = c["phases"].as_array_mut() {
-                ps.retain(|p| !list(&p["lessons"]).is_empty());
-            }
-            change = json!({"day":self.today(),"note":cap(&string(&d["note"]),600),"added":added,"dropped":dropped});
-            if !added.is_empty() || !dropped.is_empty() {
+            let r = apply_changes(&mut c, d, revise)?;
+            let titles = |k: &str| list(&r[k]).iter().map(|x| x["title"].clone()).collect::<Vec<_>>();
+            change = json!({"day":self.today(),"note":cap(&string(&d["note"]),600),"added":titles("added"),"dropped":r["dropped"],"changed":titles("changed")});
+            if truth(&r["added"]) || truth(&r["dropped"]) || truth(&r["changed"]) {
                 let mut changes = list(&c["changes"]).to_vec();
                 changes.push(change.clone());
                 let start = changes.len().saturating_sub(20);
                 c["changes"] = json!(&changes[start..]);
-                if revise {
+                if !ask.is_empty() {
                     // The tutor, practice and later phases read the goal, so it carries the new direction.
-                    c["prompt"] = json!(format!(
-                        "{}\nLater I also asked: {ask}",
-                        cap(&string(&c["prompt"]), 1300)
-                    ));
+                    c["prompt"] = json!(format!("{}\nLater I also asked: {ask}", cap(&string(&c["prompt"]), 1300)));
                 }
                 self.save(&c)?;
             }
         }
-        if truth(&change["added"]) {
+        if truth(&change["added"]) || truth(&change["changed"]) {
             self.prefetch(cid.into());
         }
         Ok(json!({"change":change,"course":self.mark_known(c)?}))
     }
+}
+/// Each plan applied to a copy of the course, so the learner sees what it would add, drop and rewrite before choosing.
+fn previews(c: &Value, plans: Vec<Value>) -> Result<Value> {
+    let mut out = vec![];
+    let mut note = String::new();
+    for p in plans.into_iter().filter(Value::is_object) {
+        let mut x = c.clone();
+        let r = apply_changes(&mut x, &p, true)?;
+        if note.is_empty() {
+            note = cap(&string(&p["note"]), 600);
+        }
+        if truth(&r["added"]) || truth(&r["dropped"]) || truth(&r["changed"]) {
+            out.push(json!({"label":cap(&string(&p["label"]),80),"note":cap(&string(&p["note"]),600),
+                "added":r["added"],"dropped":r["dropped"],"changed":r["changed"],"plan":p}));
+        }
+    }
+    // No option changes anything: the AI's note says why (often "ask the tutor").
+    Ok(json!({"options":out,"note":if out.is_empty() { note } else { String::new() }}))
+}
+/// Applies a plan to the course in memory: added lessons and phases, dropped and rewritten lessons.
+/// Only lessons the learner has not started are dropped or rewritten. `revise` allows bigger plans than "Adjust to my progress".
+fn apply_changes(c: &mut Value, d: &Value, revise: bool) -> Result<Value> {
+    let st = c["state"].clone();
+    let mut ids = lessons(c).map(|l| string(&l["id"])).collect::<HashSet<_>>();
+    let mut added = vec![];
+    let mut dropped = vec![];
+    let mut changed = vec![];
+    for r in list(&d["replace"]).iter().filter(|r| r["lesson"].is_object()).take(1) {
+        let lid = string(&r["id"]);
+        if let Ok(l) = lesson_mut(c, &lid) {
+            if untouched(&st, l) {
+                let n = clean_lesson(&r["lesson"], &lid, &strs(&l["files"], 6));
+                changed.push(json!({"from":l["title"],"title":n["title"],"goal":n["goal"]}));
+                *l = n;
+                // Answers and review dates belonged to the old lesson.
+                let prefix = format!("{lid}#");
+                for k in ["review", "mistakes"] {
+                    if let Some(o) = c["state"][k].as_object_mut() {
+                        o.retain(|k, _| !k.starts_with(&prefix));
+                    }
+                }
+            }
+        }
+    }
+    for a in list(&d["add"])
+        .iter()
+        .filter(|a| a.is_object() && a["lesson"].is_object())
+        .take(if revise { 8 } else { 2 })
+    {
+        for (n, p) in c["phases"].as_array_mut().into_iter().flatten().enumerate() {
+            let Some(ls) = p["lessons"].as_array_mut() else {
+                continue;
+            };
+            if let Some(at) = ls.iter().position(|l| l["id"] == text(&a["after"])) {
+                let lid = (ls.len() + 1..999)
+                    .map(|i| format!("{}.{i}", n + 1))
+                    .find(|s| !ids.contains(s))
+                    .ok_or_else(|| Error::bad("Too many lessons."))?;
+                ids.insert(lid.clone());
+                let mut l = clean_lesson(&a["lesson"], &lid, &[]);
+                l["added"] = json!(true);
+                if truth(&a["lesson"]["title"]) {
+                    added.push(json!({"title":l["title"],"goal":l["goal"],"after":text(&a["after"])}));
+                }
+                ls.insert(at + 1, l);
+            }
+        }
+    }
+    // New phases arrive as outlines; expand() writes them when the learner gets there.
+    for p in list(&d["phases"]).iter().filter(|p| p.is_object()).take(12) {
+        let n = ids
+            .iter()
+            .filter_map(|i| i.split('.').next()?.parse::<u32>().ok())
+            .max()
+            .unwrap_or(0)
+            + 1;
+        let ls = list(&p["lessons"])
+            .iter()
+            .filter(|l| l.is_object() && truth(&l["title"]))
+            .take(8)
+            .enumerate()
+            .map(|(i, l)| {
+                let mut x = clean_lesson(l, &format!("{n}.{}", i + 1), &[]);
+                x["stub"] = json!(true);
+                x["added"] = json!(true);
+                x
+            })
+            .collect::<Vec<_>>();
+        let Some(ps) = c["phases"].as_array_mut().filter(|_| !ls.is_empty()) else {
+            continue;
+        };
+        ids.extend(ls.iter().map(|l| string(&l["id"])));
+        let at = ps
+            .iter()
+            .position(|q| list(&q["lessons"]).iter().any(|l| l["id"] == text(&p["after"])))
+            .map_or(ps.len(), |i| i + 1);
+        let mut x = json!({"title":cap(&if truth(&p["title"]){text(&p["title"])}else{"New phase".into()},200),"blurb":cap(&string(&p["blurb"]),600),"lessons":ls});
+        if let Some(stage) = at.checked_sub(1).map(|i| ps[i]["stage"].clone()) {
+            if !stage.is_null() {
+                x["stage"] = stage;
+            }
+        }
+        added.push(json!({"title":x["title"],"goal":x["blurb"],"phase":true,
+            "lessons":list(&x["lessons"]).iter().map(|l| l["title"].clone()).collect::<Vec<_>>()}));
+        ps.insert(at, x);
+    }
+    let gone = strs(&d["drop"], if revise { 300 } else { 20 });
+    let mut left = lessons(c).count();
+    for p in c["phases"].as_array_mut().into_iter().flatten() {
+        let Some(ls) = p["lessons"].as_array_mut() else {
+            continue;
+        };
+        ls.retain(|l| {
+            // The learner may ask to undo an earlier change, so a request can drop added lessons too.
+            if gone.contains(&string(&l["id"])) && untouched(&st, l) && (revise || !truth(&l["added"])) && left > 1 {
+                dropped.push(l["title"].clone());
+                left -= 1;
+                false
+            } else {
+                true
+            }
+        });
+    }
+    if let Some(ps) = c["phases"].as_array_mut() {
+        ps.retain(|p| !list(&p["lessons"]).is_empty());
+    }
+    Ok(json!({"added":added,"dropped":dropped,"changed":changed}))
 }
 // urllib used the proxy for this URL's scheme and respected no_proxy.
 // ureq's automatic proxy discovery does neither, so preserve that policy here.
@@ -1400,6 +1688,77 @@ fn agent(url: &str, secs: u64) -> std::result::Result<ureq::Agent, ureq::Error> 
     Ok(agent.build())
 }
 // The caption track in the video's own language, else English; uploaded subtitles before automatic ones.
+fn chapters_of(d: &Value) -> Value {
+    json!(list(&d["chapters"])
+        .iter()
+        .filter_map(|m| m["start_time"].as_f64().map(|n| json!({"t":n as i64,"title":cap(&string(&m["title"]),120)})))
+        .take(40)
+        .collect::<Vec<_>>())
+}
+/// Greedy set cover over the AI's ranked picks: each round takes the pick that teaches the most concepts not yet covered
+/// (the higher-ranked one on a tie) and stops when no pick adds one. Returns indexes into `covers`, at most 6.
+pub(crate) fn min_cover(covers: &[HashSet<usize>]) -> Vec<usize> {
+    let mut done = HashSet::new();
+    let mut out = vec![];
+    while out.len() < 6 {
+        let best = (0..covers.len())
+            .filter(|i| !out.contains(i))
+            .map(|i| (covers[i].difference(&done).count(), i))
+            .filter(|(n, _)| *n > 0)
+            .max_by_key(|(n, i)| (*n, std::cmp::Reverse(*i)));
+        let Some((_, i)) = best else { break };
+        done.extend(covers[i].iter().copied());
+        out.push(i);
+    }
+    out
+}
+fn clock(t: i64) -> String {
+    format!("{}:{:02}", t / 60, t % 60)
+}
+// A transcript cut to about 3,600 characters: the opening, then four samples spread over the rest, each row with its time.
+fn transcript_sample(lines: &[(i64, String)]) -> String {
+    let take = |from: usize, budget: usize| {
+        let mut out = String::new();
+        for (t, said) in &lines[from..] {
+            if out.len() + said.len() > budget && !out.is_empty() {
+                break;
+            }
+            out += &format!("[{}] {said} ", clock(*t));
+        }
+        out
+    };
+    if lines.iter().map(|l| l.1.len() + 8).sum::<usize>() <= 3600 {
+        return take(0, usize::MAX);
+    }
+    let mut out = take(0, 1200);
+    for k in 1..5 {
+        out += &format!("… {}", take(lines.len() * k / 5, 600));
+    }
+    out
+}
+// The preferences as a line for the video prompt.
+fn prefs_text(p: &Value) -> String {
+    let mut out = vec![match string(&p["style"]).as_str() {
+        "popular" => "popular: prefer the most watched videos that fit",
+        "depth" => "in depth: prefer thorough, complete explanations, longer videos with chapters",
+        "gems" => "hidden gems: a low view count is fine when the video looks like careful teaching",
+        _ => "thorough: complete, clear explanations long enough to cover everything",
+    }
+    .to_string()];
+    match string(&p["length"]).as_str() {
+        "short" => out.push("short videos, under 20 minutes".into()),
+        "medium" => out.push("medium length, 10 to 60 minutes".into()),
+        "long" => out.push("long videos or full courses, over 30 minutes".into()),
+        _ => out.push("10 minutes or longer".into()),
+    }
+    if truth(&p["lang"]) {
+        out.push(format!("videos in {}", text(&p["lang"])));
+    }
+    if p["recent"] == "yes" {
+        out.push("recent uploads, from the last three years".into());
+    }
+    out.join("; ")
+}
 fn caption_url(d: &Value) -> Option<String> {
     let lang = string(&d["language"]);
     [&d["subtitles"], &d["automatic_captions"]]

@@ -2,6 +2,7 @@
 use std::os::unix::fs::PermissionsExt;
 use super::*;
 use crate::exercise::{clean_practice, run_code};
+use crate::ai::min_cover;
 use std::{
     io::Write,
 
@@ -88,6 +89,15 @@ impl FakeAI {
                         json!({"done":false,"q":"Baked before?","options":["No, never","Yes",3]})
                     }
                     .to_string()
+                } else if system.contains("verify the videos") {
+                    // The transcript check: the fixture has chapters and no captions.
+                    assert!(user.contains("Concepts (numbered for covers): 0. "), "{user}");
+                    assert!(user.contains("--- Video 0: Full lesson | Baker | 15 min | 1200 views\nChapters: 0:00 Intro; 1:15 Mixing\nTranscript: none available"), "{user}");
+                    if user.contains("Lesson: Nothing fits") {
+                        json!({"picks":[]}).to_string()
+                    } else {
+                        json!({"picks":[{"i":0,"why":"","start":75,"covers":[0,7]},{"i":0,"why":"twice","start":0,"covers":[0]},{"i":9,"why":"made up","start":0,"covers":[0]}]}).to_string()
+                    }
                 } else if system.contains("choose the videos") {
                     assert!(
                         user.contains(
@@ -96,7 +106,11 @@ impl FakeAI {
                             && !user.contains("live now"),
                         "{user}"
                     );
-                    json!({"picks":[{"i":0,"why":"Covers hydration."},{"i":99,"why":"made up"},"junk"],"query":""}).to_string()
+                    if user.contains("Lesson: Nothing fits") {
+                        json!({"picks":[],"query":"better words"}).to_string()
+                    } else {
+                        json!({"picks":[{"i":0,"why":"Covers hydration."},{"i":99,"why":"made up"},"junk"],"query":""}).to_string()
+                    }
                 } else if system.contains("mark one review answer") {
                     assert!(user.contains("Concept to explain: hydration"));
                     json!({"right":user.split("answer:").nth(1).unwrap().contains("water"),"feedback":"It is the water to flour ratio."}).to_string()
@@ -138,7 +152,13 @@ impl FakeAI {
                             && user.contains("- 1.1 Mix [completed"),
                         "{user}"
                     );
-                    json!({"note":"Now industry.","drop":["1.1","2.1"],"add":[],"phases":[{"after":"1.2","title":"In industry","blurb":"b","lessons":[{"title":"Real ovens","goal":"g"},"junk"]},{"after":"","title":"Empty","blurb":"","lessons":[]}]}).to_string()
+                    json!({"options":[
+                        {"label":"Industry phase","note":"Now industry.","drop":["1.1","2.1"],"add":[],"phases":[{"after":"1.2","title":"In industry","blurb":"b","lessons":[{"title":"Real ovens","goal":"g"},"junk"]},{"after":"","title":"Empty","blurb":"","lessons":[]}]},
+                        {"label":"Nothing","note":"No change.","drop":["1.1"],"add":[],"phases":[]},
+                        {"label":"Smaller","note":"Drop only.","drop":["2.1"],"add":[],"phases":[]}]}).to_string()
+                } else if system.contains("wants one lesson they have not started yet changed") {
+                    assert!(user.contains("The lesson to change: ") && user.contains("Make it harder"), "{user}");
+                    json!({"options":[{"label":"Harder: timed","lesson":{"title":"Knead faster","goal":"g2","concepts":["windowpane"],"tasks":["t2"],"done":["d2"],"query":"bread windowpane test","lookups":[],"warn":""}}]}).to_string()
                 } else if system.contains("JSON object") {
                     format!("Here you go:\n```json\n{}\n```", course())
                 } else {
@@ -263,6 +283,7 @@ fn python_spec_end_to_end() {
         off: Mutex::new(HashSet::new()),
         meter: Mutex::new(()),
         fetching: Mutex::new(std::collections::HashSet::new()),
+        repicked: Mutex::new(HashSet::new()),
         day_offset: AtomicI64::new(0),
         pick: Box::new(move |k| {
             if k == "file" {
@@ -341,7 +362,7 @@ fn python_spec_end_to_end() {
     );
     assert_eq!(
         call(&base, "GET", "api/settings", json!({})).1,
-        json!({"base":ai.base,"model":"m","small":"","usage":{},"key_set":true,"theme":"dark"})
+        json!({"base":ai.base,"model":"m","small":"","usage":{},"key_set":true,"theme":"dark","videos":{"style":"","length":"","lang":"","recent":""}})
     );
     assert_eq!(
         fs::metadata(&app.conf).unwrap().permissions().mode() & 0o777,
@@ -429,6 +450,8 @@ fn python_spec_end_to_end() {
     assert_eq!(vids[0]["id"], "aaaaaaaaaaa");
     assert_eq!(list(&vids).len(), 1);
     assert_eq!(vids[0]["why"], "Covers hydration.");
+    assert_eq!(vids[0]["start"], 75);
+    assert_eq!(vids[0]["covers"], json!(["hydration"]));
     assert_eq!(
         vids[0]["chapters"],
         json!([{"t":0,"title":"Intro"},{"t":75,"title":"Mixing"}])
@@ -832,7 +855,7 @@ fn python_spec_end_to_end() {
     assert_eq!(status, 200, "{ad}");
     assert_eq!(
         ad["change"],
-        json!({"day":app.today(),"note":"Added practice.","added":["Mix again"],"dropped":[]})
+        json!({"day":app.today(),"note":"Added practice.","added":["Mix again"],"dropped":[],"changed":[]})
     );
     assert_eq!(
         lessons(&ad["course"])
@@ -1152,8 +1175,18 @@ fn long_roadmap_outline_expand_and_revise() {
             .status,
         400
     );
-    let r = app
+    // Options are previews: nothing is saved until one is applied. One that changes nothing (1.1 is completed) is left out.
+    let before = app.load(&cid).unwrap();
+    let o = app
         .route("POST", &format!("{path}/revise"), &json!({"ask":"industry level"}))
+        .unwrap();
+    assert_eq!(app.load(&cid).unwrap(), before);
+    let opts = list(&o["options"]);
+    assert_eq!(opts.iter().map(|x| string(&x["label"])).collect::<Vec<_>>(), ["Industry phase", "Smaller"]);
+    assert_eq!(opts[0]["added"][0]["lessons"], json!(["Real ovens"]));
+    assert_eq!(opts[0]["dropped"], json!(["Heat"]));
+    let r = app
+        .route("POST", &format!("{path}/apply"), &json!({"plan":opts[0]["plan"],"ask":"industry level"}))
         .unwrap();
     assert_eq!(r["change"]["added"], json!(["In industry"]));
     assert_eq!(r["change"]["dropped"], json!(["Heat"]));
@@ -1171,6 +1204,22 @@ fn long_roadmap_outline_expand_and_revise() {
     );
     let new = &c["phases"][1]["lessons"];
     assert_eq!(new, &json!([{"id":"3.1","title":"Real ovens","goal":"g","concepts":[],"tasks":[],"done":[],"query":"Real ovens","lookups":[],"files":[],"warn":"","charts":[],"stub":true,"added":true,"known":{}}]));
+
+    // One lesson: a started one stays; an unstarted one gets previewed options, and applying one rewrites it in place.
+    let edit = format!("{path}/edit");
+    assert_eq!(app.route("POST", &edit, &json!({"lesson":"1.1","action":"harder"})).unwrap_err().status, 400);
+    assert_eq!(app.route("POST", &edit, &json!({"lesson":"1.2","action":"explode"})).unwrap_err().status, 400);
+    let rm = app.route("POST", &edit, &json!({"lesson":"1.2","action":"remove"})).unwrap();
+    assert_eq!(rm["options"][0]["dropped"], json!(["Knead"]));
+    let o = app.route("POST", &edit, &json!({"lesson":"1.2","action":"harder"})).unwrap();
+    assert_eq!(o["options"][0]["changed"], json!([{"from":"Knead","title":"Knead faster","goal":"g2"}]));
+    assert_eq!(app.load(&cid).unwrap()["phases"][0]["lessons"][1]["title"], "Knead");
+    let r = app.route("POST", &format!("{path}/apply"), &json!({"plan":o["options"][0]["plan"]})).unwrap();
+    assert_eq!(r["change"]["changed"], json!(["Knead faster"]));
+    let l = &r["course"]["phases"][0]["lessons"][1];
+    assert_eq!((&l["id"], &l["title"], &l["done"]), (&json!("1.2"), &json!("Knead faster"), &json!(["d2"])));
+    assert!(l.get("stub").is_none());
+    assert_eq!(app.route("POST", &format!("{path}/apply"), &json!({})).unwrap_err().status, 400);
 
     let c = app
         .route("POST", &format!("{path}/expand"), &json!({"lesson":"3.1"}))
@@ -1298,6 +1347,100 @@ fn topic_videos() {
     assert!(list(&v).iter().skip(1).all(|x| truth(&x["searched"])));
     assert!(!list(&v).iter().any(|x| x["id"] == "old0"));
     assert!(!list(&v).iter().any(|x| x["id"] == "ddddddddddd"), "a 52-view video was offered");
+}
+
+#[test]
+#[cfg(unix)] // Uses Unix shell fixtures, permissions or symlinks.
+fn video_picks_are_never_padded() {
+    let setup = |ai: Option<&FakeAI>| {
+        let tmp = tempfile::tempdir().unwrap();
+        let mut app = isolated_app(tmp.path());
+        let a = Arc::get_mut(&mut app).unwrap();
+        a.yt_program = tmp.path().join("yt-dlp");
+        a.codex_program = tmp.path().join("no-codex"); // never the real CLI
+        fs::write(&a.yt_program, format!("#!/bin/sh\ncat <<'FIXTURE'\n{}\nFIXTURE\n", found())).unwrap();
+        fs::set_permissions(&a.yt_program, fs::Permissions::from_mode(0o755)).unwrap();
+        if let Some(ai) = ai {
+            app.write_config(&json!({"base":ai.base,"model":"m","key":"sk-test"})).unwrap();
+        }
+        (tmp, app)
+    };
+    let cid = "0123456789ac";
+    let raw = json!([{"id":"eeeeeeeeeee","title":"Postman API testing","views":5000}]);
+    let imported = json!([{"id":"fffffffffff","title":"Imported"}]);
+    let course = json!({"id":cid,"phases":[{"lessons":[
+        {"id":"1.1","title":"Nothing fits","query":"q"},
+        {"id":"1.2","title":"Mix","query":"q","videos":raw},
+        {"id":"1.3","title":"Knead","query":"q","videos":imported}]}]});
+
+    // With the AI: "nothing fits" stays empty and is not searched on every open; raw results get picked again.
+    let ai = FakeAI::new();
+    let (_tmp, app) = setup(Some(&ai));
+    app.save(&course).unwrap();
+    app.prefetch_inner(cid).unwrap();
+    let c = app.load(cid).unwrap();
+    let ls = &c["phases"][0]["lessons"];
+    assert_eq!((&ls[0]["videos"], &ls[0]["novideos"]), (&json!([]), &json!(true)));
+    assert!(!needs_videos(&ls[0], true));
+    assert_eq!(ls[1]["videos"][0]["why"], "Covers hydration.");
+    assert_eq!(ls[2]["videos"], imported);
+    let path = format!("api/courses/{cid}/videos");
+    let asked = ai.seen.lock().unwrap().len();
+    assert_eq!(app.route("POST", &path, &json!({"lesson":"1.1"})).unwrap(), json!([]));
+    assert_eq!(ai.seen.lock().unwrap().len(), asked, "searched again although nothing fits");
+    // Preferences: Settings cleaned, a roadmap's own choice on top, and the picker is told.
+    app.route("PUT", "api/video-prefs", &json!({"style":"gems","length":"long","lang":"<b>","recent":"maybe"})).unwrap();
+    assert_eq!(app.route("GET", "api/settings", &json!({})).unwrap()["videos"], json!({"style":"gems","length":"long","lang":"","recent":""}));
+    app.route("PUT", &format!("api/courses/{cid}/prefs"), &json!({"style":"popular","lang":"Hindi","refresh":true})).unwrap();
+    let c = app.load(cid).unwrap();
+    assert_eq!(app.video_prefs(&c), json!({"style":"popular","length":"long","lang":"Hindi","recent":""}));
+    let start = Instant::now();
+    while !truth(&app.load(cid).unwrap()["phases"][0]["lessons"][1]["videos"]) {
+        assert!(start.elapsed() < Duration::from_secs(5), "videos not picked again");
+        thread::sleep(Duration::from_millis(20));
+    }
+    let user = string(&ai.last()["messages"][1]["content"]);
+    assert!(user.contains("preferences: popular: prefer the most watched videos that fit; long videos or full courses, over 30 minutes; videos in Hindi"), "{user}");
+
+    // Without the AI: raw results are kept as a fallback, marked unpicked, and retried once per run.
+    let (_tmp, app) = setup(None);
+    app.save(&course).unwrap();
+    app.prefetch_inner(cid).unwrap();
+    let c = app.load(cid).unwrap();
+    let ls = &c["phases"][0]["lessons"];
+    assert_eq!(ls[0]["videos"][0]["id"], "aaaaaaaaaaa");
+    assert!(unpicked(list(&ls[0]["videos"])));
+    assert_eq!(ls[1]["videos"], raw);
+    assert!(!lessons(&c).any(|l| needs_videos(l, false)));
+}
+
+#[test]
+fn video_count_follows_coverage() {
+    let sets = |v: &[&[usize]]| v.iter().map(|c| c.iter().copied().collect::<HashSet<_>>()).collect::<Vec<_>>();
+    // One video that teaches everything is enough, even when it is ranked second.
+    assert_eq!(min_cover(&sets(&[&[0], &[0, 1, 2], &[1]])), [1]);
+    // Each video kept adds a concept; one that adds nothing new is left out.
+    assert_eq!(min_cover(&sets(&[&[0, 1], &[1], &[2], &[0, 2]])), [0, 2]);
+    // A tie goes to the higher-ranked video; videos that cover nothing are never shown.
+    assert_eq!(min_cover(&sets(&[&[], &[0], &[0]])), [1]);
+    assert!(min_cover(&sets(&[&[], &[]])).is_empty());
+    // At most six, however many concepts.
+    assert_eq!(min_cover(&sets(&(0..8).map(|i| vec![i]).collect::<Vec<_>>().iter().map(|v| v.as_slice()).collect::<Vec<_>>())).len(), 6);
+}
+
+#[test]
+fn query_filler_tail_is_stripped() {
+    let course = |qs: &[&str]| json!({"phases":[{"lessons":qs.iter().map(|q| json!({"query":q})).collect::<Vec<_>>()}]});
+    let c = course(&["Demand testing small business beginner tutorial", "Cash runway Small Business beginner tutorial", "Pricing small business beginner tutorial", "unit economics explained"]);
+    let tail = common_tail(&c);
+    assert_eq!(tail, ["small", "business", "beginner", "tutorial"]);
+    assert_eq!(strip_tail("Cash runway Small Business beginner tutorial", &tail), "Cash runway");
+    assert_eq!(strip_tail("unit economics explained", &tail), "unit economics explained");
+    // The tail alone is kept: an empty search finds nothing.
+    assert_eq!(strip_tail("small business beginner tutorial", &tail), "small business beginner tutorial");
+    // Different endings, or too few lessons, are not filler.
+    assert!(common_tail(&course(&["c pointers explained", "c arrays explained", "c structs explained", "makefile basics"])).is_empty());
+    assert!(common_tail(&course(&["a b c", "x b c"])).is_empty());
 }
 
 #[test]
@@ -1480,7 +1623,15 @@ fn real_ai() {
     if let Some(stub) = lessons(&c).find(|l| truth(&l["stub"])) {
         step("8-expand", "POST", &format!("{path}/expand"), json!({"lesson":stub["id"]}));
     }
-    step("9-revise", "POST", &format!("{path}/revise"), json!({"ask":"Add industry-level practice at the end, with real-world use cases."}));
+    let ask = "Add industry-level practice at the end, with real-world use cases.";
+    let options = step("9-revise", "POST", &format!("{path}/revise"), json!({"ask":ask}));
+    if options["options"][0]["plan"].is_object() {
+        step("9b-apply", "POST", &format!("{path}/apply"), json!({"plan":options["options"][0]["plan"],"ask":ask}));
+    } else {
+        step("9b-apply", "POST", &format!("{path}/apply"), json!({}));
+    }
+    let last = lessons(&c).filter(|l| !truth(&l["stub"])).last().map(|l| l["id"].clone()).unwrap_or_default();
+    step("9c-edit", "POST", &format!("{path}/edit"), json!({"lesson":last,"action":"harder"}));
     step("10-final", "GET", &path, json!({}));
     assert!(failed.is_empty(), "{failed:#?}");
 }

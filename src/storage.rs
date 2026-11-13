@@ -356,7 +356,7 @@ impl App {
                     continue;
                 }
                 let mut x = clean_lesson(l, &lid, &[]);
-                x["videos"]=json!(list(&l["videos"]).iter().filter(|v|v.is_object()&&matches(r"^[\p{L}\p{N}_-]{11}$",&text(&v["id"]))).take(4).map(|v|json!({"id":v["id"],"title":cap(&string(&v["title"]),200),"channel":cap(&string(&v["channel"]),100),"duration":v["duration"].as_i64().or_else(||v["duration"].as_bool().map(i64::from)).unwrap_or(0),"why":cap(&string(&v["why"]),300),"chapters":list(&v["chapters"]).iter().filter(|m|m.is_object()&&(m["t"].is_i64()||m["t"].is_boolean())).take(40).map(|m|json!({"t":m["t"],"title":cap(&string(&m["title"]),120)})).collect::<Vec<_>>()})).collect::<Vec<_>>());
+                x["videos"]=json!(list(&l["videos"]).iter().filter(|v|v.is_object()&&matches(r"^[\p{L}\p{N}_-]{11}$",&text(&v["id"]))).take(4).map(|v|json!({"id":v["id"],"title":cap(&string(&v["title"]),200),"channel":cap(&string(&v["channel"]),100),"duration":v["duration"].as_i64().or_else(||v["duration"].as_bool().map(i64::from)).unwrap_or(0),"why":cap(&string(&v["why"]),300),"start":v["start"].as_i64().unwrap_or(0).max(0),"covers":strs(&v["covers"],8).iter().map(|k|cap(k,120)).collect::<Vec<_>>(),"chapters":list(&v["chapters"]).iter().filter(|m|m.is_object()&&(m["t"].is_i64()||m["t"].is_boolean())).take(40).map(|m|json!({"t":m["t"],"title":cap(&string(&m["title"]),120)})).collect::<Vec<_>>()})).collect::<Vec<_>>());
                 if l["practice"].is_object() {
                     x["practice"] = clean_practice(&l["practice"]);
                 }

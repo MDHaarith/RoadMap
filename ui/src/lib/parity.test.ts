@@ -68,3 +68,25 @@ test('updater commands have no payload and background failures stay quiet', asyn
     assert.equal(updateState('ready', false), 'ready');
   } finally { clearMocks(); Reflect.deleteProperty(globalThis, 'window'); }
 });
+
+test('video preferences and plan previews preserve IPC bodies and opaque plans', async () => {
+  Object.defineProperty(globalThis, 'window', { value: { crypto: globalThis.crypto }, configurable: true });
+  const prefs = { style: 'gems', length: 'long', lang: 'Hindi', recent: 'yes' };
+  const plan = { phases: [{ title: 'Projects', lessons: [{ title: 'Build it' }] }], opaque: { keep: true } };
+  const preview = { options: [{ label: 'Practical', note: '', added: [], dropped: [], changed: [], plan }], note: '' };
+  try {
+    for (const [method, path, body, response] of [
+      ['PUT', 'api/video-prefs', prefs, {}],
+      ['PUT', 'api/courses/c/prefs', { ...prefs, refresh: true }, {}],
+      ['POST', 'api/courses/c/revise', { ask: 'More projects' }, preview],
+      ...['swap', 'harder', 'easier', 'deeper', 'remove'].map(action => ['POST', 'api/courses/c/edit', { lesson: 'a', action }, preview]),
+      ['POST', 'api/courses/c/apply', { plan, ask: 'More projects' }, { course: {}, change: {} }],
+      ['POST', 'api/courses/c/apply', { plan }, { course: {}, change: {} }],
+    ] as const) {
+      mockIPC((cmd, args) => { assert.equal(cmd, 'api'); assert.deepEqual(args, { method, path, body }); return response; });
+      assert.deepEqual(await api(method as 'PUT' | 'POST', path as string, body as object), response);
+    }
+    mockIPC(() => { throw { status: 400, message: 'This lesson has already been started.' }; });
+    await assert.rejects(api('POST', 'api/courses/c/edit', { lesson: 'a', action: 'remove' }), /already been started/);
+  } finally { clearMocks(); Reflect.deleteProperty(globalThis, 'window'); }
+});
