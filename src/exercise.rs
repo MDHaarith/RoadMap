@@ -208,6 +208,15 @@ pub(crate) fn process_with(
     secs: u64,
     input: Stdio,
 ) -> std::io::Result<(i32, String, String, bool)> {
+    process_until(cmd, secs, input, None)
+}
+// Like process_with, and also kills the program as soon as `stop` becomes true.
+pub(crate) fn process_until(
+    cmd: &mut Command,
+    secs: u64,
+    input: Stdio,
+    stop: Option<&AtomicBool>,
+) -> std::io::Result<(i32, String, String, bool)> {
     #[cfg(windows)]
     {
         use std::os::windows::process::CommandExt;
@@ -235,6 +244,10 @@ pub(crate) fn process_with(
         }
         if start.elapsed() >= Duration::from_secs(secs) {
             timeout = true;
+            child.kill()?;
+            break child.wait()?;
+        }
+        if stop.is_some_and(|s| s.load(Ordering::Relaxed)) {
             child.kill()?;
             break child.wait()?;
         }

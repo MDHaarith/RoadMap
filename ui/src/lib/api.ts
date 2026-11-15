@@ -16,11 +16,11 @@ export async function api<T>(method: 'GET' | 'POST' | 'PUT' | 'DELETE', path: st
   }
 }
 
-export async function chatStream(body: object, onPiece: (piece: string) => void): Promise<string> {
-  const ch = new Channel<string>();
-  ch.onmessage = onPiece;
+export async function chatStream(body: object, onPiece: (piece: string) => void, onStatus: (status: string) => void = () => {}): Promise<string> {
+  const ch = new Channel<string>(), status = new Channel<string>();
+  ch.onmessage = onPiece; status.onmessage = onStatus;
   try {
-    return await invoke<string>('chat_stream', { body, onPiece: ch });
+    return await invoke<string>('chat_stream', { body, onPiece: ch, onStatus: status });
   } catch (error) {
     throw apiError(error);
   }

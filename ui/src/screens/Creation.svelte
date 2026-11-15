@@ -59,8 +59,9 @@
   }
 </script>
 
-<div class="wrap narrow create">
-  <div class="create-head"><h1>{building ? 'Setting up your roadmap' : empty ? 'What do you want to learn?' : 'New roadmap'}</h1>{#if !empty}<button class="btn ghost sm" id="cancel-new" type="button" onclick={() => appState.screen = 'library'}><Icon name="back" /> Back to library</button>{/if}</div>
+<div class="wrap narrow create screen-enter">
+  {#if !empty}<a class="back-map" id="cancel-new" href="#/" onclick={() => appState.screen = 'library'}><Icon name="back" /> Your library</a>{:else if !building}<div class="create-empty-route"><Icon name="empty-route" /></div>{/if}
+  <div class="page-head create-head"><h1>{building ? 'Setting up your roadmap' : empty ? 'What do you want to learn?' : 'New roadmap'}</h1></div>
   {#if !appState.config.base || !appState.config.model}<div class="note setup"><div><strong>No AI service connected</strong><p>Add one in Settings to build a roadmap.</p></div><a class="btn secondary" href="#/settings">Open Settings</a></div>{/if}
   <form id="new" onsubmit={e => { e.preventDefault(); void create(); }}>
     <div class="form-col" hidden={building}>
@@ -78,11 +79,11 @@
     </div>
     <div id="building" hidden={!building} class={designing ? 'designing' : 'placement'}>
       {#if prompt.trim()}<p class="create-goal"><span>Your goal</span> {prompt}</p>{/if}
-      {#if designing}<Waiting title="Writing your roadmap" hint={`this usually takes ${sized[4]}`}><ol class="build-steps"><li>Plan the stages, phases and lessons for your goal.</li><li>Then find free videos for every lesson, in the background.</li></ol><p>Nothing appears until the whole plan is ready, so the clock is how you know it is still working. Keep this page open: your roadmap opens by itself.</p></Waiting>
+      {#if designing}<Waiting skeleton="plan" title="Writing your roadmap" hint={`this usually takes ${sized[4]}`}><ol class="build-steps stagger"><li>Plan the stages, phases and lessons for your goal.</li><li>Then find free videos for every lesson, in the background.</li></ol><p>Keep this page open while your plan is being written. Your roadmap opens when it is ready.</p></Waiting>
       {:else}<h2>What can you already do?</h2><p class="muted">{waiting ? 'A few questions, one at a time. Each one depends on your last answer.' : 'Pick the honest answer or type your own. “No” is useful: it puts that topic into your roadmap.'}</p>
-        {#if answers.length}<ol class="told">{#each answers as x}<li><span>{x.q}</span><b>{x.a}</b></li>{/each}</ol>{/if}
-        {#if waiting}<Waiting title={answers.length ? 'Reading your answer' : 'Preparing the first question'} hint="this usually takes 10 to 20 seconds" />
-        {:else}<div class="asking"><h3 class="question" id="pa-q" tabindex="-1">{question}</h3><div class="options">{#each options as o, i}<button class="option" type="button" onclick={() => answer?.(o)}><span class="letter">{String.fromCharCode(65 + i)}</span><span>{o}</span></button>{/each}</div><div class="own"><input id="pa-own" aria-label="Your own answer" placeholder="Or answer in your own words" maxlength="300" bind:value={own} onkeydown={e => { if (e.key === 'Enter') { e.preventDefault(); if (own.trim()) answer?.(own.trim()); } }} /><button class="btn secondary" type="button" id="pa-send" onclick={() => { if (own.trim()) answer?.(own.trim()); }}>Send</button></div></div><button class="link" type="button" id="unplaced" onclick={() => answer?.(null)}>Skip the questions and build now</button>{/if}
+        {#if answers.length}<ol class="told stagger">{#each answers as x}<li><span>{x.q}</span><b>{x.a}</b></li>{/each}</ol>{/if}
+        {#if waiting}<Waiting skeleton="question" title={answers.length ? 'Reading your answer' : 'Preparing the first question'} hint="this usually takes 10 to 20 seconds" />
+        {:else}<div class="asking"><h3 class="question" id="pa-q" tabindex="-1">{question}</h3><div class="options stagger">{#each options as o, i}<button class="option" type="button" onclick={() => answer?.(o)}><span class="letter">{String.fromCharCode(65 + i)}</span><span>{o}</span></button>{/each}</div><div class="own"><input id="pa-own" aria-label="Your own answer" placeholder="Or answer in your own words" maxlength="300" bind:value={own} onkeydown={e => { if (e.key === 'Enter') { e.preventDefault(); if (own.trim()) answer?.(own.trim()); } }} /><button class="btn secondary" type="button" id="pa-send" onclick={() => { if (own.trim()) answer?.(own.trim()); }}>Send</button></div></div><button class="link" type="button" id="unplaced" onclick={() => answer?.(null)}>Skip the questions and build now</button>{/if}
       {/if}
     </div>
   </form>

@@ -30,16 +30,23 @@ async fn chat_stream(
     app: State<'_, Arc<App>>,
     body: Value,
     on_piece: Channel<String>,
+    on_status: Channel<String>,
 ) -> Result<String, ApiError> {
     let app = app.inner().clone();
     tauri::async_runtime::spawn_blocking(move || {
         let body = request_body(body)?;
-        app.chat_stream(&body, &mut |piece| {
-            on_piece.send(piece.to_owned()).map_err(|e| ApiError {
-                status: 500,
-                message: e.to_string(),
-            })
-        })
+        app.chat_stream_with(
+            &body,
+            &mut |piece| {
+                on_piece.send(piece.to_owned()).map_err(|e| ApiError {
+                    status: 500,
+                    message: e.to_string(),
+                })
+            },
+            &mut |status| {
+                let _ = on_status.send(status.to_owned());
+            },
+        )
     })
     .await
     .map_err(worker_error)?

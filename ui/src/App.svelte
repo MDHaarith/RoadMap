@@ -6,9 +6,12 @@
   import { href } from './lib/format';
   import type { Settings } from './lib/types';
   import { updates, startUpdates } from './lib/updates.svelte';
+  import Icon from './components/Icon.svelte';
+  import Waiting from './components/Waiting.svelte';
   import UpdateStatus from './components/UpdateStatus.svelte';
   import TopBar from './components/TopBar.svelte';
   import Ideas from './components/Ideas.svelte';
+  import Confirm from './components/Confirm.svelte';
   import Library from './screens/Library.svelte';
   import Creation from './screens/Creation.svelte';
   import Overview from './screens/Overview.svelte';
@@ -34,7 +37,8 @@
   });
   function externalLink(e: MouseEvent) {
     const a = (e.target as Element).closest<HTMLAnchorElement>('a[href]');
-    if (!a || !/^https?:/i.test(a.href)) return;
+    // In `tauri dev` the app itself is served over http, so its own links must stay in the window.
+    if (!a || !/^https?:/i.test(a.href) || a.origin === location.origin) return;
     e.preventDefault(); void openUrl(a.href).catch(error => toast(message(error)));
   }
   $effect(() => { if (appState.screen === 'lesson' && appState.course && !appState.current) location.hash = href(appState.course.id); });
@@ -55,8 +59,9 @@
     {:else if appState.screen === 'settings'}<SettingsScreen />
     {:else if appState.screen === 'search'}<Search />
     {:else if appState.screen === 'mistakes'}<Mistakes />
-    {:else if appState.screen === 'error'}<div class="wrap narrow"><p class="err">{appState.error}</p><a href="#/">Back to your roadmaps</a></div>
-    {:else}<div class="wrap narrow loading" role="status">Opening your roadmap…</div>{/if}
+    {:else if appState.screen === 'error'}<div class="wrap narrow screen-enter"><a class="back-map" href="#/"><Icon name="back" /> Your library</a><div class="page-head"><h1>Could not open this roadmap</h1></div><p class="err" role="alert">{appState.error}</p></div>
+    {:else}<div class="wrap narrow screen-enter"><a class="back-map" href="#/"><Icon name="back" /> Your library</a><div class="page-head"><h1>Your roadmap</h1></div><Waiting inline title="Opening your roadmap" /></div>{/if}
   {/key}
 </main>
 <Ideas />
+<Confirm />
