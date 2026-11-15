@@ -357,14 +357,18 @@ impl App {
             ("POST", "api/install") => return install_lang(&string(&b["lang"])),
             ("POST", "api/chat") => {
                 let (c, l, ms) = self.chat_args(b)?;
-                let answer = self.tutor(&c, &merge(l.clone(), json!({"watching":b["video"]})), ms.clone(), &mut None)?;
+                let answer = self.tutor(&c, &merge(l.clone(), json!({"watching":b["video"]})), ms.clone(), &mut None, &mut |_| {})?;
                 self.save_chat(&string(&c["id"]), &string(&l["id"]), &ms, &answer);
                 return Ok(json!({"text":answer}));
+            }
+            ("POST", "api/chat/stop") => {
+                self.stop_chat.store(true, Ordering::Relaxed);
+                return Ok(json!({}));
             }
             _ => {}
         }
         let re = regex::Regex::new(
-            r"^api/courses/([0-9a-f]{12})(/notes|/state|/videos|/practice|/paused|/adapt|/revise|/expand|/export|/summary|/setup|/work|/edit|/apply|/prefs)?$",
+            r"^api/courses/([0-9a-f]{12})(/notes|/state|/videos|/practice|/paused|/adapt|/revise|/expand|/export|/summary|/setup|/work|/edit|/apply|/prefs|/chat)?$",
         )
         .unwrap();
         let m = re.captures(path).ok_or_else(Error::missing)?;
@@ -387,6 +391,17 @@ impl App {
                 let _guard = self.guard();
                 fs::remove_file(self.path_of(cid)?)?;
                 let _ = fs::remove_file(self.data.join(self.chat_file(cid)?));
+                Ok(json!({}))
+            }
+            // "New chat": forget one lesson's conversation.
+            ("DELETE", "/chat") => {
+                let name = self.chat_file(cid)?;
+                let _guard = self.guard();
+                let mut all = self.read_side(&name);
+                if let Some(o) = all.as_object_mut() {
+                    o.remove(&cap(&text(&b["lesson"]), 20));
+                    self.write_side(&name, &all)?;
+                }
                 Ok(json!({}))
             }
             ("PUT", "/state") => {
@@ -608,19 +623,39 @@ impl App {
         }
     }
     pub fn chat_stream(&self, body: &Value, on_piece: &mut dyn FnMut(&str) -> Result<()>) -> Result<String> {
+        self.chat_stream_with(body, on_piece, &mut |_| {})
+    }
+    // on_status hears what the tutor is doing between pieces. "api/chat/stop" ends the reply early.
+    pub fn chat_stream_with(
+        &self,
+        body: &Value,
+        on_piece: &mut dyn FnMut(&str) -> Result<()>,
+        on_status: &mut dyn FnMut(&str),
+    ) -> Result<String> {
         let (c, l, msgs) = self.chat_args(body)?;
+        self.stop_chat.store(false, Ordering::Relaxed);
         let mut pieces = String::new();
         let mut started = false;
         let result = {
             let mut out = |piece: &str| {
+                if self.stop_chat.load(Ordering::Relaxed) {
+                    return Err(Error::stopped());
+                }
                 on_piece(piece)?;
                 started = true;
                 pieces.push_str(piece);
                 Ok(())
             };
-            self.tutor(&c, &merge(l.clone(), json!({"watching":body["video"]})), msgs.clone(), &mut Some(&mut out))
+            self.tutor(&c, &merge(l.clone(), json!({"watching":body["video"]})), msgs.clone(), &mut Some(&mut out), on_status)
         };
         match result {
+            // A stopped reply keeps what had arrived and adds no note; the page already knows.
+            Err(e) if e.status == 499 => {
+                if started {
+                    self.save_chat(&string(&c["id"]), &string(&l["id"]), &msgs, &pieces);
+                }
+                Err(e)
+            }
             Ok(text) => {
                 self.save_chat(&string(&c["id"]), &string(&l["id"]), &msgs, &text);
                 let text = if text.is_empty() { "(No answer.)".into() } else { text };

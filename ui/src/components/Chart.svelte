@@ -41,9 +41,14 @@
 </figure>
 
 <style>
-  .chart { margin: 0 0 var(--s5); padding: var(--s5); border: 1px solid var(--line); border-radius: var(--r-lg); background: var(--surface); }
+  .chart { display: grid; grid-template-columns: minmax(0, 640px) minmax(240px, 1fr); column-gap: var(--s6); align-items: start; margin: 0 0 var(--s5); padding: var(--s5) 0; border-top: 1px solid var(--line); }
   figcaption { margin-bottom: 8px; }
-  svg { width: 100%; max-width: 640px; height: auto; display: block; margin-inline: auto; }
+  svg { grid-column: 1; grid-row: 1 / 3; width: 100%; max-width: 640px; height: auto; display: block; }
+  figcaption, p { grid-column: 2; max-width: 72ch; }
+  figcaption { grid-row: 1; }
+  p { grid-row: 2; }
+  .legend { grid-column: 1; grid-row: 3; }
+  @media (max-width: 1180px) { .chart { grid-template-columns: minmax(0, 1fr); } svg, figcaption, p, .legend { grid-row: auto; grid-column: 1; } }
   text { font-size: 11px; fill: var(--muted); }
   .axis-name { fill: var(--ink); }
   .grid { stroke: var(--line); }

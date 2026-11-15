@@ -13,7 +13,7 @@ use std::{
     fs,
     path::PathBuf,
     sync::{
-        atomic::{AtomicI64, Ordering},
+        atomic::{AtomicBool, AtomicI64, Ordering},
         Arc, Mutex,
     },
 };
@@ -35,6 +35,13 @@ impl Error {
         Self {
             status: 404,
             message: "Not found".into(),
+        }
+    }
+    // The learner stopped the tutor reply.
+    pub fn stopped() -> Self {
+        Self {
+            status: 499,
+            message: "Stopped.".into(),
         }
     }
 }
@@ -74,6 +81,8 @@ pub struct App {
     // Roadmaps whose unpicked videos were already searched again this run.
     pub(crate) repicked: Mutex<HashSet<String>>,
     pub(crate) day_offset: AtomicI64,
+    // Set when the learner stops the tutor reply that is on its way; cleared when the next one starts.
+    pub(crate) stop_chat: AtomicBool,
     pub(crate) pick: Box<dyn Fn(&str) -> String + Send + Sync>,
     pub(crate) yt_program: PathBuf,
     pub(crate) codex_program: PathBuf,
@@ -107,6 +116,7 @@ impl App {
             fetching: Mutex::new(HashSet::new()),
             repicked: Mutex::new(HashSet::new()),
             day_offset: AtomicI64::new(0),
+            stop_chat: AtomicBool::new(false),
             pick: Box::new(pick),
             yt_program: if cfg!(windows) { "yt-dlp.exe" } else { "yt-dlp" }.into(),
         }))

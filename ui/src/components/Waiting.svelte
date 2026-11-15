@@ -1,7 +1,14 @@
 <script lang="ts">
   import type { Snippet } from 'svelte';
   import Elapsed from './Elapsed.svelte';
-  // An honest wait: what is happening, how long it usually takes, and a live elapsed clock.
-  let { title, hint = '', inline = false, children }: { title: string; hint?: string; inline?: boolean; children?: Snippet } = $props();
+  import Skeleton from './Skeleton.svelte';
+  import { appState } from '../lib/state.svelte';
+  let { title, hint = '', inline = false, skeleton = 'text', children }: { title: string; hint?: string; inline?: boolean; skeleton?: string; children?: Snippet } = $props();
+  // The route shell owns first loads; its destination determines the placeholder layout.
+  let initial = $derived(appState.screen === 'loading');
+  let shape = $derived(initial ? (/^#\/c\/[^/]+\/exam\//.test(location.hash) ? 'question' : /^#\/c\/[^/]+\/[^/]+/.test(location.hash) ? 'lesson' : location.hash.startsWith('#/c/') ? 'overview' : 'home') : skeleton);
 </script>
-<div class="waiting" class:inline role="status"><span class="spinner" aria-hidden="true"></span>{#if inline}<span>{title} <Elapsed /></span>{:else}<div><strong>{title}</strong><p><Elapsed />{hint ? ' · ' + hint : ''}</p>{@render children?.()}</div>{/if}</div>
+<div class="waiting" class:inline class:initial aria-busy="true">
+  {#if !initial}<div class="waiting-copy" role="status"><strong>{title}</strong><p><span aria-hidden="true"><Elapsed /></span>{hint ? ' · ' + hint : ''}</p>{@render children?.()}</div>{/if}
+  <Skeleton kind={shape} />
+</div>

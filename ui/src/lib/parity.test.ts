@@ -90,3 +90,25 @@ test('video preferences and plan previews preserve IPC bodies and opaque plans',
     await assert.rejects(api('POST', 'api/courses/c/edit', { lesson: 'a', action: 'remove' }), /already been started/);
   } finally { clearMocks(); Reflect.deleteProperty(globalThis, 'window'); }
 });
+
+test('design text tokens retain AA contrast on their supported surfaces', async () => {
+  const { readFile } = await import('node:fs/promises');
+  const css = await readFile(new URL('../app.css', import.meta.url), 'utf8');
+  const colors = Object.fromEntries([...css.matchAll(/--([\w-]+):\s*(#[\da-f]{6})\b/gi)].map(m => [m[1], m[2]]));
+  function luminance(hex: string) {
+    const linear = hex.slice(1).match(/../g)!.map(c => {
+      const n = parseInt(c, 16) / 255;
+      return n <= .04045 ? n / 12.92 : ((n + .055) / 1.055) ** 2.4;
+    });
+    return linear[0] * .2126 + linear[1] * .7152 + linear[2] * .0722;
+  }
+  const pairs = ['bg', 'bg-subtle', 'surface-2', 'hover', 'accent-soft', 'success-soft', 'danger-soft', 'warn-soft']
+    .flatMap(bg => ['ink', 'ink-2', 'muted'].map(fg => [fg, bg]));
+  pairs.push(['accent-ink', 'bg'], ['accent-ink', 'accent-soft'], ['on-accent', 'accent'], ['on-accent', 'accent-hover'], ['on-accent', 'ink'],
+    ['success', 'success-soft'], ['danger', 'danger-soft'], ['warn', 'warn-soft'], ['player-fg', 'player'], ['player-link', 'player']);
+  for (const [fg, bg] of pairs) {
+    const a = luminance(colors[fg]), b = luminance(colors[bg]);
+    const contrast = (Math.max(a, b) + .05) / (Math.min(a, b) + .05);
+    assert.ok(contrast >= 4.5, `${fg} on ${bg}: ${contrast.toFixed(2)}:1`);
+  }
+});

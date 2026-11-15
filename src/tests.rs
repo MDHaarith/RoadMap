@@ -285,6 +285,7 @@ fn python_spec_end_to_end() {
         fetching: Mutex::new(std::collections::HashSet::new()),
         repicked: Mutex::new(HashSet::new()),
         day_offset: AtomicI64::new(0),
+        stop_chat: AtomicBool::new(false),
         pick: Box::new(move |k| {
             if k == "file" {
                 export_s.clone()
@@ -717,10 +718,13 @@ fn python_spec_end_to_end() {
     assert!(results[1].starts_with("Lesson 1.1: Mix"));
     assert_eq!(results[2], "That tool or argument does not exist.");
     assert_eq!(results[2], results[3]);
-    let mut pieces = String::new();
-    let answer = app.chat_stream(&chat, &mut |piece| { pieces.push_str(piece); Ok(()) }).unwrap();
+    let (mut pieces, mut statuses) = (String::new(), Vec::new());
+    let answer = app.chat_stream_with(&chat, &mut |piece| { pieces.push_str(piece); Ok(()) }, &mut |s| statuses.push(s.to_string())).unwrap();
     assert_eq!(answer, "hint for: 1.1: Mix");
     assert_eq!(pieces, answer);
+    assert_eq!(statuses[0], "Running your exercise tests");
+    assert_eq!(statuses[1], "Reading another lesson");
+    assert_eq!(statuses.last().unwrap(), "Writing the answer");
     assert_eq!(ai.last()["stream"], true);
     assert_eq!(
         list(&ai.last()["messages"])
@@ -1557,6 +1561,63 @@ fn chat_stream_fallback_empty_partial_and_early_errors() {
     worker.join().unwrap();
 }
 #[test]
+fn chat_stops_keeps_what_arrived_and_clears() {
+    let tmp = tempfile::tempdir().unwrap();
+    let app = isolated_app(tmp.path());
+    let cid = "0123456789ab";
+    let mut c = course();
+    c["id"] = json!(cid);
+    c["phases"][0]["lessons"][0]["id"] = json!("1.1");
+    app.save(&c).unwrap();
+    let server = tiny_http::Server::http("127.0.0.1:0").unwrap();
+    app.save_config(&json!({"base":format!("http://{}/v1", server.server_addr()),"model":"m"})).unwrap();
+    let worker = thread::spawn(move || {
+        let delta = |s: &str| format!("data: {}\n\n", json!({"choices":[{"delta":{"content":s}}]}));
+        let req = server.recv_timeout(Duration::from_secs(10)).unwrap().expect("chat request");
+        req.respond(tiny_http::Response::from_string(delta("one") + &delta(" two"))
+            .with_header(tiny_http::Header::from_bytes("Content-Type", "text/event-stream").unwrap())).unwrap();
+    });
+    let body = json!({"course":cid,"lesson":"1.1","messages":[{"role":"user","content":"help"}]});
+    let mut pieces = String::new();
+    let stopped = app.chat_stream(&body, &mut |piece| {
+        pieces.push_str(piece);
+        app.route("POST", "api/chat/stop", &json!({})).map(|_| ())
+    });
+    assert_eq!(stopped.unwrap_err().status, 499);
+    assert_eq!(pieces, "one");
+    let saved = |app: &App| app.read_side(&app.chat_file(cid).unwrap())["1.1"].clone();
+    assert_eq!(saved(&app)[1]["content"], "one");
+    app.route("DELETE", &format!("api/courses/{cid}/chat"), &json!({"lesson":"1.1"})).unwrap();
+    assert!(saved(&app).is_null());
+    worker.join().unwrap();
+}
+#[test]
+#[cfg(unix)] // Uses Unix shell fixtures, permissions or symlinks.
+fn stop_ends_a_running_codex_answer() {
+    let tmp = tempfile::tempdir().unwrap();
+    let mut app = isolated_app(tmp.path());
+    let a = Arc::get_mut(&mut app).unwrap();
+    // A stand-in for Codex that never answers in time.
+    a.codex_program = tmp.path().join("codex");
+    fs::write(&a.codex_program, "#!/bin/sh\ncat > /dev/null\nexec sleep 30\n").unwrap();
+    fs::set_permissions(&a.codex_program, fs::Permissions::from_mode(0o755)).unwrap();
+    let mut c = course();
+    c["id"] = json!("0123456789ab");
+    c["phases"][0]["lessons"][0]["id"] = json!("1.1");
+    app.save(&c).unwrap();
+    let other = app.clone();
+    let worker = thread::spawn(move || {
+        thread::sleep(Duration::from_millis(300));
+        other.route("POST", "api/chat/stop", &json!({})).unwrap();
+    });
+    let start = std::time::Instant::now();
+    let body = json!({"course":"0123456789ab","lesson":"1.1","messages":[{"role":"user","content":"help"}]});
+    let stopped = app.chat_stream(&body, &mut |_| Ok(()));
+    assert_eq!(stopped.unwrap_err().status, 499);
+    assert!(start.elapsed() < Duration::from_secs(10), "stop did not end the Codex run");
+    worker.join().unwrap();
+}
+#[test]
 fn charts_are_cleaned() {
     let c = clean_charts(&json!([
         {"title":"Break-even","kind":"line","x":"Units","y":"£","labels":["0","100","200"],
@@ -1636,6 +1697,23 @@ fn real_ai() {
     assert!(failed.is_empty(), "{failed:#?}");
 }
 
+// Real Codex and real YouTube: pick videos for one lesson of a saved roadmap file, to see why a pick fails.
+// REAL_COURSE=/path/to/roadmap.json REAL_LESSON=1.1 cargo test real_video_pick -- --ignored --nocapture
+#[test]
+#[ignore]
+fn real_video_pick() {
+    let tmp = tempfile::tempdir().unwrap();
+    let app = isolated_app(tmp.path());
+    let c: Value = serde_json::from_slice(&fs::read(std::env::var("REAL_COURSE").unwrap()).unwrap()).unwrap();
+    let l = lesson(&c, &json!(std::env::var("REAL_LESSON").unwrap())).unwrap();
+    let t = Instant::now();
+    let vids = app.find_videos(&c, l, &[]).unwrap();
+    println!("{} videos in {:.0}s", vids.len(), t.elapsed().as_secs_f32());
+    for v in &vids {
+        println!("- {} | why: {}", text(&v["title"]), text(&v["why"]));
+    }
+    assert!(vids.iter().all(|v| truth(&v["why"])), "raw results were kept: the AI pick failed");
+}
 // Real Codex and real YouTube: the model list, a notes rewrite, and a tutor answer about the open video.
 // cargo test real_notes_and_captions -- --ignored --nocapture
 #[test]

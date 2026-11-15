@@ -1,5 +1,6 @@
 import { api, apiError, chatStream } from './api';
 import { enc, href } from './format';
+import { loadModels } from './models.svelte';
 import { lessons, checked, passed } from './progress';
 import type { Course, Lesson, LibraryCourse, Settings, ReviewData, Message, Session, RunState } from './types';
 
@@ -11,6 +12,8 @@ export const appState = $state({
   review: { count: 0, questions: [] } as ReviewData,
   toast: '', ideasOpen: false, ideas: null as string[] | null,
   busyKey: '', adapting: false,
+  // What the tutor is doing while a reply is on its way, for example "Reading the video transcript". Empty when idle.
+  tutorStatus: '',
   chats: {} as Record<string, Message[]>,
   sessions: {} as Record<string, Session>,
   practiceViews: {} as Record<string, string>,
@@ -63,6 +66,8 @@ export async function loadLibrary() {
   ]);
   if (version !== appState.routeVersion) return;
   appState.library = list; appState.config = cfg; appState.review = review; appState.screen = 'library';
+  // Codex model names come from a local file, so load them early: the tutor then shows "GPT-5.6 Terra", not the raw id.
+  if (cfg.base === 'codex') void loadModels();
 }
 export async function route() {
   const version = ++appState.routeVersion;
@@ -151,18 +156,35 @@ export async function ask(text: string) {
   appState.chats[key] ||= [];
   const msgs = appState.chats[key]; msgs.push({ role: 'user', content: text });
   const body = { course: c.id, lesson: l.id, messages: $state.snapshot(msgs), stream: true, ...(appState.openVideo ? { video: appState.openVideo } : {}) };
-  appState.busyKey = key;
+  appState.busyKey = key; appState.tutorStatus = 'Thinking'; stopped = false;
   msgs.push({ role: 'assistant', content: '' });
   const m = msgs[msgs.length - 1];
   try {
-    const full = await chatStream(body, piece => { m.content += piece; });
+    const full = await chatStream(body, piece => { m.content += piece; }, status => { appState.tutorStatus = status; });
     if (!m.content) m.content = full || '(No answer.)';
     return true;
   } catch (error) {
-    if (m.content) m.content += '\n\n(The answer was cut off.)';
-    else { msgs.pop(); msgs.pop(); toast(message(error)); }
+    // A stopped reply keeps what had arrived; with nothing arrived the question goes back to the box.
+    if (m.content) { if (!stopped) m.content += '\n\n(The answer was cut off.)'; return stopped; }
+    msgs.pop(); msgs.pop();
+    if (!stopped) toast(message(error));
     return false;
-  } finally { appState.busyKey = ''; }
+  } finally { appState.busyKey = ''; appState.tutorStatus = ''; }
+}
+let stopped = false;
+/** Stops the tutor reply that is on its way. */
+export function stopAsk() {
+  if (!appState.busyKey || stopped) return;
+  stopped = true; appState.tutorStatus = 'Stopping';
+  void api('POST', 'api/chat/stop').catch(() => {});
+}
+/** Empties this lesson's conversation, on screen and on disk. */
+export async function clearChat(c: Course, l: Lesson) {
+  if (appState.busyKey) return;
+  try {
+    await api('DELETE', 'api/courses/' + enc(c.id) + '/chat', { lesson: l.id });
+    appState.chats[keyFor(c, l)] = [];
+  } catch (error) { toast(message(error)); }
 }
 export async function loadPractice(fresh = false) {
   const c = appState.course!, l = appState.current!, key = keyFor(c, l);

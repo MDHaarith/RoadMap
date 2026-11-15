@@ -1,6 +1,6 @@
 use crate::*;
 use crate::{
-    exercise::{clean_practice, language, process, process_with, run_code, LANGS},
+    exercise::{clean_practice, language, process, process_until, run_code, LANGS},
     project::root_of,
     prompts::*,
 };
@@ -319,13 +319,18 @@ impl App {
             cmd.args(["-m", model]);
         }
         let input = fs::File::open(file("prompt.txt", &prompt)?)?;
-        let (_, out, err, timeout) = process_with(cmd.arg("-"), 900, input.into()).map_err(|e| {
+        // Only a tutor reply has a sink, and only that can be stopped by the learner.
+        let stop = on_text.is_some().then_some(&self.stop_chat);
+        let (_, out, err, timeout) = process_until(cmd.arg("-"), 900, input.into(), stop).map_err(|e| {
             if e.kind() == std::io::ErrorKind::NotFound {
                 Error::bad("Codex is not installed. Install it and run `codex login` in a terminal, or choose another AI service in Settings.")
             } else {
                 e.into()
             }
         })?;
+        if stop.is_some_and(|s| s.load(Ordering::Relaxed)) {
+            return Err(Error::stopped());
+        }
         if timeout {
             return Err(Error::bad("Codex took longer than 15 minutes and was stopped. Try again."));
         }
@@ -906,7 +911,11 @@ impl App {
         // One retry: a model call that fails once usually works the second time.
         let Ok((mut picks, better)) = self
             .pick_videos(c, l, &vids, &query, &pr)
-            .or_else(|_| self.pick_videos(c, l, &vids, &query, &pr))
+            .or_else(|e| {
+                eprintln!("video pick failed, trying once more: {e}");
+                self.pick_videos(c, l, &vids, &query, &pr)
+            })
+            .inspect_err(|e| eprintln!("video pick failed again: {e}"))
         else {
             // No AI: the top raw results, saved without a reason so a later open picks again (see `unpicked`).
             return self.video_chapters(vids.into_iter().take(4).collect());
@@ -998,7 +1007,7 @@ impl App {
             )
             .and_then(|r| parse(&r, "a video choice"));
         // The check failed: the title-based shortlist stands.
-        let Ok(d) = checked else {
+        let Ok(d) = checked.inspect_err(|e| eprintln!("video transcript check failed: {e}")) else {
             picks.truncate(4);
             return picks;
         };
@@ -1332,6 +1341,8 @@ impl App {
         l: &Value,
         msgs: Vec<Value>,
         on_text: &mut Sink<'_>,
+        // Told in plain words what the tutor is doing, so a long wait is not a blank one.
+        on_status: &mut dyn FnMut(&str),
     ) -> Result<String> {
         let tools = self.tutor_tools(c, l);
         let mut system = self.tutor_system(c,l)?;
@@ -1363,6 +1374,15 @@ impl App {
             all.push(json!({"role":"assistant","content":m["content"],"tool_calls":calls}));
             for k in calls {
                 let f = &k["function"];
+                on_status(match f["name"].as_str().unwrap_or("") {
+                    "get_lesson" => "Reading another lesson",
+                    "run_exercise_tests" => "Running your exercise tests",
+                    "list_project_files" => "Looking through your project",
+                    "read_project_file" => "Reading a file of your project",
+                    "get_project_changes" => "Checking what you changed",
+                    "read_video_transcript" => "Reading the video transcript",
+                    _ => "Thinking",
+                });
                 let out = serde_json::from_str::<Value>(&if truth(&f["arguments"]) {
                     text(&f["arguments"])
                 } else {
@@ -1373,6 +1393,10 @@ impl App {
                 .unwrap_or_else(|| "That tool or argument does not exist.".into());
                 all.push(json!({"role":"tool","tool_call_id":k["id"],"content":cap(&out,12000)}));
             }
+            if on_text.is_some() && self.stop_chat.load(Ordering::Relaxed) {
+                return Err(Error::stopped());
+            }
+            on_status("Writing the answer");
         }
         let answer = "The tutor did not finish its answer. Ask again.";
         if let Some(out) = on_text.as_mut() {

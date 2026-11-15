@@ -4,6 +4,8 @@
   import { appState, toast, message, flushSave } from '../lib/state.svelte';
   import { enc } from '../lib/format';
   import type { Course, VideoPrefs } from '../lib/types';
+  import Select from './Select.svelte';
+  const uid = $props.id();
   let { initial, course }: { initial?: VideoPrefs; course?: Course } = $props();
   let prefs = $state<VideoPrefs>({ style: '', length: '', lang: '', recent: '', ...untrack(() => initial) });
   let busy = $state(false);
@@ -22,10 +24,10 @@
 </script>
 <form onsubmit={e => { e.preventDefault(); void save(); }}>
   <div class="prefs-grid">
-    <label>Style<select bind:value={prefs.style}><option value="">{course ? 'Use Settings' : 'Thorough and clear'}</option><option value="popular">Most watched</option><option value="depth">In depth / most thorough</option><option value="gems">Hidden gems</option></select></label>
-    <label>Length<select bind:value={prefs.length}><option value="">{course ? 'Use Settings' : '10 minutes or longer'}</option><option value="short">Under 20 minutes</option><option value="medium">10–60 minutes</option><option value="long">Over 30 minutes / full courses</option></select></label>
-    <label>Language<input bind:value={prefs.lang} maxlength="40" pattern={"[\\p{L} ]*"} placeholder={course ? 'Use Settings' : 'Lesson’s language'} /></label>
-    <label>Recent uploads<select bind:value={prefs.recent}><option value="">{course ? 'Use Settings' : 'Default'}</option><option value="yes">Prefer last 3 years</option><option value="no">No preference for recent uploads</option></select></label>
+    <div><label for={`${uid}-style`}>Style</label><Select id={`${uid}-style`} value={prefs.style} onchange={v => prefs.style = v} options={[{value: '', label: course ? 'Use Settings' : 'Thorough and clear'}, {value: 'popular', label: 'Most watched'}, {value: 'depth', label: 'In depth / most thorough'}, {value: 'gems', label: 'Hidden gems'}]} /></div>
+    <div><label for={`${uid}-length`}>Length</label><Select id={`${uid}-length`} value={prefs.length} onchange={v => prefs.length = v} options={[{value: '', label: course ? 'Use Settings' : '10 minutes or longer'}, {value: 'short', label: 'Under 20 minutes'}, {value: 'medium', label: '10–60 minutes'}, {value: 'long', label: 'Over 30 minutes / full courses'}]} /></div>
+    <div><label for={`${uid}-lang`}>Language</label><input id={`${uid}-lang`} bind:value={prefs.lang} maxlength="40" pattern={"[\\p{L} ]*"} placeholder={course ? 'Use Settings' : 'Lesson’s language'} /></div>
+    <div><label for={`${uid}-recent`}>Recent uploads</label><Select id={`${uid}-recent`} value={prefs.recent} onchange={v => prefs.recent = v} options={[{value: '', label: course ? 'Use Settings' : 'Default'}, {value: 'yes', label: 'Prefer last 3 years'}, {value: 'no', label: 'No preference for recent uploads'}]} /></div>
   </div><button class="btn secondary sm" disabled={busy}>{busy ? 'Saving…' : 'Save video preferences'}</button>
 </form>
-<style>.prefs-grid{display:grid;grid-template-columns:repeat(2,minmax(0,1fr));gap:8px;margin:8px 0}.prefs-grid input,.prefs-grid select{width:100%;min-width:0}</style>
+<style>.prefs-grid{display:grid;grid-template-columns:repeat(2,minmax(0,1fr));gap:8px;margin:8px 0}.prefs-grid input{width:100%;min-width:0}.prefs-grid label{margin-top:0}</style>
