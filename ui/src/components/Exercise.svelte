@@ -6,6 +6,7 @@
   import Icon from './Icon.svelte';
   import Formatted from './Formatted.svelte';
   import Elapsed from './Elapsed.svelte';
+  import BusyLabel from './BusyLabel.svelte';
   import { confirmAsk } from './Confirm.svelte';
   let { c, l, ex }: { c: Course; l: Lesson; ex: Exercise } = $props();
   let key = $derived(keyFor(c, l)), run = $derived(appState.runs[key]);
@@ -23,7 +24,7 @@
   <div class="output" class:passed={!!run && !busy && !run.missing && !run.error && !!run.ok} class:failed={!!run && !busy && !run.missing && !run.error && !run.ok}><div class="output-header" role="status">{run?.installing ? 'Installing ' + languageName(run.missing || '') + '…' : run?.running ? run.test ? 'Running tests… ' : 'Running code… ' : run?.missing ? languageName(run.missing) + ' is needed' : run?.error ? 'The code could not run' : run ? run.test ? run.ok ? 'Tests passed' : 'Tests failed' : run.ok ? 'Run finished' : 'Run failed' : 'Output'}{#if busy}<Elapsed />{/if}</div>
     <pre id="output">{run?.installing ? 'Finish the system password dialog if it is open. Installation can take several minutes; you can keep reading while it runs.' : run?.running ? 'Compiling and running can take up to 60 seconds. You can keep reading while it runs.' : run?.output ?? 'Run your code to see the result here.'}</pre>
     {#if busy}<Skeleton rows={3} />{/if}
-    {#if run?.missing}<div class="install-note"><p>{run.installing ? 'The system is installing a package. Keep the app open until it finishes.' : 'This installs a system package and will ask for your password.'}</p><button class="btn secondary" id="install-lang" disabled={run.installing} onclick={installLanguage}>{run.installing ? 'Installing…' : 'Install ' + languageName(run.missing)}</button>{#if run.installError}<p class="err" role="alert">{run.installError}</p>{/if}</div>{/if}
+    {#if run?.missing}<div class="install-note"><p>{run.installing ? 'The system is installing a package. Keep the app open until it finishes.' : 'This installs a system package and will ask for your password.'}</p><button class="btn secondary" id="install-lang" disabled={run.installing} onclick={installLanguage}><BusyLabel busy={!!run.installing} idle={'Install ' + languageName(run.missing)} label="Installing…" /></button>{#if run.installError}<p class="err" role="alert">{run.installError}</p>{/if}</div>{/if}
   </div>
   <details><summary>View the tests</summary><pre>{ex.tests}</pre></details>
 </section>

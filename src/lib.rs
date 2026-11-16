@@ -34,7 +34,7 @@ impl Error {
     pub fn missing() -> Self {
         Self {
             status: 404,
-            message: "Not found".into(),
+            message: "That roadmap or lesson no longer exists. Go back to your library and open it again.".into(),
         }
     }
     // The learner stopped the tutor reply.
@@ -53,19 +53,22 @@ impl std::fmt::Display for Error {
 impl std::error::Error for Error {}
 impl From<std::io::Error> for Error {
     fn from(e: std::io::Error) -> Self {
-        if e.kind() == std::io::ErrorKind::NotFound {
-            Self::missing()
-        } else {
-            Self {
-                status: 500,
-                message: format!("IOError: {e}"),
-            }
+        use std::io::ErrorKind::*;
+        let why = match e.kind() {
+            NotFound => return Self::missing(),
+            StorageFull => "the disk is full. Free some space and try again.".to_string(),
+            PermissionDenied | ReadOnlyFilesystem => "it is not allowed to write there. Check that your home folder is writable.".into(),
+            _ => format!("{e}. Try again; if it keeps happening, restart the app."),
+        };
+        Self {
+            status: 500,
+            message: format!("The app could not read or save a file: {why}"),
         }
     }
 }
 impl From<serde_json::Error> for Error {
-    fn from(e: serde_json::Error) -> Self {
-        Self::bad(e.to_string())
+    fn from(_: serde_json::Error) -> Self {
+        Self::bad("A saved file is damaged and could not be read.")
     }
 }
 
@@ -78,11 +81,17 @@ pub struct App {
     pub(crate) meter: Mutex<()>,
     // Roadmaps whose video search is running, so reopening one does not start a second search.
     pub(crate) fetching: Mutex<HashSet<String>>,
+    // Video ids waiting for a caption fetch, so reopening a roadmap does not queue another thread per open.
+    pub(crate) transcribing: Mutex<HashSet<String>>,
     // Roadmaps whose unpicked videos were already searched again this run.
     pub(crate) repicked: Mutex<HashSet<String>>,
     pub(crate) day_offset: AtomicI64,
     // Set when the learner stops the tutor reply that is on its way; cleared when the next one starts.
     pub(crate) stop_chat: AtomicBool,
+    // How many yt-dlp processes are running; see `yt`.
+    pub(crate) yt_running: (Mutex<usize>, std::sync::Condvar),
+    // The last `codex login status` answer and when it was asked; see `codex_status`.
+    pub(crate) codex_seen: Mutex<Option<(std::time::Instant, &'static str)>>,
     pub(crate) pick: Box<dyn Fn(&str) -> String + Send + Sync>,
     pub(crate) yt_program: PathBuf,
     pub(crate) codex_program: PathBuf,
@@ -114,30 +123,54 @@ impl App {
             off: Mutex::new(HashSet::new()),
             meter: Mutex::new(()),
             fetching: Mutex::new(HashSet::new()),
+            transcribing: Mutex::new(HashSet::new()),
             repicked: Mutex::new(HashSet::new()),
             day_offset: AtomicI64::new(0),
             stop_chat: AtomicBool::new(false),
+            yt_running: Default::default(),
+            codex_seen: Mutex::new(None),
             pick: Box::new(pick),
             yt_program: if cfg!(windows) { "yt-dlp.exe" } else { "yt-dlp" }.into(),
         }))
     }
     // A panic in one request must not poison saving for every later request.
-    pub(crate) fn guard(&self) -> (std::sync::MutexGuard<'_, ()>, fs::File) {
+    // The file lock keeps the MCP server's writes apart from the app's. Without it (a read-only disk) the save itself reports the problem.
+    pub(crate) fn guard(&self) -> (std::sync::MutexGuard<'_, ()>, Option<fs::File>) {
         let guard = self.lock.lock().unwrap_or_else(|e| e.into_inner());
-        fs::create_dir_all(&self.data).expect("create data directory for lock");
+        let _ = fs::create_dir_all(&self.data);
         let file = fs::OpenOptions::new().create(true).truncate(false).write(true)
-            .open(self.data.join(".roadmap.lock")).expect("open data lock");
-        file.lock().expect("lock data directory");
+            .open(self.data.join(".roadmap.lock")).ok()
+            .filter(|f| f.lock().is_ok());
         (guard, file)
     }
+    // Days by the learner's own calendar, so reviews fall due at local midnight, not at UTC midnight.
     pub(crate) fn today(&self) -> i64 {
-        std::time::SystemTime::now()
-            .duration_since(std::time::UNIX_EPOCH)
-            .unwrap_or_default()
-            .as_secs() as i64
-            / 86400
+        chrono::Local::now().date_naive().signed_duration_since(chrono::DateTime::UNIX_EPOCH.date_naive()).num_days()
             + self.day_offset.load(Ordering::Relaxed)
     }
+}
+// Temp file in the same folder, flushed to disk, then renamed over the target: a crash leaves the old file or the new one, never half of one.
+// The temp name is unique, so two writers never share it; on Unix it is created 0600.
+pub(crate) fn write_atomic(path: &std::path::Path, bytes: &[u8]) -> Result<()> {
+    use std::io::Write;
+    let dir = path.parent().ok_or_else(Error::missing)?;
+    fs::create_dir_all(dir)?;
+    let mut tmp = tempfile::NamedTempFile::new_in(dir)?;
+    tmp.write_all(bytes)?;
+    tmp.as_file().sync_all()?;
+    // On Windows a virus scanner or indexer briefly holding the target makes the rename fail with "access denied"; it clears in moments.
+    for _ in 0..10 {
+        match tmp.persist(path) {
+            Ok(_) => return Ok(()),
+            Err(e) if e.error.kind() == std::io::ErrorKind::PermissionDenied => {
+                tmp = e.file;
+                std::thread::sleep(std::time::Duration::from_millis(50));
+            }
+            Err(e) => return Err(e.error.into()),
+        }
+    }
+    tmp.persist(path).map_err(|e| e.error)?;
+    Ok(())
 }
 pub(crate) fn random_hex(n: usize) -> Result<String> {
     let mut b = vec![0; n];
@@ -225,8 +258,15 @@ pub(crate) fn strs(v: &Value, n: usize) -> Vec<String> {
 pub(crate) fn joined(v: &Value) -> String {
     list(v).iter().map(text).collect::<Vec<_>>().join("; ")
 }
-pub(crate) fn matches(re: &str, s: &str) -> bool {
-    regex::Regex::new(re).unwrap().is_match(s)
+pub(crate) fn matches(re: &'static str, s: &str) -> bool {
+    regex(re).is_match(s)
+}
+// Patterns are compiled once and shared: compiling one, or warming a fresh copy's match cache, costs far more than matching.
+// Only `'static` patterns (literals in this crate) can be cached, so a pattern built from data can never grow the leaked set.
+pub(crate) fn regex(re: &'static str) -> &'static regex::Regex {
+    static CACHE: std::sync::LazyLock<Mutex<std::collections::HashMap<&'static str, &'static regex::Regex>>> = std::sync::LazyLock::new(Default::default);
+    let mut cache = CACHE.lock().unwrap_or_else(|e| e.into_inner());
+    cache.entry(re).or_insert_with(|| Box::leak(Box::new(regex::Regex::new(re).unwrap())))
 }
 /// No video with fewer views is searched for, picked or kept.
 pub(crate) const MIN_VIEWS: i64 = 1000;

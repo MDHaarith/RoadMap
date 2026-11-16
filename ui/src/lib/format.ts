@@ -1,7 +1,14 @@
 export const esc = (s: unknown) => String(s ?? '').replace(/[&<>"']/g,c=>({'&':'&amp;','<':'&lt;','>':'&gt;','"':'&quot;',"'":'&#39;'}[c]!));
-export const fmt = (s: unknown) => esc(s).replace(/`([^`]+)`/g,'<code>$1</code>').replace(/\*\*([^*]+)\*\*/g,'<strong>$1</strong>')
+const emphasis = (s: string) => s.replace(/\*\*([^*]+)\*\*/g,'<strong>$1</strong>')
   // Single stars are emphasis only around a word, so 2*3*4 and "a * b" stay as typed.
-  .replace(/(?<![\w*])\*([^*\s](?:[^*]*[^*\s])?)\*(?![\w*])/g,'<em>$1</em>');
+  .replace(/(?<![\w*])\*([^*\s](?:[^*]*[^*\s])?)\*(?![\w*])/g,'<em>$1</em>')
+  // Unbalanced pairs models sometimes write (**x* or *x**) still mean bold.
+  .replace(/(?<![\w*])\*\*([^*\s](?:[^*]*[^*\s])?)\*(?![\w*])/g,'<strong>$1</strong>')
+  .replace(/(?<![\w*])\*([^*\s](?:[^*]*[^*\s])?)\*\*(?![\w*])/g,'<strong>$1</strong>')
+  // A marker left touching text on one side only is a stray: drop it, keep the text. Stars between or away from text stay.
+  .replace(/(?<![^\s<>])\*+(?=[^\s*<>])|(?<=[^\s*<>])\*+(?![^\s<>])/g,'');
+// Escape first, then mark up; code spans are left exactly as typed.
+export const fmt = (s: unknown) => esc(s).replace(/`([^`]+)`/g,'<code>$1</code>').split(/(<code>[^<]*<\/code>)/).map((p,i)=>i%2?p:emphasis(p)).join('');
 export const fmtTutor = (s: unknown) => String(s).split('```').map((p,i)=>i%2?'<pre>'+esc(p.replace(/^[a-z]*\n/,''))+'</pre>':fmt(p).replace(/\n/g,'<br>').replace(/\bvideo (\d) at (\d{1,3}):(\d\d)\b/gi,(m,n,a,b)=>`<button type="button" class="seek" data-seek="${n-1}" data-at="${a*60+ +b}">${m}</button>`)).join('');
 export const enc = (s: string) => encodeURIComponent(s).replace(/'/g,'%27');
 export const href = (c: string,l?: string) => '#/c/'+enc(c)+(l?'/'+enc(l):'');

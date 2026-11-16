@@ -3,6 +3,7 @@
   import { onMount } from 'svelte';
   import { api, apiError } from '../lib/api';
   import type { Course, Lesson } from '../lib/types';
+  import LoadError from './LoadError.svelte';
   let { c, l }: { c: Course; l: Lesson } = $props();
   let selected = $state(0), loading = $state(false), text = $state(''), error = $state('');
   let request = 0;
@@ -16,6 +17,6 @@
   }
 </script>
 <div class="file-layout"><div class="file-list" role="group" aria-label="Lesson files">{#each l.files || [] as f, i}<button aria-pressed={selected === i} onclick={() => loadFile(i)}>{f}</button>{/each}</div>
-<div id="file-content">{#if loading}<Skeleton kind="code" />{:else if error}<p class="err" role="alert">{error}</p>{:else}<p class="file-heading">{l.files?.[selected]}</p><!-- svelte-ignore a11y_no_noninteractive_tabindex -->
+<div id="file-content">{#if loading}<Skeleton kind="code" />{:else if error}<LoadError what={`${l.files?.[selected]} could not load.`} {error} retry={() => loadFile(selected)} />{:else}<p class="file-heading">{l.files?.[selected]}</p><!-- svelte-ignore a11y_no_noninteractive_tabindex -->
 <div class="code-viewer" tabindex="0" role="region" aria-label={`${l.files?.[selected]} — read-only code, scroll to read`}>{#if text}{#each text.split('\n') as line}<span class="code-line">{line || ' '}</span>{/each}{/if}</div>{/if}</div>
 </div>

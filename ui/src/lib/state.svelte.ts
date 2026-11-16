@@ -14,6 +14,10 @@ export const appState = $state({
   busyKey: '', adapting: false,
   // What the tutor is doing while a reply is on its way, for example "Reading the video transcript". Empty when idle.
   tutorStatus: '',
+  // A reply that failed, per lesson: the question it answered and why it failed. Shown in the log with Try again.
+  tutorErrors: {} as Record<string, { text: string; error: string }>,
+  // Why progress could not be saved; empty once every roadmap's progress is saved.
+  saveError: '',
   chats: {} as Record<string, Message[]>,
   sessions: {} as Record<string, Session>,
   practiceViews: {} as Record<string, string>,
@@ -28,6 +32,8 @@ export const appState = $state({
 let toastTimer: ReturnType<typeof setTimeout>;
 let saveTimer: ReturnType<typeof setTimeout> | undefined;
 let saveFn: (() => Promise<void>) | undefined;
+// Saves go out one after another, so an older copy of the progress can never land after a newer one.
+let saving: Promise<void> = Promise.resolve();
 let ideasTimer: ReturnType<typeof setTimeout> | undefined;
 let adaptTimer: ReturnType<typeof setTimeout> | undefined;
 const expanding = new Map<string, Promise<void>>();
@@ -38,26 +44,57 @@ export function toast(text: string) {
   clearTimeout(toastTimer);
   toastTimer = setTimeout(() => appState.toast = '', 9000);
 }
-export function normalize(c: Course) {
+// Every map the screens write into exists up front: `(c.state.exams ||= {})[s] = x` on a $state proxy writes to a plain object the proxy never sees.
+export function fillState(c: Course) {
   c.state ||= {} as Course['state'];
-  for (const k of ['checks', 'done', 'notes', 'quiz', 'code'] as const) c.state[k] ||= {};
+  for (const k of ['checks', 'done', 'notes', 'quiz', 'code', 'exams', 'stageOpen', 'have'] as const) c.state[k] ||= {};
   c.state.last ||= '';
+  return c;
+}
+export function normalize(c: Course) {
+  fillState(c);
   for (const [lid, ms] of Object.entries(c.chats || {})) appState.chats[c.id + '/' + lid] ||= ms;
   delete c.chats;
   return c;
 }
+// Roadmaps whose last save failed. Their progress stays in memory and goes out again with the next save or flush.
+const unsaved = new Set<Course>();
+function send(c: Course) {
+  const state = $state.snapshot(c.state);
+  return saving = saving.then(async () => {
+    try { await api('PUT', 'api/courses/' + enc(c.id) + '/state', state); unsaved.delete(c); }
+    catch (error) { unsaved.add(c); appState.saveError = message(error); }
+    if (!unsaved.size) appState.saveError = '';
+  });
+}
 export function save(c = appState.course!) {
   clearTimeout(saveTimer);
-  saveFn = async () => {
-    saveFn = undefined;
-    try { await api('PUT', 'api/courses/' + enc(c.id) + '/state', $state.snapshot(c.state)); }
-    catch (error) { toast("Couldn't save your progress: " + message(error)); }
-  };
+  saveFn = () => { saveFn = undefined; saveCourse = undefined; return send(c); };
+  saveCourse = c;
   saveTimer = setTimeout(saveFn, 400);
 }
+let saveCourse: Course | undefined;
+/** Sends any waiting or failed progress now. Resolves to false while some progress is still not saved. */
 export async function flushSave() {
   clearTimeout(saveTimer);
-  if (saveFn) await saveFn();
+  const retry = [...unsaved].filter(c => c !== saveCourse);
+  void saveFn?.();
+  for (const c of retry) void send(c);
+  await saving;
+  return !unsaved.size;
+}
+/** Why AI calls would fail before one is made: no service set up, or Codex signed out or not installed. Empty when fine or not known yet. */
+export function aiProblem(cfg: Settings = appState.config): '' | 'none' | 'signed_out' | 'missing' {
+  if (cfg.base === undefined) return '';
+  if (!cfg.base || !cfg.model) return 'none';
+  return cfg.codex === 'signed_out' || cfg.codex === 'missing' ? cfg.codex : '';
+}
+export async function refreshConfig() {
+  return appState.config = await api<Settings>('GET', 'api/settings');
+}
+/** For actions that replace the roadmap with the server's copy: they must not run over progress that is not saved. */
+export async function saveFirst() {
+  if (!await flushSave()) throw new Error('Your progress is not saved yet, so nothing was changed. Try again in a moment.');
 }
 export async function loadLibrary() {
   const version = appState.routeVersion;
@@ -116,10 +153,10 @@ export async function flushIdeas() {
 export async function applyPlan(plan: object, ask = '') {
   const c = appState.course;
   if (!c) throw new Error('No roadmap open.');
-  await flushSave();
+  await saveFirst();
   const r = await api<{ course: Course; change: { note: string } }>('POST', 'api/courses/' + enc(c.id) + '/apply', { plan, ...(ask ? { ask } : {}) });
   const id = appState.current?.id;
-  Object.assign(c, r.course);
+  fillState(Object.assign(c, r.course));
   if (id) {
     appState.current = lessons(c).find(l => l.id === id) || null;
     if (!appState.current) location.hash = href(c.id);
@@ -131,11 +168,15 @@ export async function adaptNow(loud: boolean) {
   const c = appState.course; if (!c) return false;
   appState.adapting = true;
   try {
-    await flushSave();
+    await saveFirst();
     const r = await api<{ course: Course; change: { added: string[]; dropped: string[]; changed?: string[]; note: string } }>('POST', 'api/courses/' + enc(c.id) + '/adapt');
     const changed = r.change.added.length || r.change.dropped.length || r.change.changed?.length;
-    Object.assign(c, r.course);
-    if (appState.current) appState.current = lessons(c).find(l => l.id === appState.current!.id) || appState.current;
+    fillState(Object.assign(c, r.course));
+    const id = appState.current?.id;
+    if (id && appState.course === c) {
+      appState.current = lessons(c).find(l => l.id === id) || null;
+      if (!appState.current) location.hash = href(c.id);
+    }
     if (loud || changed) toast((changed ? 'Roadmap updated. ' : '') + (r.change.note || 'No changes needed.'));
     return true;
   } catch (error) { if (loud) toast(message(error)); return false; }
@@ -154,22 +195,35 @@ export async function ask(text: string) {
   if (!text || appState.busyKey || !c || !l) return false;
   const key = keyFor(c, l);
   appState.chats[key] ||= [];
-  const msgs = appState.chats[key]; msgs.push({ role: 'user', content: text });
+  const msgs = appState.chats[key];
+  // A failed question with no reply is not sent again as history: two questions in a row would confuse the model.
+  if (appState.tutorErrors[key]) { if (msgs[msgs.length - 1]?.role === 'user') msgs.pop(); delete appState.tutorErrors[key]; }
+  msgs.push({ role: 'user', content: text });
   const body = { course: c.id, lesson: l.id, messages: $state.snapshot(msgs), stream: true, ...(appState.openVideo ? { video: appState.openVideo } : {}) };
   appState.busyKey = key; appState.tutorStatus = 'Thinking'; stopped = false;
   msgs.push({ role: 'assistant', content: '' });
   const m = msgs[msgs.length - 1];
   try {
-    const full = await chatStream(body, piece => { m.content += piece; }, status => { appState.tutorStatus = status; });
+    const full = await chatStream(body, piece => { m.content += piece; }, status => { if (status.done) { m.steps ||= []; m.steps.push(status.text); } else appState.tutorStatus = status.text; });
     if (!m.content) m.content = full || '(No answer.)';
     return true;
   } catch (error) {
     // A stopped reply keeps what had arrived; with nothing arrived the question goes back to the box.
-    if (m.content) { if (!stopped) m.content += '\n\n(The answer was cut off.)'; return stopped; }
-    msgs.pop(); msgs.pop();
-    if (!stopped) toast(message(error));
-    return false;
+    if (stopped) { if (m.content) return true; msgs.pop(); msgs.pop(); return false; }
+    // A failed reply keeps the question (and any part of the answer) in the log, with the error under it.
+    if (m.content) m.content += '\n\n(The answer was cut off.)'; else msgs.pop();
+    appState.tutorErrors[key] = { text, error: message(error) };
+    return true;
   } finally { appState.busyKey = ''; appState.tutorStatus = ''; }
+}
+/** Sends the question whose reply failed again, in place of the failed turn. */
+export function retryAsk() {
+  const c = appState.course, l = appState.current;
+  if (!c || !l || appState.busyKey) return Promise.resolve(false);
+  const key = keyFor(c, l), failed = appState.tutorErrors[key], msgs = appState.chats[key];
+  if (!failed) return Promise.resolve(false);
+  if (msgs && msgs[msgs.length - 1]?.role === 'assistant') msgs.pop();
+  return ask(failed.text);
 }
 let stopped = false;
 /** Stops the tutor reply that is on its way. */
@@ -183,7 +237,7 @@ export async function clearChat(c: Course, l: Lesson) {
   if (appState.busyKey) return;
   try {
     await api('DELETE', 'api/courses/' + enc(c.id) + '/chat', { lesson: l.id });
-    appState.chats[keyFor(c, l)] = [];
+    appState.chats[keyFor(c, l)] = []; delete appState.tutorErrors[keyFor(c, l)];
   } catch (error) { toast(message(error)); }
 }
 export async function loadPractice(fresh = false) {

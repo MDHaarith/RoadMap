@@ -113,7 +113,7 @@ impl FakeAI {
                     }
                 } else if system.contains("mark one review answer") {
                     assert!(user.contains("Concept to explain: hydration"));
-                    json!({"right":user.split("answer:").nth(1).unwrap().contains("water"),"feedback":"It is the water to flour ratio."}).to_string()
+                    json!({"right":user.split("answer:").nth(1).unwrap().contains("water"),"feedback":"It is the water to flour ratio.","points":[{"text":"Water weight divided by flour weight","hit":false},{"text":"","hit":true},"junk"]}).to_string()
                 } else if system.contains("You designed this course earlier") {
                     assert!(
                         user.contains("- 1.1 Mix [completed, quiz 1 of 1")
@@ -123,7 +123,14 @@ impl FakeAI {
                     let new = json!({"title":"Mix again","goal":"g","concepts":["hydration by feel"],"tasks":["t"],"done":["d"],"query":"q","lookups":[],"warn":""});
                     json!({"note":"Added practice.","drop":["1.1","7.7"],"add":[{"after":"1.1","lesson":new},{"after":"9.9","lesson":new},{"after":"1.1"}]}).to_string()
                 } else if system.contains("practice material") {
-                    practice().to_string()
+                    if user.contains("- Why rest dough?") {
+                        practice().to_string()
+                    } else if user.contains("already has these questions") {
+                        assert!(user.contains("- What is hydration?") && user.contains("The exercise is null."), "{user}");
+                        json!({"quiz":[practice()["quiz"][0],{"q":"Why rest dough?","options":["Gluten relaxes","It cools"],"answer":0,"why":"Rest."}],"exercise":null}).to_string()
+                    } else {
+                        practice().to_string()
+                    }
                 } else if system.contains("existing, working project") {
                     assert!(
                         user.contains("--- app.py ---")
@@ -178,7 +185,7 @@ impl FakeAI {
                     if !names.is_empty()
                         && b["messages"].as_array().unwrap().last().unwrap()["role"] == "user"
                     {
-                        assert_eq!(names, vec!["get_lesson", "run_exercise_tests", "read_video_transcript"]);
+                        assert_eq!(names, vec!["search_course", "get_lesson", "run_exercise_tests", "read_video_transcript"]);
                         let calls = [("run_exercise_tests", "{}"), ("get_lesson", "{\"id\":\"1.1\"}"), ("rm_rf", "{}"), ("get_lesson", "not json")]
                             .iter().enumerate().map(|(i,(n,a))| json!({"id":format!("c{i}"),"type":"function","function":{"name":n,"arguments":a}})).collect::<Vec<_>>();
                         msg = Some(json!({"content":null,"tool_calls":calls}));
@@ -283,9 +290,12 @@ fn python_spec_end_to_end() {
         off: Mutex::new(HashSet::new()),
         meter: Mutex::new(()),
         fetching: Mutex::new(std::collections::HashSet::new()),
+        transcribing: Mutex::new(std::collections::HashSet::new()),
         repicked: Mutex::new(HashSet::new()),
         day_offset: AtomicI64::new(0),
         stop_chat: AtomicBool::new(false),
+        yt_running: Default::default(),
+        codex_seen: Mutex::new(None),
         pick: Box::new(move |k| {
             if k == "file" {
                 export_s.clone()
@@ -363,7 +373,7 @@ fn python_spec_end_to_end() {
     );
     assert_eq!(
         call(&base, "GET", "api/settings", json!({})).1,
-        json!({"base":ai.base,"model":"m","small":"","usage":{},"key_set":true,"theme":"dark","videos":{"style":"","length":"","lang":"","recent":""}})
+        json!({"base":ai.base,"model":"m","small":"","usage":{},"key_set":true,"theme":"dark","videos":{"style":"","length":"","lang":"","recent":""},"damaged":0})
     );
     assert_eq!(
         fs::metadata(&app.conf).unwrap().permissions().mode() & 0o777,
@@ -628,7 +638,7 @@ fn python_spec_end_to_end() {
             &base,
             "POST",
             "api/review",
-            json!({"course":cid,"lesson":"1.1","i":0,"right":true})
+            json!({"course":cid,"lesson":"1.1","i":0,"q":"What is hydration?","right":true})
         )
         .1,
         json!({"step":0,"due":app.today()+1})
@@ -718,13 +728,22 @@ fn python_spec_end_to_end() {
     assert!(results[1].starts_with("Lesson 1.1: Mix"));
     assert_eq!(results[2], "That tool or argument does not exist.");
     assert_eq!(results[2], results[3]);
-    let (mut pieces, mut statuses) = (String::new(), Vec::new());
-    let answer = app.chat_stream_with(&chat, &mut |piece| { pieces.push_str(piece); Ok(()) }, &mut |s| statuses.push(s.to_string())).unwrap();
+    let (mut pieces, mut statuses, mut steps) = (String::new(), Vec::new(), Vec::new());
+    let answer = app.chat_stream_with(&chat, &mut |piece| { pieces.push_str(piece); Ok(()) }, &mut |s, done| if done { steps.push(s.to_string()) } else { statuses.push(s.to_string()) }).unwrap();
     assert_eq!(answer, "hint for: 1.1: Mix");
     assert_eq!(pieces, answer);
     assert_eq!(statuses[0], "Running your exercise tests");
     assert_eq!(statuses[1], "Reading another lesson");
     assert_eq!(statuses.last().unwrap(), "Writing the answer");
+    // Only the tool calls that worked are kept as steps, and they are saved with the reply.
+    assert_eq!(steps, ["Ran your exercise tests", "Read lesson 1.1"]);
+    let saved = app.read_side(&app.chat_file(&cid).unwrap());
+    assert_eq!(saved["1.1"][1]["steps"], json!(steps));
+    let again = json!({"course":cid,"lesson":"1.1","messages":[saved["1.1"][0],saved["1.1"][1],{"role":"user","content":"hint?"}]});
+    app.chat_stream(&again, &mut |_| Ok(())).unwrap();
+    assert!(list(&ai.last()["messages"]).iter().all(|m| m.get("steps").is_none()));
+    assert_eq!(app.read_side(&app.chat_file(&cid).unwrap())["1.1"][1]["steps"], json!(steps));
+    assert!(app.tool_result(&app.load(&cid).unwrap(), &json!({"id":"1.1"}), "search_course", &json!({"words":"hydration"})).unwrap().starts_with("Lesson 1.1 Mix (lesson): "));
     assert_eq!(ai.last()["stream"], true);
     assert_eq!(
         list(&ai.last()["messages"])
@@ -749,12 +768,12 @@ fn python_spec_end_to_end() {
             &base,
             "POST",
             "api/review/answer",
-            json!({"course":cid,"lesson":"1.1","i":"explain","answer":"no idea"})
+            json!({"course":cid,"lesson":"1.1","i":"explain","q":"hydration","answer":"no idea"})
         )
         .1,
-        json!({"right":false,"feedback":"It is the water to flour ratio.","step":0,"due":app.today()+1})
+        json!({"right":false,"feedback":"It is the water to flour ratio.","points":[{"text":"Water weight divided by flour weight","hit":false}],"step":0,"due":app.today()+1})
     );
-    assert_eq!(call(&base,"POST","api/review/answer",json!({"course":cid,"lesson":"1.1","i":"explain","answer":"how much water for the flour"})).1["step"],1);
+    assert_eq!(call(&base,"POST","api/review/answer",json!({"course":cid,"lesson":"1.1","i":"explain","q":"hydration","answer":"how much water for the flour"})).1["step"],1);
     assert_eq!(
         call(
             &base,
@@ -770,7 +789,7 @@ fn python_spec_end_to_end() {
             &base,
             "POST",
             "api/review/answer",
-            json!({"course":cid,"lesson":"1.1","i":"code","answer":"double() { echo 0; }"})
+            json!({"course":cid,"lesson":"1.1","i":"code","q":code["prompt"],"answer":"double() { echo 0; }"})
         )
         .1["right"],
         false
@@ -780,7 +799,7 @@ fn python_spec_end_to_end() {
             &base,
             "POST",
             "api/review/answer",
-            json!({"course":cid,"lesson":"1.1","i":"code","answer":GOOD})
+            json!({"course":cid,"lesson":"1.1","i":"code","q":code["prompt"],"answer":GOOD})
         )
         .1,
         json!({"right":true,"output":"All tests passed\n","step":1,"due":app.today()+3})
@@ -918,6 +937,22 @@ fn python_spec_end_to_end() {
         call(&base, "GET", "api/courses/..%2Fconfig", json!({})).0,
         404
     );
+    // "New questions" grows the lesson's question bank: old questions, the exercise and review dates stay.
+    let practice_path = format!("{course_path}/practice");
+    let before = call(&base, "POST", &practice_path, json!({"lesson":"1.1"})).1;
+    let n = list(&before["quiz"]).len();
+    let review = app.load(&cid).unwrap()["state"]["review"].clone();
+    let (status, grown) = call(&base, "POST", &practice_path, json!({"lesson":"1.1","fresh":true}));
+    assert_eq!(status, 200, "{grown}");
+    assert_eq!(grown["from"], n);
+    assert_eq!(list(&grown["quiz"]).len(), n + 1);
+    assert_eq!(grown["quiz"][0], before["quiz"][0]);
+    assert_eq!(grown["quiz"][n]["q"], "Why rest dough?");
+    assert_eq!(grown["exercise"], before["exercise"]);
+    assert_eq!(app.load(&cid).unwrap()["state"]["review"], review);
+    // A set with nothing new is refused and leaves the bank as it was.
+    assert_eq!(call(&base, "POST", &practice_path, json!({"lesson":"1.1","fresh":true})).0, 400);
+    assert_eq!(call(&base, "POST", &practice_path, json!({"lesson":"1.1"})).1, grown);
     assert_eq!(call(&base, "DELETE", &course_path, json!({})).0, 200);
     assert_eq!(call(&base, "GET", &course_path, json!({})).0, 404);
     assert_eq!(call(&base, "GET", "api/courses", json!({})).1, json!([]));
@@ -926,9 +961,18 @@ fn python_spec_end_to_end() {
 fn untrusted_values_and_python_exercise_format() {
     let mut pr = practice();
     pr["exercise"] = json!({"lang":"python","title":"Double","prompt":"Write double(x).","starter":"def double(x):\n    pass\n","tests":"import main\nassert main.double(2) == 4"});
-    let cleaned = clean_practice(&pr);
+    let cleaned = clean_practice(&pr, 10);
     assert_eq!(cleaned["exercise"], pr["exercise"]);
     assert_eq!(list(&cleaned["quiz"]).len(), 1);
+    assert!(cleaned.get("recall").is_none());
+    // The review never shows a long concept in full: it asks the recall question, or failing that the first clause.
+    let long = "A business exchanges a useful outcome for payment; revenue alone does not prove that the exchange is sustainable. Apply this.";
+    let mut l = json!({"concepts":["hydration", long]});
+    assert_eq!(crate::ai::recall_ask(&l, 0), "hydration");
+    assert_eq!(crate::ai::recall_ask(&l, 1), "A business exchanges a useful outcome for payment…");
+    pr["recall"] = json!(["What does hydration measure?", "Why is revenue not proof?", 3]);
+    l["practice"] = clean_practice(&pr, 10);
+    assert_eq!(crate::ai::recall_ask(&l, 1), "Why is revenue not proof?");
     assert!(parse("[]", "a course").is_err());
     assert!(parse("{broken}", "a course").is_err());
     assert_eq!(cap("é🍞abc", 2), "é🍞");
@@ -1035,7 +1079,7 @@ fn sse_tool_fragments_stream_fallback_and_ai_errors() {
     );
     assert_eq!(
         app.ask(&[], &mut None, json!({})).unwrap_err().message,
-        "AI service error 503: service unavailable"
+        "The AI service had a problem on its side (error 503). Try again in a minute."
     );
     worker.join().unwrap();
 }
@@ -1270,10 +1314,10 @@ fn ideas_mistakes_search_setup_and_exports() {
     let m = r("GET", "api/mistakes", json!({})).unwrap()["items"][0].clone();
     assert_eq!((&m["picked"], &m["answer"], &m["n"], &m["fixed"]), (&json!(0), &json!(1), &json!(1), &json!(false)));
     assert_eq!(app.load(cid).unwrap()["state"]["review"]["1.1#0"]["due"], app.today());
-    app.reviewed(cid, "1.1", "0", true).unwrap();
+    app.reviewed(cid, "1.1", true, |_| Some("0".into())).unwrap();
     assert_eq!(r("GET", "api/mistakes", json!({})).unwrap()["items"][0]["fixed"], true);
 
-    app.save_chat(cid, "1.1", &[json!({"role":"user","content":"why autolyse?"})], "It hydrates the flour.");
+    app.save_chat(cid, "1.1", &[json!({"role":"user","content":"why autolyse?"})], "It hydrates the flour.", &[]);
     let kinds = |q: &str| {
         list(&r("POST", "api/search", json!({"q":q})).unwrap()["results"])
             .iter()
@@ -1676,11 +1720,13 @@ fn real_ai() {
     let path = format!("api/courses/{cid}");
     let lid = lessons(&c).next().map(|l| l["id"].clone()).unwrap_or_default();
     step("3-practice", "POST", &format!("{path}/practice"), json!({"lesson":lid}));
+    step("3b-more-practice", "POST", &format!("{path}/practice"), json!({"lesson":lid,"fresh":true}));
     let ask = |text: &str| json!({"course":cid,"lesson":lid,"messages":[{"role":"user","content":text}]});
     step("4-tutor-solution", "POST", "api/chat", ask("I am stuck. Write the complete finished solution for this lesson's tasks for me so I can paste it."));
     step("5-tutor-hint", "POST", "api/chat", ask("Give me a hint for the first task."));
     step("6-videos", "POST", &format!("{path}/videos"), json!({"lesson":lid}));
-    step("7-explain", "POST", "api/review/answer", json!({"course":cid,"lesson":lid,"i":"explain","answer":"I am not sure, I think it is a kind of variable."}));
+    let shown = lessons(&c).next().map(|l| ai::recall_ask(l, 0)).unwrap_or_default();
+    step("7-explain", "POST", "api/review/answer", json!({"course":cid,"lesson":lid,"i":"explain","q":shown,"answer":"I am not sure, I think it is a kind of variable."}));
     if let Some(stub) = lessons(&c).find(|l| truth(&l["stub"])) {
         step("8-expand", "POST", &format!("{path}/expand"), json!({"lesson":stub["id"]}));
     }
@@ -1742,6 +1788,71 @@ fn real_notes_and_captions() {
 }
 
 #[test]
+#[cfg(unix)] // Uses a Unix shell stand-in for Codex.
+fn review_marks_the_question_that_was_shown() {
+    let tmp = tempfile::tempdir().unwrap();
+    let mut app = isolated_app(tmp.path());
+    let a = Arc::get_mut(&mut app).unwrap();
+    // Codex stand-in: keeps each prompt and answers from numbered files.
+    a.codex_program = tmp.path().join("codex");
+    fs::write(
+        &a.codex_program,
+        "#!/bin/sh\nd=$(dirname \"$0\")\nif [ \"$1\" = login ]; then exit 0; fi\nn=$(cat \"$d/n\" 2>/dev/null || echo 0)\nn=$((n+1))\necho $n > \"$d/n\"\ncat > \"$d/prompt$n\"\ncat \"$d/answer$n\"\necho\n",
+    )
+    .unwrap();
+    fs::set_permissions(&a.codex_program, fs::Permissions::from_mode(0o755)).unwrap();
+    let mark = json!({"right":true,"feedback":"Good.","points":[]}).to_string();
+    fs::write(tmp.path().join("answer1"), json!({"type":"item.completed","item":{"type":"agent_message","text":mark}}).to_string()).unwrap();
+    let cid = "0123456789ab";
+    let today = app.today();
+    let mut c = json!({"id":cid,"title":"Bake bread","summary":"s","prompt":"bread","level":"new",
+        "phases":[{"title":"P","blurb":"","lessons":[{"id":"1.1","title":"Mix","goal":"g","concepts":["hydration","gluten"],"tasks":[],"done":[],
+            "practice":{"quiz":[{"q":"Q zero?","options":["a","b"],"answer":0,"why":""},{"q":"Q one?","options":["a","b"],"answer":1,"why":""}],
+                "exercise":{"lang":"bash","title":"Echo","prompt":"Print hi.","starter":"","tests":"exit 0"}}}]}],
+        "state":{"checks":{},"done":{},"notes":{},"last":"1.1","quiz":{"1.1":{"score":1,"total":2}},
+            "review":{"1.1#explain":{"step":1,"due":today},"1.1#0":{"step":1,"due":today},"1.1#1":{"step":1,"due":today},"1.1#code":{"step":1,"due":today}}}});
+    app.save(&c).unwrap();
+    let due = call(&app, "GET", "api/review", json!({})).1;
+    let shown = string(&list(&due["questions"]).iter().find(|q| q["i"] == "explain").unwrap()["q"]);
+    let other = if shown == "hydration" { "gluten" } else { "hydration" };
+    // The due date moves (another device, an earlier answer) before this answer is marked: the concept shown is still the one marked.
+    c["state"]["review"]["1.1#explain"]["due"] = json!(today - 1);
+    app.save(&c).unwrap();
+    assert_eq!(ai::recall_k(&c["state"]["review"]["1.1#explain"], 2), usize::from(shown == "hydration"), "the moved date must point at the other concept");
+    let (code, r) = call(&app, "POST", "api/review/answer", json!({"course":cid,"lesson":"1.1","i":"explain","q":shown,"answer":"water"}));
+    assert_eq!((code, &r["right"]), (200, &json!(true)), "{r}");
+    let prompt = fs::read_to_string(tmp.path().join("prompt1")).unwrap();
+    assert!(prompt.contains(&format!("Concept to explain: {shown}")) && !prompt.contains(&format!("Concept to explain: {other}")), "{prompt}");
+
+    // The lesson is rewritten: the shown question is gone, so nothing is marked, the AI is not asked and no review date moves.
+    let mut c = app.load(cid).unwrap();
+    c["phases"][0]["lessons"][0]["concepts"] = json!(["salt"]);
+    c["phases"][0]["lessons"][0]["practice"]["quiz"] = json!([{"q":"New?","options":["a","b"],"answer":0,"why":""},{"q":"Newer?","options":["a","b"],"answer":0,"why":""}]);
+    c["phases"][0]["lessons"][0]["practice"]["exercise"]["prompt"] = json!("Print bye.");
+    app.save(&c).unwrap();
+    let before = app.load(cid).unwrap()["state"].clone();
+    for (path, body) in [
+        ("api/review/answer", json!({"course":cid,"lesson":"1.1","i":"explain","q":shown,"answer":"water"})),
+        ("api/review/answer", json!({"course":cid,"lesson":"1.1","i":"code","q":"Print hi.","answer":"echo hi"})),
+        ("api/review", json!({"course":cid,"lesson":"1.1","i":1,"q":"Q one?","right":true})),
+        ("api/review", json!({"course":cid,"lesson":"9.9","i":0,"q":"Q zero?","right":false})),
+    ] {
+        let (code, r) = call(&app, "POST", path, body);
+        assert_eq!((code, &r["changed"]), (200, &json!(true)), "{path}: {r}");
+        assert!(text(&r["message"]).contains("loading again"), "{r}");
+    }
+    assert_eq!(app.load(cid).unwrap()["state"], before);
+    assert!(!tmp.path().join("prompt2").exists());
+    // A multiple-choice answer is saved for the question with the text shown, wherever it now sits in the list.
+    c["phases"][0]["lessons"][0]["practice"]["quiz"] = json!([{"q":"New?","options":["a","b"],"answer":0,"why":""},{"q":"Q zero?","options":["a","b"],"answer":0,"why":""}]);
+    app.save(&c).unwrap();
+    let r = call(&app, "POST", "api/review", json!({"course":cid,"lesson":"1.1","i":0,"q":"Q zero?","right":false})).1;
+    assert_eq!(r["step"], 0, "{r}");
+    let after = app.load(cid).unwrap()["state"]["review"].clone();
+    assert_eq!((&after["1.1#0"], &after["1.1#1"]["step"]), (&before["review"]["1.1#0"], &json!(0)));
+}
+
+#[test]
 #[cfg(unix)] // Uses Unix shell fixtures, permissions or symlinks.
 fn codex_is_the_default_service_and_can_call_tutor_tools() {
     let tmp = tempfile::tempdir().unwrap();
@@ -1751,7 +1862,7 @@ fn codex_is_the_default_service_and_can_call_tutor_tools() {
     a.codex_program = tmp.path().join("codex");
     fs::write(
         &a.codex_program,
-        "#!/bin/sh\nd=$(dirname \"$0\")\nn=$(cat \"$d/n\" 2>/dev/null || echo 0)\nn=$((n+1))\necho $n > \"$d/n\"\ncat > \"$d/prompt$n\"\necho \"$*\" > \"$d/args$n\"\necho '{\"type\":\"thread.started\"}'\ncat \"$d/answer$n\"\necho\necho '{\"type\":\"turn.completed\",\"usage\":{\"input_tokens\":7,\"output_tokens\":3}}'\n",
+        "#!/bin/sh\nd=$(dirname \"$0\")\nif [ \"$1\" = login ]; then exit $(cat \"$d/login\" 2>/dev/null || echo 0); fi\nn=$(cat \"$d/n\" 2>/dev/null || echo 0)\nn=$((n+1))\necho $n > \"$d/n\"\ncat > \"$d/prompt$n\"\necho \"$*\" > \"$d/args$n\"\necho '{\"type\":\"thread.started\"}'\ncat \"$d/answer$n\"\necho\necho '{\"type\":\"turn.completed\",\"usage\":{\"input_tokens\":7,\"output_tokens\":3}}'\n",
     )
     .unwrap();
     fs::set_permissions(&a.codex_program, fs::Permissions::from_mode(0o755)).unwrap();
@@ -1759,7 +1870,15 @@ fn codex_is_the_default_service_and_can_call_tutor_tools() {
         fs::write(tmp.path().join(format!("answer{n}")), json!({"type":"item.completed","item":{"type":"agent_message","text":text.to_string()}}).to_string()).unwrap()
     };
     let read = |name: &str| fs::read_to_string(tmp.path().join(name)).unwrap();
-    assert_eq!(call(&app, "GET", "api/settings", json!({})).1["base"], "codex");
+    let settings = call(&app, "GET", "api/settings", json!({})).1;
+    assert_eq!((settings["base"].as_str(), settings["codex"].as_str()), (Some("codex"), Some("ready")));
+    // Signed out: `codex login status` exits 1. The answer is kept for 30 seconds, so the cache is cleared here.
+    fs::write(tmp.path().join("login"), "1").unwrap();
+    assert_eq!(call(&app, "GET", "api/settings", json!({})).1["codex"], "ready");
+    *app.codex_seen.lock().unwrap() = None;
+    assert_eq!(call(&app, "GET", "api/settings", json!({})).1["codex"], "signed_out");
+    fs::remove_file(tmp.path().join("login")).unwrap();
+    *app.codex_seen.lock().unwrap() = None;
     said(1, json!({"done":false,"q":"Have you used a terminal?","options":["No, never","Yes"]}));
     let (code, q) = call(&app, "POST", "api/placement", json!({"prompt":"bake bread","answers":[]}));
     assert_eq!((code, q["q"].as_str()), (200, Some("Have you used a terminal?")), "{q}");
@@ -1785,8 +1904,242 @@ fn codex_is_the_default_service_and_can_call_tutor_tools() {
     let (code, _) = call(&app, "POST", "api/chat", json!({"course":"0123456789ab","lesson":"1.1","video":"aaaaaaaaaaa","messages":[{"role":"user","content":"what does the video say?"}]}));
     assert_eq!(code, 200);
     assert!(read("prompt4").contains("the video the learner is watching") && read("prompt4").contains("[1:05] Fold the dough gently"));
+    // A tutor reply that ignored the JSON shape is still shown, word for word.
+    fs::write(tmp.path().join("answer5"), json!({"type":"item.completed","item":{"type":"agent_message","text":"Plain words, no JSON."}}).to_string()).unwrap();
+    let (code, r) = call(&app, "POST", "api/chat", json!({"course":"0123456789ab","lesson":"1.1","messages":[{"role":"user","content":"hi"}]}));
+    assert_eq!((code, r["text"].as_str()), (200, Some("Plain words, no JSON.")), "{r}");
     // No answer line at all is an error the learner can act on.
     let (code, e) = call(&app, "POST", "api/placement", json!({"prompt":"bake bread","answers":[]}));
     assert_eq!(code, 400);
     assert!(text(&e["error"]).contains("codex login"));
+    // Not installed at all.
+    let mut gone = isolated_app(tmp.path());
+    Arc::get_mut(&mut gone).unwrap().codex_program = tmp.path().join("no-such-codex");
+    assert_eq!(call(&gone, "GET", "api/settings", json!({})).1["codex"], "missing");
+}
+
+// BENCH_DATA=~/.local/share/roadmap-app cargo test --release --lib bench_reads -- --ignored --nocapture
+// Copies the roadmap and chat files to a temporary folder and times the requests that read them; the original folder is never written.
+#[test]
+#[ignore]
+fn bench_reads() {
+    let src = std::path::PathBuf::from(std::env::var("BENCH_DATA").expect("BENCH_DATA"));
+    let tmp = tempfile::tempdir().unwrap();
+    let app = isolated_app(tmp.path());
+    fs::create_dir_all(&app.data).unwrap();
+    for e in fs::read_dir(&src).unwrap().flatten() {
+        if e.path().extension().is_some_and(|x| x == "json") {
+            fs::copy(e.path(), app.data.join(e.file_name())).unwrap();
+        }
+    }
+    let ids = app.courses().unwrap().iter().map(|c| string(&c["id"])).collect::<Vec<_>>();
+    let biggest = ids.iter().max_by_key(|id| fs::metadata(app.path_of(id).unwrap()).unwrap().len()).unwrap().clone();
+    let state = app.load(&biggest).unwrap()["state"].clone();
+    let time = |name: &str, f: &dyn Fn()| {
+        f();
+        let t = Instant::now();
+        for _ in 0..20 { f(); }
+        println!("{name}: {:.2} ms", t.elapsed().as_secs_f64() * 1000. / 20.);
+    };
+    time("library list", &|| { app.library_list().unwrap(); });
+    time("open roadmap (mark_known)", &|| { app.mark_known(app.load(&biggest).unwrap()).unwrap(); });
+    time("review due", &|| { app.review_due().unwrap(); });
+    time("mistakes", &|| { app.mistakes().unwrap(); });
+    time("search", &|| { app.search("the function").unwrap(); });
+    time("save progress (PUT state)", &|| { assert_eq!(call(&app, "PUT", &format!("api/courses/{biggest}/state"), state.clone()).0, 200); });
+}
+
+#[test]
+fn damaged_files_stale_keys_and_plain_errors() {
+    let tmp = tempfile::tempdir().unwrap();
+    let app = isolated_app(tmp.path());
+    let ls = |ids: &[&str]| ids.iter().map(|i| json!({"id":i,"title":format!("Lesson {i}"),"goal":"g","concepts":["c"],"tasks":["t"],"done":["d"],"query":"q"})).collect::<Vec<_>>();
+    let mut c = json!({"id":"aaaaaaaaaaaa","title":"T","summary":"","prompt":"p","phases":[{"title":"P","blurb":"","lessons":ls(&["1.1","1.2","1.3"])}],
+        "state":{"checks":{},"done":{"1.1":true,"9.9":true},"notes":{"1.2":"my own notes"},"quiz":{},"code":{},"last":"1.1",
+            "review":{"1.4#0":{"step":2,"due":5}},"mistakes":{"1.4#0":{"n":3,"picked":1,"day":4,"fixed":false}}}});
+    app.save(&c).unwrap();
+    // A damaged or half-written file hides only itself; opening it says so in plain words and nothing panics.
+    fs::write(app.data.join("bbbbbbbbbbbb.json"), b"{\"id\":\"bbbb").unwrap();
+    fs::write(app.data.join("cccccccccccc.json"), b"[]").unwrap();
+    let (code, list) = call(&app, "GET", "api/courses", json!({}));
+    assert_eq!((code, list.as_array().unwrap().len()), (200, 1));
+    // ...and the learner is told how many could not be read, while the files stay exactly as they were.
+    assert_eq!(call(&app, "GET", "api/settings", json!({})).1["damaged"], 2);
+    assert_eq!(fs::read(app.data.join("bbbbbbbbbbbb.json")).unwrap(), b"{\"id\":\"bbbb");
+    assert_eq!(fs::read(app.data.join("cccccccccccc.json")).unwrap(), b"[]");
+    // Done flags of lessons that no longer exist do not count.
+    assert_eq!((list[0]["done"].clone(), list[0]["total"].clone()), (json!(1), json!(3)));
+    for id in ["bbbbbbbbbbbb", "cccccccccccc"] {
+        let (code, e) = call(&app, "POST", &format!("api/courses/{id}/export"), json!({}));
+        assert_eq!((code, text(&e["error"])), (400, "This roadmap's file is damaged and can't be opened.".into()));
+    }
+    let (code, e) = call(&app, "GET", "api/courses/dddddddddddd", json!({}));
+    assert!(code == 404 && !text(&e["error"]).contains("Not found"), "{e}");
+    // A page opened before a lesson was removed still saves.
+    let st = json!({"checks":{},"done":{"1.1":true},"notes":{"1.2":"my own notes"},"quiz":{"7.7":{"score":1,"total":2}},"code":{},"last":"1.1"});
+    assert_eq!(call(&app, "PUT", "api/courses/aaaaaaaaaaaa/state", st).0, 200);
+    // A lesson with notes holds the learner's work, so a change never removes it.
+    let (code, r) = call(&app, "POST", "api/courses/aaaaaaaaaaaa/apply", json!({"plan":{"note":"","drop":["1.2"]}}));
+    assert_eq!(code, 200, "{r}");
+    assert_eq!(r["change"]["dropped"], json!([]));
+    // A new lesson takes id 1.4, which old progress still named: it starts clean.
+    let (code, r) = call(&app, "POST", "api/courses/aaaaaaaaaaaa/apply", json!({"plan":{"note":"","add":[{"after":"1.2","lesson":{"title":"New","goal":"g","concepts":[],"tasks":["t"],"done":["d"]}}]}}));
+    assert_eq!(code, 200, "{r}");
+    let saved = app.load("aaaaaaaaaaaa").unwrap();
+    assert_eq!(lesson(&saved, &json!("1.4")).unwrap()["title"], "New");
+    assert!(saved["state"]["review"].get("1.4#0").is_none() && saved["state"]["mistakes"].get("1.4#0").is_none(), "{}", saved["state"]);
+    assert_eq!(saved["state"]["notes"]["1.2"], "my own notes");
+    // Export then import keeps the mistakes notebook.
+    c = app.load("aaaaaaaaaaaa").unwrap();
+    c["state"]["mistakes"] = json!({"1.1#0":{"n":2,"picked":null,"day":4,"fixed":true},"1.1#1":{"n":"bad"}});
+    let f = tmp.path().join("in.json");
+    fs::write(&f, c.to_string()).unwrap();
+    let imported = app.import_course(f.to_str().unwrap()).unwrap();
+    assert_eq!(imported["state"]["mistakes"], json!({"1.1#0":{"n":2,"picked":null,"day":4,"fixed":true}}));
+    // A state that is not an object (a hand-edited file) does not break saving.
+    c["state"] = json!("oops");
+    app.save(&c).unwrap();
+    assert_eq!(call(&app, "PUT", "api/courses/aaaaaaaaaaaa/paused", json!({"paused":true})).0, 200);
+    // Atomic writes leave no temporary files behind.
+    assert!(fs::read_dir(&app.data).unwrap().flatten().all(|e| !e.file_name().to_string_lossy().contains("tmp")));
+    // Codex failures name the cause and what to do.
+    assert!(ai::codex_problem("You've hit your usage limit. Try again at 3 PM.", "").contains("allowance"));
+    assert!(ai::codex_problem("", "Error: 401 Unauthorized").contains("codex login"));
+    assert!(ai::codex_problem("stream disconnected before completion", "").contains("internet"));
+    assert!(ai::codex_problem("", "").contains("Try again"));
+    // `codex login` starts a new sign-in and can drop the current one; the learner is only ever sent to the read-only check.
+    assert!(ai::codex_problem("something odd", "").contains("`codex login status`"));
+    // The daily recall question reaches every concept of an eight-concept lesson, not only the first five.
+    assert_eq!((0..8).map(|d| ai::recall_k(&json!({"step":4,"due":20000 + d}), 8)).collect::<HashSet<_>>().len(), 8);
+}
+
+#[cfg(target_os = "linux")]
+#[test]
+fn exercise_timeout_leaves_nothing_running() {
+    // A background child of an exercise that runs out of time does not outlive it (a busy loop: time, not memory).
+    let r = run_code("bash", "sleep 3017 &\nwhile :; do :; done", None).unwrap();
+    assert!(text(&r["output"]).contains("Stopped"), "{r}");
+    thread::sleep(Duration::from_millis(300));
+    let (_, ps, _, _) = crate::exercise::process(std::process::Command::new("pgrep").args(["-x", "-f", "sleep 3017"]), 5).unwrap();
+    if !ps.trim().is_empty() {
+        let (_, state, _, _) = crate::exercise::process(std::process::Command::new("ps").args(["-o", "pid,ppid,stat,etime,cgroup:80,cmd", "-p", &ps.split_whitespace().collect::<Vec<_>>().join(",")]), 5).unwrap();
+        panic!("a child of the exercise is still running:\n{state}");
+    }
+    let mine = format!("{}*", crate::exercise::unit_prefix());
+    let (_, units, _, _) = crate::exercise::process(std::process::Command::new("systemctl").args(["--user", "list-units", "--all", "--no-legend", &mine]), 5).unwrap();
+    assert_eq!(units.trim(), "", "a run's scope was left behind");
+}
+
+// Small limits for the hostile cases below, far under the production ones, so a test can never take much of the machine.
+#[cfg(target_os = "linux")]
+fn test_caps() -> crate::exercise::Sandbox {
+    crate::exercise::Sandbox { tasks: 32, memory: 128 << 20, disk: 16 << 20, ..crate::exercise::sandbox() }
+}
+
+#[cfg(target_os = "linux")]
+#[test]
+fn exercise_limits_are_applied_and_explained() {
+    use crate::exercise::{limit_message, sandbox, scope_applies, Limit, DISK_MAX, MEMORY_MAX};
+    let sb = sandbox();
+    assert_eq!((sb.memory, sb.high(), sb.disk), (MEMORY_MAX, 448 << 20, 64 << 20));
+    // Ordinary exercises pass under every limit this machine has.
+    let py = run_code("python", "def double(x):\n    return x * 2\n", Some("from main import double\nassert double(4) == 8\nprint('All tests passed')\n")).unwrap();
+    assert_eq!((&py["ok"], text(&py["output"]).trim()), (&json!(true), "All tests passed"), "{py}");
+    let js = run_code("javascript", "module.exports = x => x * 2;\n", Some("const d = require('./main.js');\nif (d(4) !== 8) process.exit(1);\nconsole.log('All tests passed');\n")).unwrap();
+    assert_eq!((&js["ok"], text(&js["output"]).trim()), (&json!(true), "All tests passed"), "{js}");
+    // The hidden folders are read-only, so they hold no memory.
+    let r = run_code("bash", "echo x > /home/f && echo wrote", None).unwrap();
+    assert!(r["ok"] == false && !text(&r["output"]).contains("wrote"), "{r}");
+    // The scope takes the limits it is given; read back from its cgroup.
+    if sb.scope {
+        assert!(scope_applies(&test_caps()), "the test limits were not applied to a scope");
+    } else {
+        eprintln!("note: no systemd user scope here, so processes and memory are not limited");
+    }
+    // Each limit names itself and its size.
+    let m = |l| limit_message(l, &sb);
+    assert!(m(Limit::Processes).contains("too many processes") && m(Limit::Processes).contains(&sb.tasks.to_string()));
+    assert!(m(Limit::Memory).contains("too much memory (the limit is 448 MB)"), "{}", m(Limit::Memory));
+    assert!(m(Limit::Disk).contains(&format!("wrote too much to disk (the limit is {} MB)", DISK_MAX >> 20)), "{}", m(Limit::Disk));
+}
+
+// The hostile cases run only by name, one at a time, under test_caps():
+//   cargo test --lib hostile_fork_loop -- --ignored --test-threads=1
+#[cfg(target_os = "linux")]
+fn hostile(lang: &str, code: &str, want: &str, sb: crate::exercise::Sandbox) {
+    assert!(sb.memory <= 128 << 20 && sb.disk <= 16 << 20 && sb.tasks <= 32);
+    let t = Instant::now();
+    let r = crate::exercise::run_in(lang, code, None, sb).unwrap();
+    assert!(r["ok"] == false && text(&r["output"]).contains(want), "{sb:?}: {r}");
+    assert!(t.elapsed() < Duration::from_secs(9), "{sb:?} took {:?}", t.elapsed());
+}
+#[cfg(target_os = "linux")]
+#[test]
+#[ignore]
+fn hostile_fork_loop() {
+    let sb = test_caps();
+    assert!(sb.scope && crate::exercise::scope_applies(&sb), "no scope with the test limits here; not running a fork loop without them");
+    hostile("bash", "while :; do sleep 3019 & done", "too many processes", sb);
+    thread::sleep(Duration::from_millis(300));
+    let (_, ps, _, _) = crate::exercise::process(std::process::Command::new("pgrep").args(["-x", "-f", "sleep 3019"]), 5).unwrap();
+    assert_eq!(ps.trim(), "", "a process of the fork loop outlived its run");
+}
+#[cfg(target_os = "linux")]
+#[test]
+#[ignore]
+fn hostile_memory() {
+    let sb = test_caps();
+    assert!(sb.scope && crate::exercise::scope_applies(&sb), "no scope with the test limits here; not allocating without them");
+    // About 100 MB a second: the watcher (every 50 ms) sees MemoryHigh long before the hard cap 16 MB above it, so no kernel OOM kill.
+    hostile("python", "import time\na = []\nwhile True:\n    a.append(' ' * 10**6)\n    time.sleep(0.01)\n", "too much memory", sb);
+}
+#[cfg(target_os = "linux")]
+#[test]
+#[ignore]
+fn hostile_disk() {
+    let sb = test_caps();
+    assert!(sb.scope && crate::exercise::scope_applies(&sb), "no scope with the test limits here; not filling a disk without them");
+    let many = "for i in range(100000):\n    open(f'f{i}', 'w').write('x' * 10000)\nprint('wrote all')\n";
+    // By the sized /tmp where bubblewrap has it, and by watching the folder everywhere.
+    let modes = if sb.sized { vec![sb, crate::exercise::Sandbox { sized: false, ..sb }] } else { vec![sb] };
+    for mode in modes {
+        hostile("python", many, "wrote too much to disk", mode);
+    }
+    // One file past the limit.
+    hostile("bash", "head -c 40000000 /dev/zero > big && echo wrote it", "wrote too much to disk", sb);
+}
+
+// Times an honest exercise run: cargo test --lib bench_exercise -- --ignored --nocapture
+#[cfg(target_os = "linux")]
+#[test]
+#[ignore]
+fn bench_exercise() {
+    use crate::exercise::{run_in, sandbox, Sandbox};
+    let plain = Sandbox { scope: false, sized: false, ..sandbox() };
+    for (lang, code) in [("python", "print(sum(range(10)))"), ("javascript", "console.log([1,2,3].map(x => x * 2).join(' '))")] {
+        for (mode, sb) in [("no scope or sized tmpfs", plain), ("all limits", sandbox())] {
+            let _ = run_in(lang, code, None, sb).unwrap();
+            let mut ms = (0..15).map(|_| { let t = Instant::now(); assert_eq!(run_in(lang, code, None, sb).unwrap()["ok"], true); t.elapsed().as_millis() }).collect::<Vec<_>>();
+            ms.sort();
+            println!("{lang} {mode} {sb:?}: median {} ms, min {} ms, max {} ms", ms[7], ms[0], ms[14]);
+        }
+    }
+}
+
+#[cfg(unix)]
+#[test]
+fn runaway_output_is_capped() {
+    let (_, out, _, _) = crate::exercise::process(&mut std::process::Command::new("yes"), 20).unwrap();
+    assert_eq!(out.len(), 16 << 20);
+}
+#[test]
+fn reopening_a_roadmap_queues_each_caption_fetch_once() {
+    let tmp = tempfile::tempdir().unwrap();
+    let app = isolated_app(tmp.path());
+    let videos = vec![json!({"id": "aaaaaaaaaaa"}), json!({"id": "bbbbbbbbbbb"})];
+    assert_eq!(app.queue_transcripts(videos.clone()), ["aaaaaaaaaaa", "bbbbbbbbbbb"]);
+    // A second open while the first fetch waits adds nothing, so no thread or copy piles up.
+    assert!(app.queue_transcripts(videos.clone()).is_empty());
+    app.transcribing.lock().unwrap().remove("aaaaaaaaaaa");
+    assert_eq!(app.queue_transcripts(videos), ["aaaaaaaaaaa"]);
 }

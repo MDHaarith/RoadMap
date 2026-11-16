@@ -30,7 +30,7 @@ async fn chat_stream(
     app: State<'_, Arc<App>>,
     body: Value,
     on_piece: Channel<String>,
-    on_status: Channel<String>,
+    on_status: Channel<Value>,
 ) -> Result<String, ApiError> {
     let app = app.inner().clone();
     tauri::async_runtime::spawn_blocking(move || {
@@ -43,8 +43,8 @@ async fn chat_stream(
                     message: e.to_string(),
                 })
             },
-            &mut |status| {
-                let _ = on_status.send(status.to_owned());
+            &mut |text, done| {
+                let _ = on_status.send(serde_json::json!({"text":text,"done":done}));
             },
         )
     })

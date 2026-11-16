@@ -55,7 +55,7 @@ The root Home page has no back link. A roadmap's back link says **Your library**
 
 Choose the frame by its content. Long or wide pages stay anchored at the left 16px gutter and use the available width (`.wrap`, capped at 1440px): Home, roadmap overview, every lesson step, Search results, Mistakes notebook and Ideas. Keep the app title bar and lesson breadcrumb in place. Short forms and single focused tasks use `.wrap.narrow`: centre the **whole page** horizontally, including the back link and title, in one column. New roadmap (every state) and Settings cap at 860px; Review, Exam, empty states, full-page waiting and errors cap at 760px. All use the same 24px top offset inside the main gutter, never vertical dead-centre. Inside the column, text, labels and controls stay left-aligned; the title shares their left edge. Search and Mistakes switch to this focused frame only while empty or showing an error. At 1920×1080 the focused columns keep their caps; wide pages retain useful ruled rows and right-aligned metadata/actions, with reading prose capped at about 72ch (never long lines beyond about 90 characters).
 
-`.page-head`, `.intro`, `.session-head`, `.create-head` share the title-left/actions-right layout; prefer `.page-head` for new edits. Preserve `.session-count` and `.timer` where used. Over-titles all use `.overline`/`.kicker`: 11px, uppercase, .06em tracking, weight 600.
+`.page-head`, `.session-head`, `.create-head` share the title-left/actions-right layout; prefer `.page-head` for new edits. Preserve `.session-count` and `.timer` where used. Over-titles all use `.overline`/`.kicker`: 11px, uppercase, .06em tracking, weight 600.
 
 `<TopBar>` stays on **every screen** with brand, course context/switcher/progress when available, Search, **Review with its due count (including 0)**, Ideas, Settings and window controls. It loads review counts even when opening a deep link. Do not hide Review on the roadmap, lesson, settings or mistakes page.
 
@@ -72,7 +72,13 @@ Desktop layouts that must remain intact:
 - Search/Mistakes: left-anchored, full-width ruled rows, readable text and right-aligned row actions/metadata; empty and error states centre the whole page frame, including the header.
 - Below 960px, home/roadmap stack and normal page scrolling returns. Existing tutor responsive behavior stays.
 
-Every scrolling area uses the shared 10px classic scrollbar: a rounded grey thumb, darker on hover, on a quiet track. Keep the bar in its own space; use a stable gutter on independently scrolling panes. Do not set `scrollbar-width: thin` or `scrollbar-color` in WebKit/Chromium: those can override the classic bar and bring back overlays.
+Owner decision: no scroll bar is drawn anywhere. Every scrolling area still scrolls by wheel, touchpad and keys; `app.css` hides bars with `scrollbar-width: none` and `::-webkit-scrollbar { display: none }`. Do not reintroduce bars, thin bars or stable gutters.
+
+Keyboard scrolling with hidden bars: `lib/scroll.ts` (started once in `App.svelte`) watches the scroll areas listed in its `AREAS` selector. An area that overflows and holds nothing focusable gets `data-scroll-region`, `tabindex="0"`, `role="region"` and an `aria-label`, and shows the 2px focus ring when reached by Tab. Areas that already hold links, buttons or fields get no extra tab stop; Tab moves through their contents and the browser scrolls them into view. Add a new scroll area to `AREAS` rather than hand-writing tabindex. Below 960px the page itself scrolls, so no region is needed there.
+
+Resize grips: none anywhere (`textarea { resize: none }`). Free-text boxes (create prompt, tutor composer, review answer, ideas notes) use the `autogrow` action from `lib/autogrow.ts`: they grow with their text up to a cap, then scroll inside. The code box keeps a fixed height. Growing must never move the page: `autogrow` restores the scroll position of every scrolling ancestor after measuring.
+
+Home and Roadmap start at the left gutter at every width, like every other page; they do not centre at 1920px.
 
 ## Shared component classes
 
@@ -81,23 +87,23 @@ Each row names a component or a closely related family; descendants supply the s
 | Class/component | One-line use |
 | --- | --- |
 | `main`, `.wrap`, `.wrap.narrow` | Page gutter, left-anchored wide frame, whole centred 760px focus frame (860px for Creation/Settings), including back link/title. |
-| `.row`, `.between`, `.grow`, `.stack` | Wrapping action row, spaced ends, flexible child, vertical spacing. |
-| `.page-head`, `.intro`, `.session-head`, `.create-head`, `.head-row` | Existing header aliases; prefer page-head, title left and actions right. |
+| `.row`, `.between`, `.grow` | Wrapping action row, spaced ends, flexible child. |
+| `.page-head`, `.session-head`, `.create-head`, `.head-row` | Existing header aliases; prefer page-head, title left and actions right. |
 | `.back-map`, `.lesson-crumb` | Destination back link; lesson's factual location/breadcrumb. |
-| `.section-title`, `.library-title`, `.route-heading` | Compact sans section heading with count/actions. |
+| `.section-title`, `.route-heading` | Compact sans section heading with count/actions. |
 | `.overline`, `.kicker`, `.side-title`, `.stage-label` | Single uppercase tracked over-title style. |
 | `.muted`, `.small`, `.goal`, `.lead`, `.hint` | Supporting text, 12px metadata, factual goal, introduction, control explanation. |
 | `.sr` | Visually hidden accessible label. |
 | `.icon`, `.check-mark`, `.button-arrow` | 14px control/state SVG, normalized animated check, primary hover arrow. |
 | `.count`, `.dot` | Factual tabular count; non-text route/index state dot. |
 | `.btn`, `.btn.secondary`, `.btn.ghost`, `.btn.sm`, `.btn.big` | One blue primary, outlined secondary, quiet action; 24px/32px variants. Disabled buttons use muted ink on a neutral surface, never faded text. |
-| `.link`, `.link.danger`, `.plain` | Text action, destructive text action, muted underlined disclosure. |
+| `.link`, `.link.danger` | Text action, destructive text action. |
 | `.own`, `.field`, `.field > legend` | Input-plus-action row; labelled group of controls. |
-| `.checks`, `.check-row` | Clickable checkbox choice rows; checked state includes a real checkbox. |
+| `.checks` | Clickable checkbox choice rows; checked state includes a real checkbox. |
 | `.segmented`, `.segmented.full`, `#theme`, `.practice-nav`, `.side-tabs` | Outlined equal-width native/ARIA segments sharing one sliding ink fill; full stretches to width. |
 | `.examples`, `.chips`, `.chip` | Existing compact quick-choice buttons; keep useful examples/actions. |
 | `.ruled`, `.ruled-row` | Hairline-divided interactive list: direct children receive bottom rules; links/buttons/ruled-row get hover. |
-| `.numbered`, `.content-list` | Plain `ol > li` explanation with automatic 01/02 hanging display numerals; never cards. |
+| `.content-list` | Plain `ol > li` explanation with automatic 01/02 hanging display numerals; never cards. |
 | `.card`, `.options` | Bordered clickable choices (plan cards) or the single next-action card; options stacks choices. |
 | `.panel`, `.panel h2` | Plain section with a top rule, sans heading; no surrounding box. |
 | `.note`, `.note.warn`, `.note.setup`, `.change` | Unboxed factual notice, consequence notice, setup/action row, roadmap change report. |
@@ -148,7 +154,12 @@ Each row names a component or a closely related family; descendants supply the s
 | `.ideas`, `.ideas-head`, `.stickies`, `.sticky` | Floating right panel, controls and editable note fields; no stock art. |
 | `.top`, `.brand`, `.crumb-sep`, `#ctitle`, `.switcher`, `.switch-toggle`, `.switch-menu` | Shared title-bar brand, course context and accessible course switcher. |
 | `.meter`, `.top-search`, `.top-link`, `.window-controls` | Shared progress/search/utility links/native window actions. |
-| `#toast`, `.update-notice` | Floating status toast; in-flow update notice above content. |
+| `#toast`, `.update-notice` | Floating status toast, top centre just under the title bar so it never covers a primary action or nav link (the strip between the bar and the page title is empty on every page); at 960px and below, where the crumb row reaches the middle, it moves to the right half of that strip (max half the window wide); in-flow update notice above content. |
+| `.save-notice` | In-flow `.update-notice` shown while a progress save failed: "Your progress is not saved yet", with Try again. The failed state is kept and sent again with the next save or `flushSave()`. Actions that rewrite the roadmap call `saveFirst()` and stop if progress is not saved. |
+| `.tutor-error` | A tutor request that failed shows in the log under its question, with one Try again that resends it. A stopped reply is not an error. No toast for tutor errors. |
+| `AiSetup` | The one "no working AI service" note: none connected, Codex signed out (`codex login` in a terminal), Codex not installed. Used by Creation, Practice and Tutor (`compact`); Settings shows the same states in its status card. Only `codex: 'ready'` shows the tick. |
+| `.damaged-note` | One quiet line under the home library when roadmap files could not be read. |
+| `.lib-card` | Home library and Paused rows: text sits on the heading's left edge; the hover fill is a box-shadow that extends 10px outside the row, so it never touches the text. |
 
 ### Routes
 
@@ -187,9 +198,9 @@ Native `select` is white, 28px high, normal weight, uses the same field border a
 | `.stagger` | Direct children 1–10 enter 20ms apart (0–180ms); subsequent rows have no entry animation. |
 | `--row-order` | Assigned by stagger/stepper nth-child rules; reuse for ordered small marks. |
 | `.route-item::before/::after` / `route-grow` | Vertical segments grow with scaleY from their top. |
-| `.route-horizontal`, `.lesson-steps::before` / `fill-progress` | Horizontal line grows with scaleX from the left. |
+| `.lesson-steps::before` / `fill-progress` | Horizontal line grows with scaleX from the left. |
 | `.route-stop`, `.step-number` / `stop-appear` | Stops follow the line after 120ms, in order, with small-mark overshoot. |
-| `.bar > i`, `.progress-fill` | Fill from the left; scaleX uses the real fraction, 320ms for changes. |
+| `.bar > i` | Fill from the left; scaleX uses the real fraction, 320ms for changes. |
 | `.complete-mark` / `ring-pulse`, `draw-check` | One ring pulse and a small check draw; put Icon check inside a mark-sized wrapper. Done route stops already attach both. |
 | `.step-forward`, `.step-back` | Newly mounted lesson content comes 12px from right/left; use a keyed step and choose the class from the direction. `Lesson.svelte` chooses the class before mounting each keyed step; backward jumps enter from the left. |
 | `.message-enter`, `.msg` | New tutor messages rise 6px and fade once. |
@@ -199,7 +210,7 @@ Native `select` is white, 28px high, normal weight, uses the same field border a
 | `.ideas` / `ideas-enter` | Right panel enters 12px from the right, once per open. |
 | Buttons / `.button-arrow` in primary | Press scales .97; primary's trailing arrow shifts 2px on hover. |
 | `.skeleton-shape`, `.sk` | Paint appears after 150ms; grey blocks pulse with opacity while waiting. |
-| `#toast` / `toast-arrive` | Existing centered toast rises without losing its horizontal centering. |
+| `#toast` / `toast-arrive` | Top-centre toast drops 6px into place without losing its horizontal centering. |
 
 Hard limits: **only opacity and transform animate**. Exceptions: the dashed waiting route's stroke offset and check marks no larger than 24px (normalized pathLength=1). Never animate width, height, position, spacing, shadows, filters or colours. No blur, smooth scrolling, scroll effects or permanent loops. Only waiting indicators loop. No persistent will-change. Resting geometry is identical with motion disabled. The last `prefers-reduced-motion: reduce` rule disables all transitions/animations, including pseudo-elements; preserve it.
 
@@ -209,7 +220,7 @@ Hard limits: **only opacity and transform animate**. Exceptions: the dashed wait
 2. Remove helper sentences that repeat a heading. Keep facts: counts, timings, consequences, data sent, saved state. Home's repetitive review/mistakes copy is already removed.
 3. No decorative icons before headings. Keep state icons, control icons, route markers and accessible labels. Lesson step headings have no decorative icons.
 4. Empty states use `<Icon name="empty-route" />` (inline SVG/currentColor/accent), no dashed empty box or stock illustration. Replace remaining old empty-state icons as those screens are edited.
-5. Keep all feature IDs, `aria-*`, keyboard/test labels, focus behavior and validation. Tab/checkbox/native select semantics stay native. Focus-visible remains a 2px blue outline.
+5. Keep all feature IDs, `aria-*`, keyboard/test labels, focus behavior and validation. Tab/checkbox/native select semantics stay native. Focus-visible remains a 2px blue outline. Escape closes the innermost open thing only (one press, one close) and returns focus to the control that opened it: menus, lesson actions, video preferences, Change my roadmap and its preview, Ideas, the switcher, Confirm and Select. A handler that closes something calls `preventDefault()`; outer handlers skip events that are already `defaultPrevented`.
 6. Every text/background pair must reach 4.5:1, including small metadata, selected-control metadata and text on state tints. Do not dim readable text with opacity.
 7. Home's references intentionally retain summary, progress, all course actions and responsive stacking. Roadmap references retain phase generation, project-folder connection, exports, prerequisites, stage expansion and action previews.
 8. Lesson direction, tutor reply skeletons, completion marks and success-route motion are wired. Tutor quick actions are one quiet text row at 310px. Videos and charts use ruled sections; project-file selection uses ink fill. The pages agent owns its remaining screen-specific refinements; preserve its concurrent changes.
@@ -248,7 +259,7 @@ The portalled `.menu-list.select-list.popover-enter` shares white paper, line bo
 
 Retain the fixed 310px sidebar, Tutor/Notes tabs and existing IDs. `.chat-log` contains the independently scrolling `#log` and the quiet Newest pill. Follow incoming messages only when already near the bottom; preserve the learner's position while they read older turns. Empty conversations show the existing introductory sentence and five `.ruled.tutor-starters` rows; after the first message the same actions occupy one compact row above the composer. New chat uses the existing destructive-action confirmation and clears this lesson's history.
 
-User turns use `--accent-soft`; replies stay unboxed at 12px/1.65. `Formatted` adds paragraph and hanging-line layout hooks around the existing escaped formatter output, leaving fenced code intact. Code uses `--mono` on `--surface-2` and scrolls horizontally inside its block. Video seek links use 24px pill controls. Separate turns have more space than paragraphs. `.message-enter`, `.popover-enter` and skeletons reuse the existing opacity/transform motion; reduced-motion disables it all.
+User turns use `--accent-soft`; replies stay unboxed at 12px/1.65. `Formatted` adds paragraph and hanging-line layout hooks around the existing escaped formatter output, leaving fenced code intact. In replies it also lays out markdown headings (bold line), pipe tables (`.tutor-table`, scrolls sideways when wide) and nested list lines. A follow-up the learner opens (a `<details>` toggle) is scrolled into view when the log was at the bottom. Code uses `--mono` on `--surface-2` and scrolls horizontally inside its block. Video seek links use 24px pill controls. Separate turns have more space than paragraphs. `.message-enter`, `.popover-enter` and skeletons reuse the existing opacity/transform motion; reduced-motion disables it all.
 
 While waiting, show the live service status and `Elapsed` above three skeleton reply lines; keep elapsed ticks out of screen-reader announcements. The composer remains editable, with sending blocked until the reply ends and a square Stop control in place of Send. One field container holds textarea, model Select and Send/Stop, with a shared focus ring; its keyboard instruction stays visually hidden and available through `aria-describedby`, so focus changes only the ring. Long model labels truncate with an ellipsis. Failed sends restore their text only if the learner has not started the next draft. Notes fill the available pane; Rewrite/Undo share a row, Waiting reports rewrites, and the saved-with-lesson line remains visible.
 

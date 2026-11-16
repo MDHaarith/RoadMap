@@ -6,6 +6,8 @@ export const passed = (c: Course, l: Lesson) => {
   const q = c.state.quiz[l.id];
   return !!q && q.total >= 3 && q.score / q.total >= .8;
 };
+/** The newest set of a lesson's question bank. Add `from` to a set index to get the bank index the server and the mistakes notebook use. */
+export const quizSet = (l: Lesson) => { const from = l.practice?.from ?? 0; return { from, quiz: (l.practice?.quiz || []).slice(from) }; };
 export const status = (c: Course, l: Lesson) => c.state.done[l.id] ? 'done' : checked(c, l).some(Boolean) ? 'part' : '';
 export const stageLessons = (c: Course, s: number) => c.phases.filter(p => p.stage === s).flatMap(p => p.lessons);
 export const examPool = (c: Course, s: number) => stageLessons(c, s).flatMap(l => (l.practice?.quiz || []).map((q, i) => ({ ...q, lesson: l.id, i })));

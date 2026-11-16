@@ -1,15 +1,19 @@
 use crate::*;
 use crate::{
-    ai::said,
+    ai::{question_changed, recall_ask, recall_k, said, shown_quiz},
     exercise::{install_lang, run_code},
 };
 impl App {
     pub(crate) fn library_list(&self) -> Result<Value> {
-        Ok(json!(self.courses()?.iter().map(|c|{let ls=lessons(c).collect::<Vec<_>>();let next=ls.iter().find(|l|!truth(&c["state"]["done"][string(&l["id"])]));json!({"id":c["id"],"title":c["title"],"summary":c["summary"],"total":ls.len(),"done":c["state"]["done"].as_object().map(|o|o.values().filter(|v|truth(v)).count()).unwrap_or(0),"paused":truth(&c["paused"]),"project":truth(&c["folder"]),"next":next.map(|l|json!({"id":l["id"],"title":l["title"]}))})}).collect::<Vec<_>>()))
+        Ok(json!(self.courses()?.iter().map(|c|{let ls=lessons(c).collect::<Vec<_>>();let next=ls.iter().find(|l|!truth(&c["state"]["done"][string(&l["id"])]));json!({"id":c["id"],"title":c["title"],"summary":c["summary"],"total":ls.len(),"done":ls.iter().filter(|l|truth(&c["state"]["done"][string(&l["id"])])).count(),"paused":truth(&c["paused"]),"project":truth(&c["folder"]),"next":next.map(|l|json!({"id":l["id"],"title":l["title"]}))})}).collect::<Vec<_>>()))
     }
-    pub(crate) fn reviewed(&self, cid: &str, lid: &str, i: &str, right: bool) -> Result<Value> {
+    // `at` finds, in the lesson as saved now, the review key of the question the learner answered; None means it is gone.
+    pub(crate) fn reviewed(&self, cid: &str, lid: &str, right: bool, at: impl Fn(&Value) -> Option<String>) -> Result<Value> {
         let _guard = self.guard();
         let mut c = self.load(cid)?;
+        let Some(i) = lesson(&c, &json!(lid)).ok().and_then(at) else {
+            return Ok(question_changed());
+        };
         if !c["state"]["review"].is_object() {
             c["state"]["review"] = json!({});
         }
@@ -167,8 +171,7 @@ impl App {
                     .collect::<Vec<_>>();
                 let cs = list(&l["concepts"]);
                 if !cs.is_empty() && r.get(format!("{lid}#explain")).is_some() {
-                    let step = r[format!("{lid}#explain")]["step"].as_i64().unwrap_or(-1);
-                    items.push((json!("explain"),json!({"kind":"explain","q":cs[(step+1).rem_euclid(cs.len() as i64) as usize]})));
+                    items.push((json!("explain"),json!({"kind":"explain","q":recall_ask(l, recall_k(&r[format!("{lid}#explain")], cs.len()))})));
                 }
                 let ex = &pr["exercise"];
                 if truth(ex) && r.get(format!("{lid}#code")).is_some() {
@@ -203,9 +206,12 @@ impl App {
             }
             ("GET", "api/settings") => {
                 let c = self.config();
-                return Ok(
-                    json!({"base":c.get("base").unwrap_or(&json!("")),"model":c.get("model").unwrap_or(&json!("")),"small":string(&c["small"]),"usage":self.read_side("usage.json"),"key_set":truth(&c["key"]),"theme":self.theme(),"videos":clean_prefs(&c["videos"])}),
-                );
+                let mut out = json!({"base":c.get("base").unwrap_or(&json!("")),"model":c.get("model").unwrap_or(&json!("")),"small":string(&c["small"]),"usage":self.read_side("usage.json"),"key_set":truth(&c["key"]),"theme":self.theme(),"videos":clean_prefs(&c["videos"]),
+                    "damaged":self.damaged()?});
+                if c["base"] == "codex" {
+                    out["codex"] = json!(self.codex_status());
+                }
+                return Ok(out);
             }
             ("PUT", "api/video-prefs") => {
                 let _guard = self.guard();
@@ -256,20 +262,11 @@ impl App {
             ("GET", "api/mistakes") => return self.mistakes(),
             ("GET", "api/review") => return self.review_due(),
             ("POST", "api/review") => {
-                let i = b
-                    .get("i")
-                    .unwrap_or(&json!(-1))
-                    .as_i64()
-                    .or_else(|| b["i"].as_str().and_then(|s| s.parse().ok()))
-                    .or_else(|| b["i"].as_f64().map(|x| x as i64))
-                    .or_else(|| b["i"].as_bool().map(i64::from))
-                    .ok_or_else(|| Error::bad("Bad review index."))?;
-                return self.reviewed(
-                    &text(&b["course"]),
-                    &cap(&text(&b["lesson"]), 20),
-                    &i.to_string(),
-                    truth(&b["right"]),
-                );
+                // The question is found by the text the page showed, not by its place in the list, which changes with new questions.
+                let q = string(&b["q"]);
+                return self.reviewed(&text(&b["course"]), &cap(&text(&b["lesson"]), 20), truth(&b["right"]), |l| {
+                    shown_quiz(l, &q).map(|j| j.to_string())
+                });
             }
             ("POST", "api/review/answer") => return self.review_answer(b),
             ("POST", "api/courses") | ("POST", "api/placement") => {
@@ -357,8 +354,8 @@ impl App {
             ("POST", "api/install") => return install_lang(&string(&b["lang"])),
             ("POST", "api/chat") => {
                 let (c, l, ms) = self.chat_args(b)?;
-                let answer = self.tutor(&c, &merge(l.clone(), json!({"watching":b["video"]})), ms.clone(), &mut None, &mut |_| {})?;
-                self.save_chat(&string(&c["id"]), &string(&l["id"]), &ms, &answer);
+                let answer = self.tutor(&c, &merge(l.clone(), json!({"watching":b["video"]})), ms.clone(), &mut None, &mut |_, _| {})?;
+                self.save_chat(&string(&c["id"]), &string(&l["id"]), &ms, &answer, &[]);
                 return Ok(json!({"text":answer}));
             }
             ("POST", "api/chat/stop") => {
@@ -367,10 +364,9 @@ impl App {
             }
             _ => {}
         }
-        let re = regex::Regex::new(
+        let re = regex(
             r"^api/courses/([0-9a-f]{12})(/notes|/state|/videos|/practice|/paused|/adapt|/revise|/expand|/export|/summary|/setup|/work|/edit|/apply|/prefs|/chat)?$",
-        )
-        .unwrap();
+        );
         let m = re.captures(path).ok_or_else(Error::missing)?;
         let cid = &m[1];
         let sub = m.get(2).map(|m| m.as_str()).unwrap_or("");
@@ -433,8 +429,9 @@ impl App {
                 }
                 if let Some(q) = b["quiz"].as_object() {
                     for lid in q.keys() {
+                        // A page opened before a lesson was removed may still send its score; it gets no review dates.
+                        let Ok(l) = lesson(&c, &json!(lid)) else { continue };
                         if old["quiz"].get(lid).is_none() {
-                            let l = lesson(&c, &json!(lid))?;
                             let pr = &l["practice"];
                             let mut items = (0..list(&pr["quiz"]).len())
                                 .map(|i| (i.to_string(), 1))
@@ -600,22 +597,42 @@ impl App {
             ("POST", "/practice") => {
                 let c = self.load(cid)?;
                 let l = lesson(&c, &b["lesson"])?;
-                if truth(&l["practice"]) && !truth(&b["fresh"]) {
+                let fresh = truth(&b["fresh"]);
+                if truth(&l["practice"]) && !fresh {
                     return Ok(l["practice"].clone());
                 }
-                let pr = self.build_practice(&c, l)?;
+                if list(&l["practice"]["quiz"]).len() >= 200 {
+                    return Err(Error::bad("This lesson already has 200 questions. Try the ones you have again."));
+                }
+                let mut pr = self.build_practice(&c, l)?;
                 let _guard = self.guard();
                 let mut c = self.load(cid)?;
-                lesson_mut(&mut c, &string(&l["id"]))?["practice"] = pr.clone();
-                let prefix = format!("{}#", text(&l["id"]));
-                // New questions make the old review dates and recorded mistakes meaningless.
-                for k in ["review", "mistakes"] {
-                    if k == "review" || c["state"][k].is_object() {
-                        let mut r = c["state"][k].as_object().cloned().unwrap_or_default();
-                        r.retain(|k, _| !k.starts_with(&prefix));
-                        c["state"][k] = json!(r);
+                let slot = lesson_mut(&mut c, &string(&l["id"]))?;
+                let old = slot["practice"].clone();
+                if truth(&old) {
+                    if !fresh {
+                        return Ok(old);
+                    }
+                    // "New questions" adds to the lesson's question bank and never replaces it, so review dates,
+                    // the mistakes notebook and the learner's exercise code stay valid. "from" is where the newest set starts.
+                    let mut quiz = list(&old["quiz"]).to_vec();
+                    let from = quiz.len();
+                    for q in list(&pr["quiz"]) {
+                        if !quiz.iter().any(|o| o["q"] == q["q"]) {
+                            quiz.push(q.clone());
+                        }
+                    }
+                    if quiz.len() == from {
+                        return Err(Error::bad("The AI repeated questions you already have. Try again."));
+                    }
+                    let exercise = if truth(&old["exercise"]) { old["exercise"].clone() } else { pr["exercise"].clone() };
+                    let recall = if truth(&old["recall"]) { old["recall"].clone() } else { pr["recall"].clone() };
+                    pr = json!({"quiz":quiz,"from":from,"exercise":exercise});
+                    if truth(&recall) {
+                        pr["recall"] = recall;
                     }
                 }
+                slot["practice"] = pr.clone();
                 self.save(&c)?;
                 Ok(pr)
             }
@@ -623,19 +640,27 @@ impl App {
         }
     }
     pub fn chat_stream(&self, body: &Value, on_piece: &mut dyn FnMut(&str) -> Result<()>) -> Result<String> {
-        self.chat_stream_with(body, on_piece, &mut |_| {})
+        self.chat_stream_with(body, on_piece, &mut |_, _| {})
     }
-    // on_status hears what the tutor is doing between pieces. "api/chat/stop" ends the reply early.
+    // on_status hears what the tutor is doing between pieces; with `true` it is a finished step, kept with the reply.
+    // "api/chat/stop" ends the reply early.
     pub fn chat_stream_with(
         &self,
         body: &Value,
         on_piece: &mut dyn FnMut(&str) -> Result<()>,
-        on_status: &mut dyn FnMut(&str),
+        on_status: &mut dyn FnMut(&str, bool),
     ) -> Result<String> {
         let (c, l, msgs) = self.chat_args(body)?;
         self.stop_chat.store(false, Ordering::Relaxed);
         let mut pieces = String::new();
         let mut started = false;
+        let mut steps = vec![];
+        let on_status = &mut |s: &str, done: bool| {
+            if done {
+                steps.push(s.to_owned());
+            }
+            on_status(s, done)
+        };
         let result = {
             let mut out = |piece: &str| {
                 if self.stop_chat.load(Ordering::Relaxed) {
@@ -652,12 +677,12 @@ impl App {
             // A stopped reply keeps what had arrived and adds no note; the page already knows.
             Err(e) if e.status == 499 => {
                 if started {
-                    self.save_chat(&string(&c["id"]), &string(&l["id"]), &msgs, &pieces);
+                    self.save_chat(&string(&c["id"]), &string(&l["id"]), &msgs, &pieces, &steps);
                 }
                 Err(e)
             }
             Ok(text) => {
-                self.save_chat(&string(&c["id"]), &string(&l["id"]), &msgs, &text);
+                self.save_chat(&string(&c["id"]), &string(&l["id"]), &msgs, &text, &steps);
                 let text = if text.is_empty() { "(No answer.)".into() } else { text };
                 if !started { on_piece(&text)?; }
                 Ok(text)
