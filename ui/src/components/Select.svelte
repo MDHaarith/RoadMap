@@ -2,9 +2,9 @@
   import Skeleton from './Skeleton.svelte';
   import { tick } from 'svelte';
   import Icon from './Icon.svelte';
-  let { value, options, onchange, disabled = false, id, ariaLabel, title, onopen, loading = false }: {
-    value: string; options: { value: string; label: string }[]; onchange: (value: string) => void;
-    loading?: boolean; disabled?: boolean; id?: string; ariaLabel?: string; title?: string; onopen?: () => void;
+  let { value, options, onchange, disabled = false, id, ariaLabel, title, onopen, loading = false, heading }: {
+    value: string; options: { value: string; label: string; hint?: string; group?: string }[]; onchange: (value: string) => void;
+    loading?: boolean; disabled?: boolean; id?: string; ariaLabel?: string; title?: string; onopen?: () => void; heading?: string;
   } = $props();
   const uid = $props.id();
   let button: HTMLButtonElement;
@@ -15,9 +15,10 @@
   function position() {
     const r = button.getBoundingClientRect(), gap = 6, margin = 8;
     const below = Math.max(0, innerHeight - r.bottom - gap - margin), over = Math.max(0, r.top - gap - margin);
-    above = below < Math.min(320, options.length * 30 + 12) && over > below;
-    height = Math.min(320, above ? over : below);
-    width = Math.min(innerWidth - margin * 2, Math.max(r.width, 200));
+    const hints = options.some(o => o.hint), row = hints ? 46 : 30, cap = hints ? 420 : 320;
+    above = below < Math.min(cap, options.length * row + 12 + (heading ? 28 : 0) + new Set(options.map(o => o.group)).size * 26) && over > below;
+    height = Math.min(cap, above ? over : below);
+    width = Math.min(innerWidth - margin * 2, Math.max(r.width, hints ? 290 : 200));
     left = Math.max(margin, Math.min(r.left, innerWidth - width - margin));
     edge = above ? innerHeight - r.top + gap : r.bottom + gap;
   }
@@ -71,8 +72,10 @@
 </button>
 {#if open}
   <div use:portal bind:this={list} id={`${uid}-list`} class="menu-list select-list popover-enter" class:above role="listbox" tabindex="-1" aria-label={ariaLabel} aria-labelledby={ariaLabel ? undefined : id} aria-busy={loading} aria-activedescendant={!loading && options[active] ? `${uid}-${active}` : undefined} onkeydown={keyboard} onfocusout={e => { if (open && !list?.contains(e.relatedTarget as Node)) close(false); }} style:left={`${left}px`} style:top={above ? 'auto' : `${edge}px`} style:bottom={above ? `${edge}px` : 'auto'} style:width={`${width}px`} style:max-height={`${height}px`}>
+    {#if heading}<p class="select-heading" aria-hidden="true">{heading}</p>{/if}
     {#if loading}<Skeleton kind="models" />{:else}{#each options as option, i}
-      <button type="button" tabindex="-1" id={`${uid}-${i}`} role="option" aria-selected={option.value === value} data-index={i} class:active={active === i} onpointermove={() => active = i} onclick={() => choose(i)}><span>{option.label}</span><span class="select-check">{#if option.value === value}<Icon name="check" />{/if}</span></button>
+      {#if option.group && option.group !== options[i - 1]?.group}<p class="select-group" aria-hidden="true">{option.group}</p>{/if}
+      <button type="button" tabindex="-1" id={`${uid}-${i}`} role="option" aria-label={option.group ? `${option.label}, ${option.group}` : undefined} aria-selected={option.value === value} data-index={i} class:active={active === i} onpointermove={() => active = i} onclick={() => choose(i)}><span class="select-text"><span>{option.label}</span>{#if option.hint}<small>{option.hint}</small>{/if}</span><span class="select-check">{#if option.value === value}<Icon name="check" />{/if}</span></button>
     {/each}{/if}
   </div>
 {/if}

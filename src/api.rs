@@ -196,12 +196,7 @@ impl App {
         match (method, path) {
             ("GET", "api/models") => return self.models(),
             ("PUT", "api/model") => {
-                let model = string(&b["model"]).trim().to_owned();
-                if model.is_empty() { return Err(Error::bad("Choose a model first.")); }
-                let _guard = self.guard();
-                let mut c = self.config();
-                c["model"] = json!(model);
-                self.write_config(&c)?;
+                self.choose_model(b)?;
                 return Ok(json!({}));
             }
             ("GET", "api/settings") => {

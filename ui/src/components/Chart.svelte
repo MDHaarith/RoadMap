@@ -41,9 +41,10 @@
 </figure>
 
 <style>
-  .chart { display: grid; grid-template-columns: minmax(0, 640px) minmax(240px, 1fr); column-gap: var(--s6); align-items: start; margin: 0 0 var(--s5); padding: var(--s5) 0; border-top: 1px solid var(--line); }
+  /* Row 2 takes the graph's spare height, so the caption and note stay together at the top. */
+  .chart { display: grid; grid-template-columns: minmax(0, 1fr) minmax(220px, 300px); grid-template-rows: auto 1fr; column-gap: var(--s6); align-items: start; margin: 0 0 var(--s4); padding: var(--s4) 0; border-top: 1px solid var(--line); }
   figcaption { margin-bottom: 8px; }
-  svg { grid-column: 1; grid-row: 1 / 3; width: 100%; max-width: 640px; height: auto; display: block; }
+  svg { grid-column: 1; grid-row: 1 / 3; width: 100%; max-width: 820px; max-height: 52dvh; height: auto; display: block; }
   figcaption, p { grid-column: 2; max-width: 72ch; }
   figcaption { grid-row: 1; }
   p { grid-row: 2; }

@@ -36,6 +36,12 @@ impl App {
         if base != "codex" && !matches(r"^https?://", &base) {
             return Err(Error::bad("Base URL must start with http:// or https://, or be the word codex."));
         }
+        remember_provider(&mut c);
+        if c["base"] != base.as_str() && c["providers"][&base].is_object() {
+            // A service set up before keeps its key, so switching back needs no new paste. A new address keeps the current key, as when fixing a typo.
+            let key = c["providers"][&base]["key"].clone();
+            c["key"] = key;
+        }
         c["base"] = json!(base);
         c["model"] = json!(b.get("model").map(text).unwrap_or_default().trim());
         // Optional cheaper model for quizzes, video picks, marking and placement.
@@ -43,6 +49,30 @@ impl App {
         if truth(&b["key"]) {
             c["key"] = json!(text(&b["key"]).trim());
         }
+        remember_provider(&mut c);
+        self.write_config(&c)
+    }
+    /// Picks a model from the model menu, switching to another remembered provider when `base` names one.
+    pub(crate) fn choose_model(&self, b: &Value) -> Result<()> {
+        let model = string(&b["model"]).trim().to_owned();
+        if model.is_empty() {
+            return Err(Error::bad("Choose a model first."));
+        }
+        let _guard = self.guard();
+        let mut c = self.config();
+        let base = string(&b["base"]).trim().to_owned();
+        remember_provider(&mut c);
+        if !base.is_empty() && c["base"] != base.as_str() {
+            let saved = c["providers"][&base].clone();
+            if base != "codex" && !saved.is_object() {
+                return Err(Error::bad("That AI service is not set up. Add it in Settings first."));
+            }
+            c["base"] = json!(base);
+            c["key"] = saved["key"].clone();
+            c["small"] = json!(string(&saved["small"]));
+        }
+        c["model"] = json!(model);
+        remember_provider(&mut c);
         self.write_config(&c)
     }
     pub(crate) fn path_of(&self, cid: &str) -> Result<PathBuf> {
@@ -445,4 +475,16 @@ impl App {
         self.save(&c)?;
         Ok(c)
     }
+}
+/// Keeps the current provider's key and models under `providers`, so the model menu can list it and switch back later.
+fn remember_provider(c: &mut Value) {
+    let base = string(&c["base"]);
+    if base.is_empty() {
+        return;
+    }
+    let saved = json!({"key":c["key"],"model":c["model"],"small":c["small"]});
+    if !c["providers"].is_object() {
+        c["providers"] = json!({});
+    }
+    c["providers"][base] = saved;
 }

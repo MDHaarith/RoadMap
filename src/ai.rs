@@ -103,6 +103,18 @@ pub(crate) fn said(v: &Value) -> Vec<String> {
         })
         .collect()
 }
+/// A readable name for a provider's base address, for the model menu's sections.
+pub(crate) fn provider_name(base: &str) -> String {
+    let host = base.split("://").nth(1).unwrap_or(base).split('/').next().unwrap_or(base);
+    match () {
+        _ if base == "codex" => "Codex (ChatGPT sign-in)".into(),
+        _ if host.contains("generativelanguage.googleapis.com") => "Google Gemini".into(),
+        _ if host.contains("openrouter.ai") => "OpenRouter".into(),
+        _ if host.contains("api.openai.com") => "OpenAI".into(),
+        _ if host.ends_with(":11434") => "Ollama on this computer".into(),
+        _ => host.into(),
+    }
+}
 fn messages(system: &str, user: String) -> Vec<Value> {
     vec![
         json!({"role":"system","content":system}),
@@ -110,11 +122,11 @@ fn messages(system: &str, user: String) -> Vec<Value> {
     ]
 }
 impl App {
-    pub(crate) fn models(&self) -> Result<Value> {
-        let c = self.config();
+    /// Models of one provider: Codex reads its local cache, any other service is asked for `/models`.
+    fn provider_models(base: &str, key: &str) -> Result<Vec<Value>> {
         let mut models = vec![];
-        if c["base"] == "codex" {
-            models.push(json!({"id":"default","name":"Codex default"}));
+        if base == "codex" {
+            models.push(json!({"id":"default","name":"Codex default","note":"Uses the model set in Codex itself."}));
             let home = std::env::var_os("CODEX_HOME").map(PathBuf::from)
                 .or_else(|| dirs::home_dir().map(|h| h.join(".codex")));
             if let Some(cache) = home.and_then(|h| fs::read(h.join("models_cache.json")).ok())
@@ -122,15 +134,15 @@ impl App {
                 for m in list(&cache["models"]) {
                     // Codex marks its internal models "hide"; its own picker leaves them out too.
                     if let Some(id) = m["slug"].as_str().filter(|id| *id != "default" && m["visibility"] != "hide") {
-                        models.push(json!({"id":id,"name":m["display_name"].as_str().unwrap_or(id)}));
+                        models.push(json!({"id":id,"name":m["display_name"].as_str().unwrap_or(id),"note":m["description"].as_str().unwrap_or("")}));
                     }
                 }
             }
         } else {
-            let url = format!("{}/models", string(&c["base"]).trim_end_matches('/'));
+            let url = format!("{}/models", base.trim_end_matches('/'));
             let fetch = || -> std::result::Result<Value, Box<dyn std::error::Error>> {
                 let r = agent(&url, 15)?.get(&url)
-                    .set("Authorization", &format!("Bearer {}", string(&c["key"]))).call()?;
+                    .set("Authorization", &format!("Bearer {key}")).call()?;
                 Ok(serde_json::from_reader(r.into_reader().take(4 << 20))?)
             };
             let d = fetch().map_err(|_| Error::bad("Could not load models. Check the AI service address and API key in Settings."))?;
@@ -139,7 +151,29 @@ impl App {
             }
             models.sort_by_key(|m| string(&m["name"]));
         }
-        Ok(json!({"models":models,"current":c["model"]}))
+        Ok(models)
+    }
+    /// `models` is the current provider's list (Settings uses it); `groups` holds every provider set up so far.
+    pub(crate) fn models(&self) -> Result<Value> {
+        let c = self.config();
+        let base = string(&c["base"]);
+        let mut bases = vec!["codex".to_string()];
+        for b in c["providers"].as_object().into_iter().flat_map(|p| p.keys()).chain([&base]) {
+            if !bases.contains(b) { bases.push(b.clone()); }
+        }
+        let key_of = |b: &str| if b == base { string(&c["key"]) } else { string(&c["providers"][b]["key"]) };
+        // Asked side by side, so one slow or offline service does not hold up the rest.
+        let lists: Vec<Result<Vec<Value>>> = std::thread::scope(|s| {
+            let jobs: Vec<_> = bases.iter().map(|b| { let k = key_of(b); s.spawn(move || Self::provider_models(b, &k)) }).collect();
+            jobs.into_iter().map(|j| j.join().unwrap_or_else(|_| Err(Error::bad("Could not load models.")))).collect()
+        });
+        let groups: Vec<Value> = bases.iter().zip(lists).map(|(b, r)| match r {
+            Ok(models) => json!({"base":b,"name":provider_name(b),"models":models}),
+            Err(e) => json!({"base":b,"name":provider_name(b),"models":[],"error":e.message}),
+        }).collect();
+        // One service failing still lists the others; its error is shown in its own section.
+        let mine = groups.iter().find(|g| g["base"] == base.as_str()).cloned().unwrap_or_default();
+        Ok(json!({"models":mine["models"].as_array().cloned().unwrap_or_default(),"error":mine["error"],"groups":groups,"current":c["model"],"base":base}))
     }
     pub(crate) fn rewrite_notes(&self, cid: &str, b: &Value) -> Result<Value> {
         let notes = cap(string(&b["notes"]).trim(), 20000);

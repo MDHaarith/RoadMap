@@ -199,6 +199,11 @@ input[type=checkbox]:checked::after { content: ''; width: 9px; height: 5px; bord
 .select-list [role=option] { width: 100%; flex-direction: row; align-items: center; justify-content: space-between; gap: var(--s3); cursor: pointer; }
 .select-list [role=option]:hover, .select-list [role=option].active { background: var(--hover); }
 .select-check { width: 14px; flex: none; }
+.select-text { display: grid; gap: 1px; min-width: 0; }
+.select-text small { font-size: var(--t-xs); color: var(--muted); line-height: 1.35; }
+.select-group { margin: var(--s2) 0 0; padding: var(--s2) var(--s3) var(--s1); border-top: 1px solid var(--line); font-size: var(--t-xs); font-weight: 600; color: var(--ink-2); }
+.select-heading + .select-group { margin-top: 0; border-top: 0; }
+.select-heading { margin: 0; padding: var(--s2) var(--s3) var(--s1); font-size: var(--t-xs); font-weight: 600; color: var(--muted); }
 .menu-list button small { font-weight: 400; color: var(--muted); font-size: var(--t-xs); }
 .menu-list button:hover:not(:disabled) { background: var(--hover); }
 .menu-list button:disabled { color: var(--muted); }
@@ -300,7 +305,7 @@ input[type=checkbox]:checked::after { content: ''; width: 9px; height: 5px; bord
 .overview .next-card .btn { min-height: 28px; padding: 4px 10px; font-size: var(--t-sm); }
 .overview .route-board { margin-top: 0; }
 /* Room for the lesson list's own scroll bar, so it never sits on the counts. */
-.overview-main { min-width: 0; padding-right: 12px; margin-right: -12px; }
+.overview-main { min-width: 0; padding: 0 12px; margin: 0 -12px; }
 .overview-head h1 { margin-bottom: var(--s2); }
 .overview-head .goal { font-size: var(--t-md); color: var(--muted); margin-bottom: var(--s4); }
 .head-row { display: flex; align-items: flex-start; justify-content: space-between; gap: var(--s4); }
@@ -394,14 +399,14 @@ input[type=checkbox]:checked::after { content: ''; width: 9px; height: 5px; bord
 .lesson-layout { display: block; }
 .lesson-article { min-width: 0; }
 @media (min-width: 961px) {
-  .lesson-article { height: calc(100dvh - var(--top-h) - 40px); display: flex; flex-direction: column; }
+  main:has(> .lesson-layout) { padding-bottom: var(--s3); }
+  .lesson-article { height: calc(100dvh - var(--top-h) - 24px); display: flex; flex-direction: column; }
   .lesson-article > :not(.lesson-content) { flex-shrink: 0; }
   .lesson-article > .lesson-content { flex: 1; min-height: 0; display: flex; flex-direction: column; }
-  .lesson-article .step-body { flex: 1; min-height: 0; overflow: auto; }
+  .lesson-article .step-body { flex: 1; min-height: 0; overflow: auto; padding-left: 12px; margin-left: -12px; }
   .lesson-article .step-heading, .lesson-article .step-footer { flex-shrink: 0; }
-  .lesson-article .pager { margin-top: var(--s3); }
   .lesson-article > .row:has(.edit-preview) { flex-shrink: 1; min-height: 80px; max-height: 55%; overflow: auto; }
-  main:has(> .update-notice) .lesson-article { height: calc(100dvh - var(--top-h) - 86px); }
+  main:has(> .update-notice) .lesson-article { height: calc(100dvh - var(--top-h) - 70px); }
 }
 .lesson-crumb { display: flex; flex-wrap: wrap; align-items: center; gap: 6px; font-size: var(--t-sm); color: var(--muted); margin-bottom: var(--s3); }
 .lesson-crumb a { color: var(--muted); }
@@ -424,20 +429,20 @@ input[type=checkbox]:checked::after { content: ''; width: 9px; height: 5px; bord
 .lesson-content:has(#videos) .step-heading { display: grid; grid-template-columns: auto minmax(0, 1fr); column-gap: var(--s6); align-items: baseline; }
 .lesson-content:has(#videos) .step-heading > .small { grid-column: 1 / -1; }
 .lesson-content:has(#videos) .step-heading > p { margin: 0; }
-.lesson-content:has(#videos) .step-footer { margin-top: var(--s3); }
+
 .step-heading { margin-bottom: var(--s5); }
 .step-heading .small { display: block; margin-bottom: 4px; font-variant-numeric: tabular-nums; }
 .step-heading h2 { display: flex; align-items: center; gap: var(--s2); margin: 0; }
 .step-heading h2 > .icon { display: none; }
 .step-heading p { margin: var(--s2) 0 0; color: var(--ink-2); }
 .step-body { min-height: 200px; }
-.lesson-article .step-heading p, .lesson-article .content-list, .lesson-article .finish-checks, .lesson-article .finish, .lesson-article .note, .lesson-article .lookup { max-width: 72ch; }
-.step-footer { position: sticky; bottom: 0; z-index: 5; display: flex; align-items: center; justify-content: space-between; gap: var(--s3); margin-top: var(--s6); padding: var(--s3) 0; background: var(--bg); border-top: 1px solid var(--line); }
+.lesson-article .step-heading p, .lesson-article .finish-checks, .lesson-article .finish, .lesson-article .note, .lesson-article .lookup { max-width: 72ch; }
+.step-footer { position: sticky; bottom: 0; z-index: 5; display: flex; align-items: center; justify-content: space-between; gap: var(--s3); margin-top: 0; padding: var(--s2) 0 0; background: var(--bg); border-top: 1px solid var(--line); }
 /* Ruled rows for interactive lists; hanging numerals for explanatory prose. */
 .ruled { border-top: 1px solid var(--line); }
 .ruled > * { border-bottom: 1px solid var(--line); }
 .ruled > :is(a, button, .ruled-row):hover { background: var(--hover); }
-.content-list { list-style: none; padding: 0; margin: 0; counter-reset: item; display: grid; gap: var(--s3); }
+.content-list { list-style: none; padding: 0; margin: 0; counter-reset: item; display: grid; grid-template-columns: repeat(auto-fill, minmax(min(100%, 380px), 1fr)); column-gap: var(--s6); row-gap: var(--s2); align-items: start; }
 .content-list > li { counter-increment: item; display: flex; gap: var(--s4); padding: var(--s3) 0; line-height: 1.65; }
 .content-list > li::before { content: counter(item, decimal-leading-zero); flex: none; width: 26px; color: var(--accent); font: 600 var(--t-lg)/1.5 var(--display); }
 .concept-copy { min-width: 0; }
@@ -459,8 +464,8 @@ input[type=checkbox]:checked::after { content: ''; width: 9px; height: 5px; bord
 .completion-next { right: 0; border: 2px solid var(--accent); background: var(--bg); }
 .completion-next::before { content: ""; width: 8px; height: 8px; border-radius: 50%; background: var(--accent); animation: stop-appear var(--motion-enter) var(--motion-mark-ease) 520ms backwards; }
 .completion-traveller { position: absolute; left: 8px; top: 8px; width: 6px; height: 6px; border-radius: 50%; background: var(--accent); opacity: 0; animation: completion-travel 400ms var(--motion-ease) 120ms; }
-.pager { display: flex; justify-content: space-between; gap: var(--s4); margin-top: var(--s6); font-size: var(--t-sm); }
-.pager a { color: var(--muted); max-width: 48%; }
+.pager { flex: 1; min-width: 0; display: flex; justify-content: space-between; gap: var(--s4); font-size: var(--t-xs); }
+.pager a { color: var(--muted); max-width: 48%; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
 .pager a:hover { color: var(--ink); }
 .pager a:last-child { text-align: right; }
 
@@ -533,7 +538,7 @@ main:has(.lesson-layout .support:not([hidden])) { padding-right: calc(var(--side
   .video-main { display: flex; flex-direction: column; height: 100%; container-type: inline-size; }
   .player-space { flex: 1; min-height: 0; max-height: min(618.75px, 56.25cqw); container-type: size; }
   .player-space .player { width: min(100cqw, calc(100cqh * 16 / 9), 1100px); }
-  .video-title, .chapters { flex: none; }
+  .video-title, .chapter-strip { flex: none; }
   .video-choices { max-height: 100%; overflow-y: auto; }
 }
 .video-choices .vlist { margin-top: 0; }
@@ -549,10 +554,18 @@ main:has(.lesson-layout .support:not([hidden])) { padding-right: calc(var(--side
 .player-error a { color: var(--player-link); font-weight: 550; text-decoration: underline; text-underline-offset: 3px; }
 .video-title { display: flex; justify-content: space-between; gap: var(--s4); align-items: baseline; margin: var(--s3) 0 0; }
 .video-title b { font-weight: 600; }
-.chapters { display: flex; flex-wrap: wrap; gap: 6px; margin-top: var(--s3); }
-.chapters button { border: 1px solid var(--line); background: var(--surface); border-radius: var(--r-btn-sm); padding: 3px var(--s2); font-size: var(--t-xs); color: var(--ink-2); }
-.chapters button:hover { background: var(--hover); }
-.chapters span { font-variant-numeric: tabular-nums; color: var(--accent-ink); font-weight: 600; margin-right: 2px; }
+.chapter-strip { display: flex; align-items: center; gap: var(--s2); margin-top: var(--s2); }
+.chapters { flex: 1; min-width: 0; display: flex; gap: 6px; overflow-x: auto; scroll-snap-type: x proximity; }
+.chapter-strip.fade-right .chapters { mask-image: linear-gradient(to right, #000 calc(100% - 32px), transparent); }
+.chapter-strip.fade-left .chapters { mask-image: linear-gradient(to right, transparent, #000 32px); }
+.chapter-strip.fade-left.fade-right .chapters { mask-image: linear-gradient(to right, transparent, #000 32px, #000 calc(100% - 32px), transparent); }
+.chapters button { flex: none; scroll-snap-align: start; white-space: nowrap; border: 1px solid var(--line); background: var(--surface); border-radius: var(--r-btn-sm); padding: 3px var(--s2); font-size: var(--t-xs); color: var(--ink-2); }
+.chapters button:hover { background: var(--hover); color: var(--ink); }
+.chapters span { font-variant-numeric: tabular-nums; color: var(--accent-ink); font-weight: 600; margin-right: 4px; }
+.strip-arrow { flex: none; display: grid; place-items: center; width: 24px; height: 24px; padding: 0; border: 1px solid var(--line); border-radius: 50%; background: var(--surface); color: var(--ink-2); }
+.strip-arrow:hover:not(:disabled) { background: var(--hover); color: var(--ink); }
+.strip-arrow:disabled { opacity: .35; cursor: default; }
+.strip-arrow .icon { width: 14px; height: 14px; }
 .vlist { display: grid; margin-top: var(--s4); border-top: 1px solid var(--line); }
 .vid { display: flex; align-items: flex-start; gap: var(--s3); width: 100%; text-align: left; border: 0; border-bottom: 1px solid var(--line); background: var(--surface); padding: var(--s3); }
 .vid:hover { background: var(--hover); }
@@ -899,7 +912,6 @@ code { font-size: max(11px, .9em); }
 @keyframes stop-appear { from { opacity: 0; transform: scale(.65); } }
 @keyframes ring-pulse { from { opacity: .7; transform: scale(1); } to { opacity: 0; transform: scale(1.8); } }
 @keyframes draw-check { from { stroke-dashoffset: 1; } to { stroke-dashoffset: 0; } }
-@keyframes ideas-enter { from { opacity: 0; transform: translateX(12px); } }
 @keyframes step-forward { from { opacity: 0; transform: translateX(12px); } }
 @keyframes step-back { from { opacity: 0; transform: translateX(-12px); } }
 @keyframes completion-travel { 0% { opacity: 0; transform: translateX(0); } 15%, 85% { opacity: 1; } 100% { opacity: 0; transform: translateX(88px); } }
@@ -913,7 +925,6 @@ button:active:not(:disabled), .btn:active { transform: scale(.97); }
 .step-back { animation: step-back var(--motion-enter) var(--motion-ease) backwards; }
 .popover-enter, .menu[open] .menu-list { transform-origin: top right; animation: unfold var(--motion-fast) var(--motion-ease) backwards; }
 .switch-menu:not([hidden]) { transform-origin: top left; animation: unfold var(--motion-fast) var(--motion-ease) backwards; }
-.ideas:not([hidden]) { animation: ideas-enter var(--motion-enter) var(--motion-ease) backwards; }
 #completed:not([hidden]), .celebrate { animation: unfold var(--motion-enter) var(--motion-ease) backwards; }
 #toast:not([hidden]) { animation: toast-arrive var(--motion-enter) var(--motion-ease) backwards; }
 .bar i { transform-origin: left; transition: transform var(--motion-slow) var(--motion-ease); animation: fill-progress var(--motion-slow) var(--motion-ease) backwards; }
@@ -1010,7 +1021,6 @@ button:active:not(:disabled), .btn:active { transform: scale(.97); }
 .lesson-content:has(#videos) .step-heading { display: block; }
 .step-heading h2 { font-size: 13px; font-weight: 500; color: var(--ink-2); }
 .playing-label { font-size: 11px; font-weight: 600; color: var(--accent-ink); }
-.player-fallback { flex: none; margin: 6px 0 0; }
 .video-tools { justify-content: flex-start; padding-top: 10px; border-top: 1px solid var(--line); }
 .video-tools h3 { width: 100%; margin: 0; font: 600 13px var(--font); }
 .video-tools > a { font-size: 12px; }

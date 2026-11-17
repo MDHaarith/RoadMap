@@ -315,11 +315,24 @@ fn python_spec_end_to_end() {
     let app = Arc::new(app);
     app.write_config(&json!({"base":"codex","model":"default","key":"keep","small":"cheap"})).unwrap();
     app.route("PUT", "api/model", &json!({"model":"chosen"})).unwrap();
-    assert_eq!(app.config(), json!({"base":"codex","model":"chosen","key":"keep","small":"cheap"}));
+    let picked = |c: Value| json!({"base":c["base"],"model":c["model"],"key":c["key"],"small":c["small"]});
+    assert_eq!(picked(app.config()), json!({"base":"codex","model":"chosen","key":"keep","small":"cheap"}));
     assert_eq!(app.route("PUT", "api/model", &json!({"model":" "})).unwrap_err().status, 400);
     let models = app.route("GET", "api/models", &json!({})).unwrap();
-    assert_eq!(models["models"][0], json!({"id":"default","name":"Codex default"}));
+    assert_eq!(models["models"][0], json!({"id":"default","name":"Codex default","note":"Uses the model set in Codex itself."}));
     assert_eq!(models["current"], "chosen");
+    // Providers are remembered: the menu lists both, and picking a model from one switches to its key.
+    let other = "http://127.0.0.1:9/v1";
+    app.route("PUT", "api/settings", &json!({"base":other,"model":"m1","key":"secret","small":""})).unwrap();
+    let models = app.route("GET", "api/models", &json!({})).unwrap();
+    assert_eq!(models["groups"].as_array().unwrap().iter().map(|g| string(&g["base"])).collect::<Vec<_>>(), ["codex", other]);
+    assert!(truth(&models["groups"][1]["error"]) && truth(&models["error"]));
+    app.route("PUT", "api/model", &json!({"model":"default","base":"codex"})).unwrap();
+    assert_eq!(picked(app.config()), json!({"base":"codex","model":"default","key":"keep","small":"cheap"}));
+    app.route("PUT", "api/model", &json!({"model":"m2","base":other})).unwrap();
+    assert_eq!(picked(app.config()), json!({"base":other,"model":"m2","key":"secret","small":""}));
+    assert_eq!(app.route("PUT", "api/model", &json!({"model":"x","base":"http://unknown"})).unwrap_err().status, 400);
+    app.route("PUT", "api/model", &json!({"model":"chosen","base":"codex"})).unwrap();
     assert_eq!(app.route("POST", "api/courses/aaaaaaaaaaaa/notes", &json!({"lesson":"1.1","notes":" "})).unwrap_err().message, "Write some notes first.");
 
     let ai = FakeAI::new();
