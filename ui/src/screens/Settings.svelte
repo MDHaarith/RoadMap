@@ -31,7 +31,7 @@
   }
   async function saveSettings() {
     if (!config) return; busy = true; saved = ''; saveError = '';
-    try { await api('PUT', 'api/settings', { base: config.base, model: config.model, small: config.small || '', key }); if (key) config.key_set = true; key = ''; saved = 'Settings saved.'; appState.config = { ...config }; active = { base: config.base, model: config.model }; void recheck(); }
+    try { await api('PUT', 'api/settings', { base: config.base, model: config.model, small: config.small || '', key }); if (key) config.key_set = true; key = ''; saved = 'Settings saved.'; appState.config = { ...config }; active = { base: config.base, model: config.model }; void recheck(); void loadModels(true); }
     catch (error) { saveError = message(error); } finally { busy = false; }
   }
 </script>

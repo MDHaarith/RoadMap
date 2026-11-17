@@ -1,11 +1,18 @@
 import { api } from './api';
-export const models = $state({ items: [] as { id: string; name: string }[], error: '', loading: false });
+type Model = { id: string; name: string; note?: string };
+type Group = { base: string; name: string; models: Model[]; error?: string };
+// `items` is the current provider's list (Settings); `groups` is every provider set up, for the model menu.
+export const models = $state({ items: [] as Model[], groups: [] as Group[], error: '', loading: false });
 let request: Promise<void> | undefined;
 export const modelName = (id: string) => id === 'default' ? 'Codex default' : models.items.find(m => m.id === id)?.name || id;
-export function loadModels() {
+export function loadModels(fresh = false) {
+  if (fresh) request = undefined;
   return request ||= (async () => {
-    models.loading = true;
-    try { models.items = (await api<{ models: { id: string; name: string }[] }>('GET', 'api/models')).models; }
+    models.loading = true; models.error = '';
+    try {
+      const r = await api<{ models: Model[]; groups?: Group[]; error?: string }>('GET', 'api/models');
+      models.items = r.models; models.groups = r.groups || []; models.error = r.error || '';
+    }
     catch (e) { models.error = e instanceof Error ? e.message : String(e); }
     finally { models.loading = false; }
   })();
