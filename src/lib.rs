@@ -380,7 +380,7 @@ pub(crate) fn merge(mut a: Value, b: Value) -> Value {
 }
 pub(crate) fn clean_lesson(l: &Value, lid: &str, files: &[String]) -> Value {
     json!({"id":lid,"title":cap(&if truth(&l["title"]) { text(&l["title"]) } else {"Lesson".into()},200),"goal":cap(&string(&l["goal"]),600),
-        "concepts":strs(&l["concepts"],8),"tasks":strs(&l["tasks"],8),"done":strs(&l["done"],8),
+        "concepts":strs(&l["concepts"],8),"tasks":strs(&l["tasks"],15),"done":strs(&l["done"],8),
         "query":cap(&if truth(&l["query"]) {text(&l["query"])}else{string(&l["title"])},200),"lookups":strs(&l["lookups"],4),
         "files":strs(&l["files"],6).into_iter().filter(|f|files.contains(f)).collect::<Vec<_>>(),"warn":cap(&string(&l["warn"]),600),
         "charts":clean_charts(&l["charts"])})

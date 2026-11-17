@@ -29,7 +29,7 @@
     if (s.finished || s.selected !== null || !Number.isInteger(i) || i < 0 || i >= q.options.length) return;
     s.selected = i; s.picks ||= []; s.picks[s.index] = i;
     if (i === q.answer) s.score++;
-    else api('POST', 'api/mistake', { course: c.id, lesson: l.id, i: set.from + s.index, picked: i }).catch(() => {});
+    else api('POST', 'api/mistake', { course: c.id, lesson: l.id, i: set.at[s.index], picked: i }).catch(() => {});
     await tick(); document.getElementById('quiz-next')?.focus({ preventScroll: true });
   }
   async function quizNext() {

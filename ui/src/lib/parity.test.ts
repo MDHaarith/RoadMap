@@ -64,7 +64,10 @@ test('completion, stage locks, small quiz pools, and exam thresholds match the o
   // "New questions" appends to the bank: the quiz asks the newest set, the exam pool keeps all of it.
   assert.equal(quizSet(first).from, 0); assert.equal(quizSet(first).quiz.length, 5);
   first.practice.from = 5; first.practice.quiz!.push({ q: 'new', options: ['a', 'b'], answer: 1, why: '' });
-  assert.deepEqual(quizSet(first), { from: 5, quiz: [{ q: 'new', options: ['a', 'b'], answer: 1, why: '' }] });
+  assert.deepEqual(quizSet(first), { from: 5, at: [5], quiz: [{ q: 'new', options: ['a', 'b'], answer: 1, why: '' }] });
+  // Stage exam questions join the bank but stay out of the lesson quiz.
+  first.practice.quiz!.push({ q: 'exam', options: ['a', 'b'], answer: 0, why: '', exam: true });
+  assert.deepEqual(quizSet(first).at, [5]);
 });
 
 

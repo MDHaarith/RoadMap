@@ -350,6 +350,31 @@ impl App {
         fs::write(&f, md.join("\n") + "\n")?;
         Ok(json!({"path":f}))
     }
+    /// Roadmap files saved with Export or Share as template, newest first, from the folders people save them to.
+    pub(crate) fn import_files(&self) -> Result<Value> {
+        let mut found: Vec<(std::time::SystemTime, PathBuf)> = vec![];
+        for dir in ["Downloads", "Documents", "Desktop", ""] {
+            for e in fs::read_dir(self.home.join(dir)).into_iter().flatten().flatten() {
+                let p = e.path();
+                let ok = p.file_name().and_then(|n| n.to_str()).is_some_and(|n| n.ends_with(".roadmap.json"));
+                if let (true, Ok(m)) = (ok, e.metadata()) {
+                    if m.is_file() && m.len() <= 20_000_000 {
+                        found.push((m.modified().unwrap_or(std::time::UNIX_EPOCH), p));
+                    }
+                }
+            }
+        }
+        found.sort_by(|a, b| b.0.cmp(&a.0));
+        let files = found.into_iter().take(30).filter_map(|(t, p)| {
+            let d = fs::read(&p).ok().and_then(|b| serde_json::from_slice::<Value>(&b).ok()).filter(|d| d["phases"].is_array())?;
+            let ls = lessons(&d).count();
+            let done = d["state"]["done"].as_object().map_or(0, |o| o.values().filter(|v| truth(v)).count());
+            let secs = t.duration_since(std::time::UNIX_EPOCH).map_or(0, |x| x.as_secs());
+            Some(json!({"path":p,"name":p.file_name().map(|n| n.to_string_lossy().into_owned()),"title":cap(&string(&d["title"]),200),
+                "summary":cap(&string(&d["summary"]),400),"lessons":ls,"done":done.min(ls),"template":p.to_string_lossy().ends_with(".template.roadmap.json"),"modified":secs}))
+        }).collect::<Vec<_>>();
+        Ok(json!({"files":files}))
+    }
     pub(crate) fn import_course(&self, path: &str) -> Result<Value> {
         let f = Path::new(path);
         if !f.is_file() || f.metadata()?.len() > 20_000_000 {

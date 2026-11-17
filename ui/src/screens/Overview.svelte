@@ -83,6 +83,13 @@
   }
   const META: Record<string, string> = { done: 'Complete', next: 'Up next', locked: 'Locked', part: 'In progress', outline: 'Not written yet', '': '' };
   async function act(fn: () => unknown) { menuOpen = false; await fn(); }
+  let deleting = $state(false);
+  async function deleteRoadmap() {
+    if (!(await confirmAsk({ message: `Delete "${c.title}" and all its progress? This can't be undone.`, action: 'Delete', danger: true }))) return;
+    deleting = true;
+    try { await api('DELETE', 'api/courses/' + enc(c.id)); appState.course = null; location.hash = '#/'; }
+    catch (e) { toast(message(e)); } finally { deleting = false; }
+  }
   // Escape closes the innermost open thing (menu, plan preview, Change my roadmap, video preferences) and puts focus back where it was opened.
   function menuKeys(e: KeyboardEvent) {
     if (e.key !== 'Escape' || e.defaultPrevented) return;
@@ -120,6 +127,9 @@
         <button id="export" onclick={() => act(() => exportCourse('export'))}>Export<small>Save this roadmap with your progress and notes to a file</small></button>
         <button id="template" onclick={() => act(() => exportCourse('template'))}>Share as template<small>Save the roadmap alone, without your progress or notes</small></button>
         <button id="summary" onclick={() => act(() => exportCourse('summary'))}>Save summary<small>A Markdown summary of what you made, your notes and quiz scores</small></button>
+        <hr />
+        <button id="roadmap-mistakes" onclick={() => act(() => { location.hash = '#/mistakes/' + enc(c.id); })}>Mistakes notebook<small>The questions you missed in this roadmap</small></button>
+        <button id="delete-roadmap" class="danger" disabled={deleting} onclick={() => act(deleteRoadmap)}>Delete roadmap<small>Removes it with all its progress and notes</small></button>
       </div></details>
     </div>
     <p class="goal">{c.summary}</p>

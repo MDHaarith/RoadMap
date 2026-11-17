@@ -186,7 +186,9 @@ pub(crate) fn language(lang: &str) -> Result<([&'static str; 7], u64)> {
 }
 pub(crate) fn clean_practice(d: &Value, max: usize) -> Value {
     let quiz=list(&d["quiz"]).iter().filter_map(|q| {let opts=strs(&q["options"],6);let a=q["answer"].as_u64().or_else(||q["answer"].as_bool().map(u64::from))?;
- (opts.len()>1 && a<opts.len() as u64).then(||json!({"q":cap(&string(&q["q"]),1000),"options":opts,"answer":q["answer"],"why":cap(&string(&q["why"]),1000)})) }).take(max).collect::<Vec<_>>();
+ (opts.len()>1 && a<opts.len() as u64).then(||{let mut x=json!({"q":cap(&string(&q["q"]),1000),"options":opts,"answer":q["answer"],"why":cap(&string(&q["why"]),1000)});
+ // A stage exam question kept in the lesson's bank; the lesson quiz leaves it out.
+ if q["exam"]==true {x["exam"]=json!(true);} x}) }).take(max).collect::<Vec<_>>();
     let e = &d["exercise"];
     let exercise = if e.is_object() && language(&string(&e["lang"])).is_ok() && truth(&e["tests"]) {
         json!({"lang":e["lang"],"title":cap(&string(&e["title"]),200),"prompt":cap(&string(&e["prompt"]),4000),"starter":cap(&string(&e["starter"]),8000),"tests":cap(&string(&e["tests"]),20000)})

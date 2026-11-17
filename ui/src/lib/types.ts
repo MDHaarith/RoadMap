@@ -8,7 +8,8 @@ export interface PlanPreview { options: PlanOption[]; note: string }
 export interface Settings { videos: VideoPrefs; base: string; model: string; small?: string; key_set?: boolean; theme: Theme; usage?: Usage; codex?: 'ready' | 'signed_out' | 'missing'; damaged: number }
 /** steps: what the tutor looked up before this reply, in the order it did so. */
 export interface Message { role: 'user' | 'assistant'; content: string; steps?: string[] }
-export interface Quiz { q: string; options: string[]; answer: number; why: string }
+/** exam: a stage exam question kept in its lesson's bank; the lesson quiz leaves it out. */
+export interface Quiz { q: string; options: string[]; answer: number; why: string; exam?: boolean }
 export interface Exercise { title: string; prompt: string; lang: string; starter: string; tests: string }
 export interface Video { id: string; title: string; channel: string; duration?: number; why?: string; start?: number; covers?: string[]; searched?: boolean; chapters?: { t: number; title: string }[] }
 export interface Chart { title: string; kind: 'line' | 'bar'; x: string; y: string; labels: string[]; series: { name: string; values: number[] }[]; note: string }
