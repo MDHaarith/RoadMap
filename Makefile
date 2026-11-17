@@ -17,7 +17,7 @@ bundle:
 # Fedora build dependencies are listed in roadmap-app.spec. Cargo downloads locked crates.
 # Output: dist/<architecture>/roadmap-app-*.rpm
 rpm:
-	rpmbuild -bb --define "_sourcedir $(CURDIR)" --define "_rpmdir $(CURDIR)/dist" roadmap-app.spec
+	rpmbuild -bb --define "local_toolchain 1" --define "_sourcedir $(CURDIR)" --define "_rpmdir $(CURDIR)/dist" roadmap-app.spec
 
 .PHONY: windows
 windows:
