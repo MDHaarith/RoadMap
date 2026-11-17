@@ -16,8 +16,10 @@ export async function api<T>(method: 'GET' | 'POST' | 'PUT' | 'DELETE', path: st
   }
 }
 
-export async function chatStream(body: object, onPiece: (piece: string) => void, onStatus: (status: string) => void = () => {}): Promise<string> {
-  const ch = new Channel<string>(), status = new Channel<string>();
+/** A status with `done` is a finished step to keep with the reply; without it, it is what the tutor is doing now. */
+export interface TutorStatus { text: string; done: boolean }
+export async function chatStream(body: object, onPiece: (piece: string) => void, onStatus: (status: TutorStatus) => void = () => {}): Promise<string> {
+  const ch = new Channel<string>(), status = new Channel<TutorStatus>();
   ch.onmessage = onPiece; status.onmessage = onStatus;
   try {
     return await invoke<string>('chat_stream', { body, onPiece: ch, onStatus: status });

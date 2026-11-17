@@ -109,7 +109,7 @@ Style: you are in a narrow chat panel. Reply in the learner's language, in short
 pub const PRACTICE_PROMPT: &str = r####"You write the practice material for one lesson of a course in Roadmap, a desktop app for people who learn by doing. The lesson and the course it belongs to are given below. The learner sees your quiz as multiple-choice questions in the app, and your exercise in a small code editor with a Run button and a Run tests button.
 
 Reply with only a JSON object, with no markdown fences and no text before or after it, in this shape:
-{"quiz": [{"q": str, "options": [str, str, str, str], "answer": int, "why": str}], "exercise": null or {"lang": one of "python", "javascript", "bash", "ruby", "php", "lua", "perl", "r", "c", "cpp", "rust", "go", "java", "title": str, "prompt": str, "starter": str, "tests": str}}
+{"quiz": [{"q": str, "options": [str, str, str, str], "answer": int, "why": str}], "recall": [str], "exercise": null or {"lang": one of "python", "javascript", "bash", "ruby", "php", "lua", "perl", "r", "c", "cpp", "rust", "go", "java", "title": str, "prompt": str, "starter": str, "tests": str}}
 
 Quiz
 - Write 5 questions on this lesson's concepts, easiest first. Test understanding, not memory of wording: ask what would happen, which option is wrong and why, which choice fits a situation.
@@ -119,6 +119,10 @@ Quiz
 - At least one question puts the idea in a situation the lesson did not show, and at least one asks the learner to predict a result or to find the error in a short example. A question that can be answered by matching words from the lesson teaches nothing.
 - If the course outline shows earlier lessons, make the last question need one idea from an earlier lesson together with this lesson's, so the old idea is recalled.
 - Do not ask anything whose answer is the solution to one of the lesson's tasks.
+
+Recall
+- recall has one open question for each concept of the lesson, in the same order as the concepts are given. Days later the app shows the learner only this question and they answer from memory in their own words, so it must ask for the concept without stating it: ask why, how, or what would happen ("Why is revenue alone not proof that a business will last?"), never "explain" followed by the concept itself.
+- One sentence each, answerable in two or three sentences by someone who understood the concept.
 
 Exercise
 - Write one only when the lesson teaches programming and the idea can be practised in a single file in one of the languages listed above. Use the language the lesson teaches. If that language is not in the list, or the lesson is not about programming, or it needs hardware, a network, third-party packages, a GUI or keyboard input, the exercise is null. Do not translate a lesson into a different language. For a microcontroller lesson in C or C++, an exercise is fine only when the idea is plain language logic that runs on a PC.
@@ -210,11 +214,12 @@ Reply with only a JSON object, with no markdown fences and no text before or aft
 
 Write in the language the course is written in."####;
 
-pub const GRADE_PROMPT: &str = r####"You mark one review answer inside Roadmap, a desktop app for people who learn by doing. Days or weeks after a lesson, the learner was asked to explain one of its concepts from memory, in their own words. You are given the lesson, the concept and their answer.
+pub const GRADE_PROMPT: &str = r####"You mark one review answer inside Roadmap, a desktop app for people who learn by doing. Days or weeks after a lesson, the learner was asked to explain one of its concepts from memory, in their own words. You are given the lesson, the concept, what the learner was shown as the question, and their answer. The learner did not see the concept's full text, only the question, so mark the answer against the question and use the concept as the correct content.
 
 Reply with only a JSON object, with no markdown fences and no text before or after it, in this shape:
-{"right": bool, "feedback": str}
+{"right": bool, "feedback": str, "points": [{"text": str, "hit": bool}]}
 
+- points is your mark scheme for this concept, written before you judge the answer: two to four short statements that a complete answer would make, each under 15 words, the core idea first. hit is true when the learner's answer says that point, in any wording. The learner sees the list with a tick or a gap beside each point, so write each one as a plain statement of fact, not as an instruction.
 - right is true when the answer shows they hold the core idea and could use it, even if the wording is loose, short or informal, and even if a side detail is missing. Judge the understanding, not the writing or the spelling.
 - right is false when the core idea is missing or wrong, when the answer only repeats the words of the question, when it is too vague to tell ("it is about memory"), or when it is empty or says they do not know.
 - feedback: two or three sentences to the learner. Say first what they got right, if anything. Then give the one thing that was missing or wrong, stated correctly and plainly, with a tiny concrete example if that helps. They have already tried, so now the correct idea should be given in full. Do not praise an answer that is wrong and do not pad.

@@ -1,10 +1,14 @@
 Name:           roadmap-app
 Version:        0.2.0
-Release:        11%{?dist}
+Release:        12%{?dist}
 Summary:        Learn anything by doing: AI-built courses with free YouTube lessons
 # No licence chosen yet. Replace before sharing the package.
 License:        LicenseRef-Not-Chosen
-BuildRequires:  cargo >= 1.92 rust >= 1.92 gcc-c++ pkgconf-pkg-config gtk3-devel webkit2gtk4.1-devel openssl-devel nodejs npm
+BuildRequires:  gcc-c++ pkgconf-pkg-config gtk3-devel webkit2gtk4.1-devel openssl-devel
+# `make rpm` defines local_toolchain: Rust and Node then come from PATH (rustup, nvm), not Fedora packages.
+%if 0%{!?local_toolchain:1}
+BuildRequires:  cargo >= 1.92 rust >= 1.92 nodejs npm
+%endif
 Requires:       gtk3 webkit2gtk4.1 yt-dlp bubblewrap bash ca-certificates
 # Optional exercise interpreters are installed on demand; Python does not run the app.
 # Cargo downloads Cargo.lock's crates during this local RPM build (not vendored).

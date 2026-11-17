@@ -17,6 +17,8 @@
       <div class="quiz-meta"><i class="sk short"></i></div><i class="sk question-line"></i><div class="options">{#each Array(4) as _}<div class="sk option-block"></div>{/each}</div>
     {:else if kind === 'plans' || kind === 'options'}
       <div class="skeleton-plan-options">{#each Array(kind === 'plans' ? 3 : 1) as _}<div class="card">{@render lines(2)}<div class="skeleton-plan-copy">{@render lines(5)}</div><i class="sk control"></i></div>{/each}</div>
+    {:else if kind === 'feedback'}
+      <div class="skeleton-feedback">{@render lines(3)}</div>
     {:else if kind === 'plan'}
       {@render list(3)}
     {:else if kind === 'settings'}

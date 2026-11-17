@@ -4,7 +4,7 @@ import { mockIPC, clearMocks } from '@tauri-apps/api/mocks';
 import { Channel } from '@tauri-apps/api/core';
 import { api, chatStream, updateCommand, updateState } from './api.ts';
 import { esc, fmt, fmtTutor } from './format.ts';
-import { checked, passed, locked, examReady, examPassed, nextLesson } from './progress.ts';
+import { checked, passed, locked, examReady, examPassed, nextLesson, quizSet } from './progress.ts';
 import type { Course, Lesson } from './types.ts';
 
 test('IPC uses exact API paths, default bodies, structured errors, and a streaming Channel', async () => {
@@ -17,13 +17,16 @@ test('IPC uses exact API paths, default bodies, structured errors, and a streami
     const pieces: string[] = [];
     mockIPC((cmd, args) => {
       assert.equal(cmd, 'chat_stream');
-      const payload = args as { body: object; onPiece: Channel<string> };
+      const payload = args as { body: object; onPiece: Channel<string>; onStatus: Channel<{ text: string; done: boolean }> };
       assert.deepEqual(payload.body, { stream: true });
       assert.ok(payload.onPiece instanceof Channel);
+      payload.onStatus.onmessage({ text: 'Reading another lesson', done: false }); payload.onStatus.onmessage({ text: 'Read lesson 1.1', done: true });
       payload.onPiece.onmessage('hello '); payload.onPiece.onmessage('world'); return 'hello world';
     });
-    assert.equal(await chatStream({ stream: true }, p => pieces.push(p)), 'hello world');
+    const statuses: object[] = [];
+    assert.equal(await chatStream({ stream: true }, p => pieces.push(p), s => statuses.push(s)), 'hello world');
     assert.equal(pieces.join(''), 'hello world');
+    assert.deepEqual(statuses, [{ text: 'Reading another lesson', done: false }, { text: 'Read lesson 1.1', done: true }]);
   } finally { clearMocks(); Reflect.deleteProperty(globalThis, 'window'); }
 });
 
@@ -31,6 +34,13 @@ test('escape-first formatting is preserved', () => {
   assert.equal(esc('<img src=x onerror="x">&\''), '&lt;img src=x onerror=&quot;x&quot;&gt;&amp;&#39;');
   assert.equal(fmt('**bold** `code` <script>'), '<strong>bold</strong> <code>code</code> &lt;script&gt;');
   assert.equal(fmt('what they *would* pay, 2*3*4, a * b * c'), 'what they <em>would</em> pay, 2*3*4, a * b * c');
+  // Unbalanced emphasis: no raw markers, no lost text, code spans untouched.
+  assert.equal(fmt('Short answer: **it depends on how you pay yourself*.'), 'Short answer: <strong>it depends on how you pay yourself</strong>.');
+  assert.equal(fmt('*x** first'), '<strong>x</strong> first');
+  assert.equal(fmt('then **名前*'), 'then <strong>名前</strong>');
+  assert.equal(fmt('a stray** end and *start, lone * star, 2**3'), 'a stray end and start, lone * star, 2**3');
+  assert.equal(fmt('`a*b **c*` **<b>*'), '<code>a*b **c*</code> <strong>&lt;b&gt;</strong>');
+  assert.equal(fmt('* item'), '* item');
   const text = fmtTutor('video 2 at 3:45\n```html\n<img onerror=x>```');
   assert.ok(text.includes('data-seek="1" data-at="225"'));
   assert.ok(text.includes('&lt;img onerror=x&gt;'));
@@ -51,6 +61,10 @@ test('completion, stage locks, small quiz pools, and exam thresholds match the o
   c.state.quiz.b = { score: 2, total: 2 }; assert.equal(passed(c, second), false);
   c.state.quiz.b = { score: 4, total: 5 }; assert.equal(passed(c, second), true);
   assert.equal(nextLesson(c), second);
+  // "New questions" appends to the bank: the quiz asks the newest set, the exam pool keeps all of it.
+  assert.equal(quizSet(first).from, 0); assert.equal(quizSet(first).quiz.length, 5);
+  first.practice.from = 5; first.practice.quiz!.push({ q: 'new', options: ['a', 'b'], answer: 1, why: '' });
+  assert.deepEqual(quizSet(first), { from: 5, quiz: [{ q: 'new', options: ['a', 'b'], answer: 1, why: '' }] });
 });
 
 

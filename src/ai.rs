@@ -51,8 +51,43 @@ fn needs_schema() -> Value {
 }
 fn practice_schema() -> Value {
     obj(
-        json!({"quiz":arr(obj(json!({"q":s(),"options":arr(s()),"answer":{"type":"integer"},"why":s()}))),"exercise":{"anyOf":[{"type":"null"},obj(json!({"lang":{"type":"string","enum":LANGS.iter().map(|(l,_,_)|*l).collect::<Vec<_>>()},"title":s(),"prompt":s(),"starter":s(),"tests":s()}))]}}),
+        json!({"quiz":arr(obj(json!({"q":s(),"options":arr(s()),"answer":{"type":"integer"},"why":s()}))),"recall":arr(s()),"exercise":{"anyOf":[{"type":"null"},obj(json!({"lang":{"type":"string","enum":LANGS.iter().map(|(l,_,_)|*l).collect::<Vec<_>>()},"title":s(),"prompt":s(),"starter":s(),"tests":s()}))]}}),
     )
+}
+// What the daily review shows for concept k of a lesson. A long concept is a whole explanation,
+// so showing it in full would hand over the answer it asks for.
+// shortcut: lessons made before recall questions existed show the first clause of a long concept; "New questions" writes real ones.
+pub(crate) fn recall_ask(l: &Value, k: usize) -> String {
+    if let Some(q) = l["practice"]["recall"][k].as_str().filter(|q| !q.trim().is_empty()) {
+        return q.into();
+    }
+    let concept = text(&l["concepts"][k]);
+    if concept.chars().count() <= 90 {
+        return concept;
+    }
+    let end = [". ", "; ", ": "].iter().filter_map(|p| concept.find(p)).min().unwrap_or(concept.len());
+    format!("{}…", cap(&concept[..end], 90))
+}
+// Which concept the daily review asks about. The step stops at 4, so it cannot rotate through up to eight concepts;
+// the due day moves with every answer, and the review list and the marking read the same saved entry.
+pub(crate) fn recall_k(review: &Value, n: usize) -> usize {
+    review["due"].as_i64().unwrap_or(0).rem_euclid(n.max(1) as i64) as usize
+}
+// The review page sends back the text it showed. The answer is marked only against the question that text still names,
+// found among the lesson's own questions, so an answer never counts for another question after the lesson changed.
+pub(crate) fn shown_quiz(l: &Value, q: &str) -> Option<usize> {
+    list(&l["practice"]["quiz"]).iter().position(|x| string(&x["q"]) == q)
+}
+pub(crate) fn shown_concept(l: &Value, q: &str) -> Option<usize> {
+    (0..list(&l["concepts"]).len()).find(|&k| recall_ask(l, k) == q)
+}
+pub(crate) fn shown_code(l: &Value, q: &str) -> bool {
+    let ex = &l["practice"]["exercise"];
+    truth(ex) && string(&ex["prompt"]) == q
+}
+// What the page gets when the question it showed is gone: nothing was marked and the review date did not move.
+pub(crate) fn question_changed() -> Value {
+    json!({"changed":true,"message":"This question changed after your review opened, so your answer was not marked. Your review is loading again."})
 }
 pub(crate) fn said(v: &Value) -> Vec<String> {
     list(v)
@@ -116,10 +151,22 @@ impl App {
         Ok(json!({"notes":string(&answer["content"])}))
     }
     pub(crate) fn fetch_transcripts(self: &Arc<Self>, videos: Vec<Value>) {
+        let ids = self.queue_transcripts(videos);
+        if ids.is_empty() {
+            return;
+        }
         let app = self.clone();
         std::thread::spawn(move || {
-            for v in videos { let _ = app.transcript(&string(&v["id"])); }
+            for id in ids {
+                let _ = app.transcript(&id);
+                app.transcribing.lock().unwrap_or_else(|e| e.into_inner()).remove(&id);
+            }
         });
+    }
+    // The ids not already waiting for a fetch, now marked as waiting.
+    pub(crate) fn queue_transcripts(&self, videos: Vec<Value>) -> Vec<String> {
+        let mut queued = self.transcribing.lock().unwrap_or_else(|e| e.into_inner());
+        videos.iter().map(|v| string(&v["id"])).filter(|id| queued.insert(id.clone())).collect()
     }
     pub(crate) fn ask(
         &self,
@@ -171,8 +218,8 @@ impl App {
             "{}/chat/completions",
             string(&c["base"]).trim_end_matches('/')
         );
-        let agent = agent(&url, 300)
-            .map_err(|e| Error::bad(format!("Can't reach the AI service: {e}")))?;
+        let unreachable = || Error::bad("Can't reach the AI service. Check your internet connection and the service address in Settings, then try again.");
+        let agent = agent(&url, 300).map_err(|_| unreachable())?;
         let mut req = agent
             .post(&url)
             .set("Content-Type", "application/json")
@@ -192,12 +239,14 @@ impl App {
                 }
                 let mut bytes = vec![];
                 let _ = r.into_reader().take(400).read_to_end(&mut bytes);
-                return Err(Error::bad(format!(
-                    "AI service error {code}: {}",
-                    String::from_utf8_lossy(&bytes)
-                )));
+                return Err(Error::bad(match code {
+                    401 | 403 => "The AI service did not accept the API key. Check the key in Settings.".into(),
+                    429 => "The AI service is limiting how often this app can ask. Wait a minute and try again.".into(),
+                    500.. => format!("The AI service had a problem on its side (error {code}). Try again in a minute."),
+                    _ => format!("The AI service turned down the request (error {code}): {}", cap(String::from_utf8_lossy(&bytes).trim(), 200)),
+                }));
             }
-            Err(e) => return Err(Error::bad(format!("Can't reach the AI service: {e}"))),
+            Err(_) => return Err(unreachable()),
         };
         let unreadable = || Error::bad("The AI service sent an answer this app can't read.");
         if !r
@@ -321,9 +370,9 @@ impl App {
         let input = fs::File::open(file("prompt.txt", &prompt)?)?;
         // Only a tutor reply has a sink, and only that can be stopped by the learner.
         let stop = on_text.is_some().then_some(&self.stop_chat);
-        let (_, out, err, timeout) = process_until(cmd.arg("-"), 900, input.into(), stop).map_err(|e| {
+        let (_, out, err, timeout) = process_until(cmd.arg("-"), 900, input.into(), stop, None).map_err(|e| {
             if e.kind() == std::io::ErrorKind::NotFound {
-                Error::bad("Codex is not installed. Install it and run `codex login` in a terminal, or choose another AI service in Settings.")
+                Error::bad("Codex is not installed, and the app uses it for every AI answer. Install the Codex command, run `codex login` in a terminal to sign in with ChatGPT, then try again.")
             } else {
                 e.into()
             }
@@ -346,16 +395,17 @@ impl App {
             }
         }
         let Some(answer) = answer else {
-            let why = if problem.is_empty() { tail(err.trim(), 400) } else { cap(&problem, 400) };
-            return Err(Error::bad(format!("Codex gave no answer. If you are signed out, run `codex login` in a terminal. {why}")));
+            return Err(Error::bad(codex_problem(&problem, &err)));
         };
         let mut reply = answer;
         if !tools.is_empty() {
-            let d: Value = serde_json::from_str(&reply).unwrap_or_default();
-            if truth(&d["tool"]) {
-                return Ok(json!({"content":"","tool_calls":[{"id":"call_1","type":"function","function":{"name":d["tool"],"arguments":d["arguments"]}}]}));
+            // A reply that ignored the JSON shape is still the tutor's answer, so it is shown as it came.
+            if let Some(d) = serde_json::from_str::<Value>(&reply).ok().filter(Value::is_object) {
+                if truth(&d["tool"]) {
+                    return Ok(json!({"content":"","tool_calls":[{"id":"call_1","type":"function","function":{"name":d["tool"],"arguments":d["arguments"]}}]}));
+                }
+                reply = string(&d["reply"]);
             }
-            reply = string(&d["reply"]);
         }
         if let Some(out) = on_text.as_mut() {
             if !reply.is_empty() {
@@ -363,6 +413,41 @@ impl App {
             }
         }
         Ok(json!({"content":reply}))
+    }
+    /// "ready", "signed_out" or "missing", from `codex login status`, which only reads the saved sign-in and never changes it.
+    /// An answer is reused for 30 seconds; an older one is still returned at once while a fresh one is asked for in the background,
+    /// so only the very first call waits (about 10 ms, at most 3 seconds).
+    pub(crate) fn codex_status(self: &Arc<Self>) -> &'static str {
+        let mut seen = self.codex_seen.lock().unwrap_or_else(|e| e.into_inner());
+        match *seen {
+            Some((at, s)) if at.elapsed() < Duration::from_secs(30) => s,
+            Some((_, s)) => {
+                // Marked fresh under the same lock that found it stale, so a burst of page loads starts one check, not one each.
+                *seen = Some((std::time::Instant::now(), s));
+                drop(seen);
+                let app = self.clone();
+                std::thread::spawn(move || {
+                    let now = app.ask_codex_status();
+                    *app.codex_seen.lock().unwrap_or_else(|e| e.into_inner()) = Some((std::time::Instant::now(), now));
+                });
+                s
+            }
+            None => {
+                drop(seen);
+                let now = self.ask_codex_status();
+                *self.codex_seen.lock().unwrap_or_else(|e| e.into_inner()) = Some((std::time::Instant::now(), now));
+                now
+            }
+        }
+    }
+    fn ask_codex_status(&self) -> &'static str {
+        match process(codex_command(&self.codex_program).args(["login", "status"]), 3) {
+            Ok((0, _, _, false)) => "ready",
+            Err(e) if e.kind() == std::io::ErrorKind::NotFound => "missing",
+            // A slow or failing check is not proof of a sign-out; the next AI call says exactly what is wrong.
+            Ok((_, _, _, true)) | Err(_) => "ready",
+            Ok(_) => "signed_out",
+        }
     }
     fn llm(&self, msgs: Vec<Value>, name: &str, schema: Value) -> Result<String> {
         let small = ["practice", "videos", "mark", "placement"].contains(&name);
@@ -640,6 +725,16 @@ impl App {
             rows.push("This lesson is about reading the learner's existing project. Ask the quiz about what this code does and why. The exercise is null.".into());
             rows.extend(self.lesson_files(c, l));
         }
+        let asked = list(&l["practice"]["quiz"]);
+        if !asked.is_empty() {
+            rows.push(format!("The learner already has these questions for this lesson. Write new ones that test other points, or the same point in a new situation, and are not rewordings of these:\n{}", asked[asked.len().saturating_sub(40)..].iter().map(|q| format!("- {}", text(&q["q"]))).collect::<Vec<_>>().join("\n")));
+        }
+        if truth(&l["practice"]["exercise"]) {
+            rows.push("The lesson already has its coding exercise. The exercise is null.".into());
+        }
+        if truth(&l["practice"]["recall"]) {
+            rows.push("The lesson already has its recall questions. recall is [].".into());
+        }
         let pr = clean_practice(&parse(
             &self.llm(
                 messages(PRACTICE_PROMPT, rows.join("\n")),
@@ -647,13 +742,24 @@ impl App {
                 practice_schema(),
             )?,
             "a quiz",
-        )?);
+        )?, 10);
         if list(&pr["quiz"]).is_empty() {
             return Err(Error::bad("The AI returned a quiz with no usable questions. Try again, or use a stronger model."));
         }
         Ok(pr)
     }
     fn yt(&self, args: &[String]) -> Result<Value> {
+        // Prefetch runs four lessons at once and each checks eight videos: unlimited, that is 32 yt-dlp processes and a sluggish computer.
+        let (count, freed) = &self.yt_running;
+        *freed.wait_while(count.lock().unwrap_or_else(|e| e.into_inner()), |n| *n >= 6).unwrap_or_else(|e| e.into_inner()) += 1;
+        struct Done<'a>(&'a (Mutex<usize>, std::sync::Condvar));
+        impl Drop for Done<'_> {
+            fn drop(&mut self) {
+                *self.0 .0.lock().unwrap_or_else(|e| e.into_inner()) -= 1;
+                self.0 .1.notify_one();
+            }
+        }
+        let _done = Done(&self.yt_running);
         let (status, out, err, timeout) = process(
             Command::new(&self.yt_program)
                 .args(["-J", "--no-warnings"])
@@ -673,10 +779,12 @@ impl App {
             ));
         }
         if status != 0 {
-            return Err(Error::bad(format!(
-                "YouTube search failed: {}",
-                tail(err.trim(), 300)
-            )));
+            eprintln!("yt-dlp failed: {}", tail(err.trim(), 300));
+            return Err(Error::bad(if err.contains("Sign in to confirm") || err.contains("HTTP Error 429") {
+                "YouTube is refusing searches from this computer for now. Try again later."
+            } else {
+                "YouTube search did not work. Check your internet connection and try again; if it keeps failing, update yt-dlp."
+            }));
         }
         Ok(serde_json::from_str::<Value>(&out)
             .ok()
@@ -692,14 +800,16 @@ impl App {
         if !matches(r"^[\p{L}\p{N}_-]{11}$", id) {
             return Err(Error::missing());
         }
+        let f = self.data.join("transcripts").join(format!("{id}.json"));
+        let cached = || fs::read(&f).ok().and_then(|b| serde_json::from_slice::<Vec<(i64, String)>>(&b).ok());
+        // A saved transcript is read without waiting, so the tutor never queues behind a background fetch of other videos.
+        if let Some(v) = cached() {
+            return Ok(v);
+        }
         // shortcut: serialize caption fetches process-wide; use a bounded worker pool if throughput matters.
         static FETCH: std::sync::Mutex<()> = std::sync::Mutex::new(());
         let _fetch = FETCH.lock().unwrap_or_else(|e| e.into_inner());
-        let f = self.data.join("transcripts").join(format!("{id}.json"));
-        if let Some(v) = fs::read(&f)
-            .ok()
-            .and_then(|b| serde_json::from_slice::<Vec<(i64, String)>>(&b).ok())
-        {
+        if let Some(v) = cached() {
             return Ok(v);
         }
         let fetched;
@@ -711,18 +821,16 @@ impl App {
             }
         };
         let Some(url) = caption_url(d) else {
-            fs::create_dir_all(self.data.join("transcripts"))?;
-            fs::write(&f, b"[]")?;
+            write_atomic(&f, b"[]")?;
             return Ok(vec![]);
         };
         let r = agent(&url, 30)
             .and_then(|a| a.get(&url).call())
-            .map_err(|e| Error::bad(format!("The captions could not be fetched: {e}")))?;
+            .map_err(|_| Error::bad("The captions could not be fetched. Check your internet connection and try again."))?;
         let j: Value = serde_json::from_reader(r.into_reader().take(8 << 20))
             .map_err(|_| Error::bad("The captions could not be read."))?;
         let lines = transcript_lines(&j);
-        fs::create_dir_all(self.data.join("transcripts"))?;
-        fs::write(&f, serde_json::to_vec(&lines)?)?;
+        write_atomic(&f, &serde_json::to_vec(&lines)?)?;
         Ok(lines)
     }
     // What the learner changed since their last commit, limited to the files the app may read.
@@ -1284,7 +1392,7 @@ impl App {
     }
     pub(crate) fn tutor_tools(&self, c: &Value, l: &Value) -> Vec<Value> {
         let tool = |name: &str, description: &str, params: Value| json!({"type":"function","function":{"name":name,"description":description,"parameters":obj(params)}});
-        let mut out=vec![tool("get_lesson","Read the goal, concepts and tasks of another lesson of this course. Call it before telling the learner which lesson covers a topic, or when they ask about earlier or later material.",json!({"id":{"type":"string","description":"The lesson number as written in the lesson list, for example 2.3"}}))];
+        let mut out=vec![tool("search_course","Search this course for words: its lessons, the learner's notes and their earlier tutor chats. Call it when the learner asks where something was covered, or refers to something they wrote or asked before. Every word must appear in a hit, so pass one or two key words.",json!({"words":{"type":"string","description":"One or two key words, for example: pull-up resistor"}})),tool("get_lesson","Read the goal, concepts and tasks of another lesson of this course. Call it before telling the learner which lesson covers a topic, or when they ask about earlier or later material.",json!({"id":{"type":"string","description":"The lesson number as written in the lesson list, for example 2.3"}}))];
         if truth(&l["practice"]["exercise"]) {
             out.push(tool("run_exercise_tests","Run the code the learner has typed for this lesson's coding exercise against the exercise tests, in a sandbox, and return what the tests printed. Call it before saying whether their exercise code works or what is wrong with it. Takes no arguments.",json!({})));
         }
@@ -1314,6 +1422,10 @@ impl App {
             return Err(Error::missing());
         }
         match name{
+   "search_course"=>{
+       let found=self.search(&text(&a["words"]))?;
+       let hits=list(&found["results"]).iter().filter(|r|r["course"]==c["id"]).take(12).map(|r|format!("Lesson {} {} ({}): {}",text(&r["lesson"]),text(&r["title"]),text(&r["kind"]),text(&r["snippet"]))).collect::<Vec<_>>();
+       Ok(if hits.is_empty(){"Nothing in this course contains those words. Try fewer or other words.".into()}else{hits.join("\n")})},
    "get_lesson"=>{let x=lesson(c,&json!(text(&a["id"])))?;Ok(format!("Lesson {}: {}\nGoal: {}\nConcepts: {}\nTasks: {}",text(&x["id"]),text(&x["title"]),text(&x["goal"]),joined(&x["concepts"]),joined(&x["tasks"])))},
    "run_exercise_tests"=>{let ex=&l["practice"]["exercise"];let saved=string(&c["state"]["code"][string(&l["id"])]);let out=run_code(&string(&ex["lang"]),if saved.is_empty(){ex["starter"].as_str().unwrap_or("")}else{&saved},Some(ex["tests"].as_str().unwrap_or("")))?;Ok(if truth(&out["output"]){text(&out["output"])}else{"(no output)".into()})},
    "list_project_files"=>Ok(self.read_project(&root_of(c))?.1.into_iter().take(400).collect::<Vec<_>>().join("\n")),
@@ -1342,7 +1454,8 @@ impl App {
         msgs: Vec<Value>,
         on_text: &mut Sink<'_>,
         // Told in plain words what the tutor is doing, so a long wait is not a blank one.
-        on_status: &mut dyn FnMut(&str),
+        // `true` marks a finished step, which the chat keeps under the reply.
+        on_status: &mut dyn FnMut(&str, bool),
     ) -> Result<String> {
         let tools = self.tutor_tools(c, l);
         let mut system = self.tutor_system(c,l)?;
@@ -1364,7 +1477,8 @@ impl App {
             }
         }
         let mut all = vec![json!({"role":"system","content":system})];
-        all.extend(msgs);
+        // Saved steps ride along on the messages; the model gets role and content only.
+        all.extend(msgs.iter().map(|m| json!({"role":m["role"],"content":m["content"]})));
         for _ in 0..4 {
             let m = self.ask(&all, on_text, json!({"tools":tools}))?;
             let calls = list(&m["tool_calls"]);
@@ -1374,29 +1488,35 @@ impl App {
             all.push(json!({"role":"assistant","content":m["content"],"tool_calls":calls}));
             for k in calls {
                 let f = &k["function"];
-                on_status(match f["name"].as_str().unwrap_or("") {
-                    "get_lesson" => "Reading another lesson",
-                    "run_exercise_tests" => "Running your exercise tests",
-                    "list_project_files" => "Looking through your project",
-                    "read_project_file" => "Reading a file of your project",
-                    "get_project_changes" => "Checking what you changed",
-                    "read_video_transcript" => "Reading the video transcript",
-                    _ => "Thinking",
-                });
-                let out = serde_json::from_str::<Value>(&if truth(&f["arguments"]) {
+                let a = serde_json::from_str::<Value>(&if truth(&f["arguments"]) {
                     text(&f["arguments"])
                 } else {
                     "{}".into()
                 })
-                .ok()
-                .and_then(|a| self.tool_result(c, l, &string(&f["name"]), &a).ok())
-                .unwrap_or_else(|| "That tool or argument does not exist.".into());
+                .ok();
+                let arg = |key: &str| cap(&text(&a.as_ref().map_or(Value::Null, |a| a[key].clone())), 80);
+                let (doing, did) = match f["name"].as_str().unwrap_or("") {
+                    "search_course" => ("Searching the course", format!("Searched the course for “{}”", arg("words"))),
+                    "get_lesson" => ("Reading another lesson", format!("Read lesson {}", arg("id"))),
+                    "run_exercise_tests" => ("Running your exercise tests", "Ran your exercise tests".into()),
+                    "list_project_files" => ("Looking through your project", "Listed your project files".into()),
+                    "read_project_file" => ("Reading a file of your project", format!("Read {}", arg("path"))),
+                    "get_project_changes" => ("Checking what you changed", "Checked your changes since the last commit".into()),
+                    "read_video_transcript" => ("Reading the video transcript", format!("Read the transcript of video {} from minute {}", a.as_ref().and_then(|a| a["video"].as_u64()).unwrap_or(1).max(1), a.as_ref().and_then(|a| a["from_minute"].as_i64()).unwrap_or(0).max(0))),
+                    _ => ("Thinking", String::new()),
+                };
+                on_status(doing, false);
+                let out = a.and_then(|a| self.tool_result(c, l, &string(&f["name"]), &a).ok());
+                if out.is_some() {
+                    on_status(&did, true);
+                }
+                let out = out.unwrap_or_else(|| "That tool or argument does not exist.".into());
                 all.push(json!({"role":"tool","tool_call_id":k["id"],"content":cap(&out,12000)}));
             }
             if on_text.is_some() && self.stop_chat.load(Ordering::Relaxed) {
                 return Err(Error::stopped());
             }
-            on_status("Writing the answer");
+            on_status("Writing the answer", false);
         }
         let answer = "The tutor did not finish its answer. Ask again.";
         if let Some(out) = on_text.as_mut() {
@@ -1411,15 +1531,31 @@ impl App {
         let ms = ms[ms.len().saturating_sub(30)..]
             .iter()
             .filter(|m| m.is_object() && (m["role"] == "user" || m["role"] == "assistant"))
-            .map(|m| Ok(json!({"role":m["role"],"content":cap(&text(m.get("content").ok_or_else(Error::missing)?),20000)})))
+            .map(|m| {
+                let mut out = json!({"role":m["role"],"content":cap(&string(&m["content"]),20000)});
+                let steps = strs(&m["steps"], 8).iter().map(|s| cap(s, 120)).collect::<Vec<_>>();
+                if m["role"] == "assistant" && !steps.is_empty() {
+                    out["steps"] = json!(steps);
+                }
+                Ok(out)
+            })
             .collect::<Result<Vec<_>>>()?;
         Ok((c, l, ms))
     }
     pub(crate) fn review_answer(&self, b: &Value) -> Result<Value> {
+        if b["i"] != "code" && b["i"] != "explain" {
+            return Err(Error::missing());
+        }
         let c = self.load(&text(&b["course"]))?;
-        let l = lesson(&c, &b["lesson"])?;
+        let shown = string(&b["q"]);
+        let Ok(l) = lesson(&c, &b["lesson"]) else {
+            return Ok(question_changed());
+        };
         let answer = b.get("answer").map(text).unwrap_or_default();
         if b["i"] == "code" {
+            if !shown_code(l, &shown) {
+                return Ok(question_changed());
+            }
             let ex = &l["practice"]["exercise"];
             language(&string(&ex["lang"]))?;
             let out = run_code(
@@ -1432,30 +1568,24 @@ impl App {
             } else {
                 Ok(merge(
                     json!({"right":out["ok"],"output":out["output"]}),
-                    self.reviewed(
-                        &string(&c["id"]),
-                        &string(&l["id"]),
-                        "code",
-                        truth(&out["ok"]),
-                    )?,
+                    self.reviewed(&string(&c["id"]), &string(&l["id"]), truth(&out["ok"]), |l| {
+                        shown_code(l, &shown).then(|| "code".into())
+                    })?,
                 ))
             };
         }
-        if b["i"] != "explain" || list(&l["concepts"]).is_empty() {
-            return Err(Error::missing());
-        }
-        let step = c["state"]["review"][format!("{}#explain", text(&l["id"]))]["step"]
-            .as_i64()
-            .unwrap_or(-1);
         let cs = list(&l["concepts"]);
-        let concept = &cs[(step + 1).rem_euclid(cs.len() as i64) as usize];
+        let Some(k) = shown_concept(l, &shown) else {
+            return Ok(question_changed());
+        };
         let answer = cap(&answer, 4000);
         let user = format!(
-            "Course: {}\nLesson: {}\nGoal: {}\nConcept to explain: {}\nThe learner's answer:\n{}",
+            "Course: {}\nLesson: {}\nGoal: {}\nConcept to explain: {}\nWhat the learner was shown: {}\nThe learner's answer:\n{}",
             text(&c["title"]),
             text(&l["title"]),
             text(&l["goal"]),
-            text(concept),
+            text(&cs[k]),
+            recall_ask(l, k),
             if answer.is_empty() {
                 "(empty)"
             } else {
@@ -1466,14 +1596,15 @@ impl App {
             &self.llm(
                 messages(GRADE_PROMPT, user),
                 "mark",
-                obj(json!({"right":{"type":"boolean"},"feedback":s()})),
+                obj(json!({"right":{"type":"boolean"},"feedback":s(),"points":arr(obj(json!({"text":s(),"hit":{"type":"boolean"}})))})),
             )?,
             "a mark",
         )?;
         let right = d["right"] == true;
+        let points = list(&d["points"]).iter().filter(|p| truth(&p["text"])).take(5).map(|p| json!({"text":cap(&text(&p["text"]),200),"hit":p["hit"]==true})).collect::<Vec<_>>();
         Ok(merge(
-            json!({"right":right,"feedback":cap(&string(&d["feedback"]),1500)}),
-            self.reviewed(&string(&c["id"]), &string(&l["id"]), "explain", right)?,
+            json!({"right":right,"feedback":cap(&string(&d["feedback"]),1500),"points":points}),
+            self.reviewed(&string(&c["id"]), &string(&l["id"]), right, |l| shown_concept(l, &shown).map(|_| "explain".into()))?,
         ))
     }
     // With no `ask` the AI adjusts the course to the learner's results; with one it changes the course as asked.
@@ -1598,6 +1729,8 @@ fn apply_changes(c: &mut Value, d: &Value, revise: bool) -> Result<Value> {
     let mut added = vec![];
     let mut dropped = vec![];
     let mut changed = vec![];
+    // Ids whose old progress must go: new lessons (an id can be one a removed lesson had) and removed ones.
+    let mut fresh = vec![];
     for r in list(&d["replace"]).iter().filter(|r| r["lesson"].is_object()).take(1) {
         let lid = string(&r["id"]);
         if let Ok(l) = lesson_mut(c, &lid) {
@@ -1606,12 +1739,7 @@ fn apply_changes(c: &mut Value, d: &Value, revise: bool) -> Result<Value> {
                 changed.push(json!({"from":l["title"],"title":n["title"],"goal":n["goal"]}));
                 *l = n;
                 // Answers and review dates belonged to the old lesson.
-                let prefix = format!("{lid}#");
-                for k in ["review", "mistakes"] {
-                    if let Some(o) = c["state"][k].as_object_mut() {
-                        o.retain(|k, _| !k.starts_with(&prefix));
-                    }
-                }
+                forget(c, &lid);
             }
         }
     }
@@ -1630,6 +1758,7 @@ fn apply_changes(c: &mut Value, d: &Value, revise: bool) -> Result<Value> {
                     .find(|s| !ids.contains(s))
                     .ok_or_else(|| Error::bad("Too many lessons."))?;
                 ids.insert(lid.clone());
+                fresh.push(lid.clone());
                 let mut l = clean_lesson(&a["lesson"], &lid, &[]);
                 l["added"] = json!(true);
                 if truth(&a["lesson"]["title"]) {
@@ -1663,6 +1792,7 @@ fn apply_changes(c: &mut Value, d: &Value, revise: bool) -> Result<Value> {
             continue;
         };
         ids.extend(ls.iter().map(|l| string(&l["id"])));
+        fresh.extend(ls.iter().map(|l| string(&l["id"])));
         let at = ps
             .iter()
             .position(|q| list(&q["lessons"]).iter().any(|l| l["id"] == text(&p["after"])))
@@ -1687,6 +1817,7 @@ fn apply_changes(c: &mut Value, d: &Value, revise: bool) -> Result<Value> {
             // The learner may ask to undo an earlier change, so a request can drop added lessons too.
             if gone.contains(&string(&l["id"])) && untouched(&st, l) && (revise || !truth(&l["added"])) && left > 1 {
                 dropped.push(l["title"].clone());
+                fresh.push(string(&l["id"]));
                 left -= 1;
                 false
             } else {
@@ -1696,6 +1827,9 @@ fn apply_changes(c: &mut Value, d: &Value, revise: bool) -> Result<Value> {
     }
     if let Some(ps) = c["phases"].as_array_mut() {
         ps.retain(|p| !list(&p["lessons"]).is_empty());
+    }
+    for lid in fresh {
+        forget(c, &lid);
     }
     Ok(json!({"added":added,"dropped":dropped,"changed":changed}))
 }
@@ -1925,12 +2059,42 @@ fn level(c: &Value) -> String {
         "not stated".into()
     }
 }
+// Any of the learner's own work counts as starting a lesson: ticks, notes, a quiz score or exercise code, which a change must not throw away.
 fn untouched(st: &Value, l: &Value) -> bool {
-    !truth(&st["done"][string(&l["id"])])
-        && !(0..list(&l["done"]).len())
-            .any(|i| truth(&st["checks"][format!("{}#{i}", text(&l["id"]))]))
+    let lid = string(&l["id"]);
+    !truth(&st["done"][&lid])
+        && !(0..list(&l["done"]).len()).any(|i| truth(&st["checks"][format!("{lid}#{i}")]))
+        && string(&st["notes"][&lid]).trim().is_empty()
+        && st["quiz"].get(&lid).is_none()
+        && string(&st["code"][&lid]).trim().is_empty()
+        && st["tests"].get(&lid).is_none()
+}
+// Removes every progress entry of a lesson id ("2.3" and "2.3#..."), so a lesson that later takes the same id starts clean.
+fn forget(c: &mut Value, lid: &str) {
+    let prefix = format!("{lid}#");
+    for (_, v) in c["state"].as_object_mut().into_iter().flatten() {
+        if let Some(o) = v.as_object_mut() {
+            o.retain(|k, _| k != lid && !k.starts_with(&prefix));
+        }
+    }
 }
 
+// What the learner is told when Codex ends without an answer: the usual causes in plain words, else Codex's own message.
+pub(crate) fn codex_problem(problem: &str, err: &str) -> String {
+    let said = if problem.is_empty() { tail(err.trim(), 300) } else { cap(problem.trim(), 300) };
+    let low = said.to_lowercase();
+    let has = |words: &[&str]| words.iter().any(|w| low.contains(w));
+    if has(&["usage limit", "rate limit", "429", "too many requests", "quota"]) {
+        format!("You have used up your ChatGPT allowance for now, so Codex cannot answer. Wait until it resets and try again. Codex said: {said}")
+    } else if has(&["401", "unauthorized", "not logged in", "log in", "login", "sign in", "expired", "refresh token"]) {
+        "Codex is signed out. Open a terminal, run `codex login`, sign in with ChatGPT, then try again.".into()
+    } else if has(&["error sending request", "stream disconnected", "connection", "network", "dns", "timed out"]) {
+        "Codex could not reach ChatGPT. Check your internet connection and try again.".into()
+    } else {
+        let tail = if said.is_empty() { String::new() } else { format!(" Codex said: {said}") };
+        format!("Codex stopped without an answer. Try again; if it keeps happening, run `codex login status` in a terminal to see whether you are still signed in.{tail}")
+    }
+}
 // Run npm's native executable directly so prompts and arguments never enter a shell.
 fn codex_command(program: impl AsRef<std::ffi::OsStr>) -> Command {
     let program = program.as_ref();

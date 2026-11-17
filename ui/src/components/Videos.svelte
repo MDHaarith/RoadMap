@@ -6,6 +6,8 @@
   import type { Course, Lesson, Video } from '../lib/types';
   import Icon from './Icon.svelte';
   import Waiting from './Waiting.svelte';
+  import BusyLabel from './BusyLabel.svelte';
+  import LoadError from './LoadError.svelte';
   let { c, l, seek }: { c: Course; l: Lesson; seek?: { k: number; at: number } } = $props();
   let loading = $state(true), error = $state(''), selected = $state(0), playing = $state(false), start = $state(0);
   let searching = $state(false), query = $state(''), searchError = $state(''), refreshing = $state(false);
@@ -61,7 +63,7 @@
 <svelte:window onmessage={playerMessage} />
 <div id="videos">
   {#if loading}<Waiting skeleton="videos" title="Finding videos for this lesson" hint="this usually takes a few seconds" />
-  {:else if error}<p class="err">{error}</p><button class="btn secondary" id="retry-videos" onclick={loadVideos}>Try again</button><p class="small"><a href={`https://www.youtube.com/results?search_query=${enc(l.query || l.title)}`}>Search YouTube for this lesson</a></p>
+  {:else if error}<LoadError id="retry-videos" what="Videos for this lesson could not load." {error} retry={loadVideos} /><p class="small"><a href={`https://www.youtube.com/results?search_query=${enc(l.query || l.title)}`}>Search YouTube for this lesson</a></p>
   {:else}
     <div class="video-layout"><div class="video-main">
     {#if v}<div class="player-space"><div class="player" id="player">{#if playing && playError}<div class="player-placeholder player-error" role="alert"><p>{playError}</p><a href={`https://www.youtube.com/watch?v=${enc(v.id)}`}>Open it on YouTube</a></div>{:else if playing}<iframe bind:this={frame} src={`${PLAYER}/player.html?v=${enc(v.id)}&start=${start | 0}`} title={v.title} allowfullscreen allow="autoplay; encrypted-media; picture-in-picture; fullscreen"></iframe>{:else}<img class="player-thumbnail" src={`https://i.ytimg.com/vi/${enc(v.id)}/hqdefault.jpg`} alt="" /><div class="player-placeholder"><button class="btn" id="play-video" aria-label={`Play ${v.title}`} onclick={() => playVideo(selected, v.start || 0)}><Icon name="Watch" /> Play video{v.start ? ` from ${clock(v.start)}` : ''}</button></div>{/if}</div></div>
@@ -69,13 +71,13 @@
       {#if v.chapters?.length}<div class="chapters" role="group" aria-label="Jump to a part of this video">{#each v.chapters as m}<button type="button" onclick={() => playVideo(selected, m.t)}><span>{clock(m.t)}</span> {m.title}</button>{/each}</div>{/if}
     {:else}<p>{l.novideos ? 'No YouTube video fits this lesson well. Try your own search below.' : 'No videos found. Try a topic search.'}</p>{/if}
     </div><div class="video-choices">
-    {#if v}
+    {#if refreshing || searching}<Waiting inline skeleton="rows" title="Finding videos" />
+    {:else if v}
       <div class="vlist">{#each l.videos || [] as x, j}<button class="vid" aria-pressed={j === selected} onclick={() => showVideo(j)}><span class="video-number" aria-hidden="true">{j === selected ? '▶' : String(j + 1).padStart(2, '0')}</span><span><b>{x.title}</b>{#if x.searched}<span class="tag">Your search</span>{/if}<small>{x.channel}{x.duration ? ' · ' + Math.floor(x.duration / 60) + ' min' : ''}</small>{#if x.why}<small class="why">{x.why}</small>{/if}{#if x.covers?.length}<small class="covers">Covers: {x.covers.join(" · ")}</small>{/if}</span>{#if j === selected}<span class="playing-label">{playing && !playError ? 'Playing' : 'Selected'}</span>{/if}</button>{/each}</div>
       {#if uncovered.length}<p class="small uncovered">No video here teaches {uncovered.join(", ")}. Use this lesson’s search links for {uncovered.length > 1 ? "them" : "it"}.</p>{/if}
     {/if}
-    <div class="video-tools"><h3>Want a different video?</h3><button class="btn secondary sm" type="button" id="fresh-videos" disabled={refreshing} onclick={freshVideos}>{refreshing ? 'Finding videos…' : 'Find more for this lesson'}</button><a href={`https://www.youtube.com/results?search_query=${enc(l.query || l.title)}`}>Browse this lesson on YouTube</a></div>
-    <form id="video-search" onsubmit={e => { e.preventDefault(); void searchVideos(); }}><label for="video-query">Search any topic</label><input id="video-query" placeholder="Enter a topic" maxlength="200" required bind:value={query} /><button class="btn secondary" disabled={searching}>{searching ? 'Searching…' : 'Find videos'}</button><div id="video-error" class="err" hidden={!searchError}>{searchError}</div></form>
-    {#if refreshing || searching}<Waiting inline skeleton="rows" title="Finding videos" />{/if}
+    <div class="video-tools"><h3>Want a different video?</h3><button class="btn secondary sm" type="button" id="fresh-videos" disabled={refreshing} onclick={freshVideos}><BusyLabel busy={refreshing} idle="Find more for this lesson" label="Finding videos…" /></button><a href={`https://www.youtube.com/results?search_query=${enc(l.query || l.title)}`}>Browse this lesson on YouTube</a></div>
+    <form id="video-search" onsubmit={e => { e.preventDefault(); void searchVideos(); }}><label for="video-query">Search any topic</label><input id="video-query" placeholder="Enter a topic" maxlength="200" required bind:value={query} /><button class="btn secondary" disabled={searching}><BusyLabel busy={searching} idle="Find videos" label="Searching…" /></button><div id="video-error" class="err" hidden={!searchError}>{searchError}</div></form>
     </div></div>
   {/if}
 </div>

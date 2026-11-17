@@ -24,6 +24,11 @@ regex = "1"
 tempfile = "3"
 ureq = { version = "2.12", features = ["native-certs"] }
 tiny_http = "0.12"
+chrono = { version = "0.4", default-features = false, features = ["clock"] }
+
+# statvfs for the exercise sandbox's disk watch; already in the build through other crates.
+[target.'cfg(target_os = "linux")'.dependencies]
+libc = "0.2"
 
 [profile.release]
 strip = true

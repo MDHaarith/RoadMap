@@ -1,12 +1,6 @@
 use crate::exercise::clean_practice;
 use crate::*;
-use std::{
-    collections::HashSet,
-    io::Write,
-    path::Path,
-};
-#[cfg(unix)]
-use std::os::unix::fs::{OpenOptionsExt, PermissionsExt};
+use std::{collections::HashSet, path::Path};
 
 impl App {
     pub(crate) fn config(&self) -> Value {
@@ -25,16 +19,7 @@ impl App {
         c
     }
     pub(crate) fn write_config(&self, c: &Value) -> Result<()> {
-        fs::create_dir_all(self.conf.parent().unwrap())?;
-        let mut options = fs::OpenOptions::new();
-        options.write(true).create(true).truncate(true);
-        #[cfg(unix)]
-        options.mode(0o600);
-        let mut f = options.open(&self.conf)?;
-        #[cfg(unix)]
-        f.set_permissions(fs::Permissions::from_mode(0o600))?;
-        f.write_all(&serde_json::to_vec(c)?)?;
-        Ok(())
+        write_atomic(&self.conf, &serde_json::to_vec(c)?)
     }
     pub(crate) fn theme(&self) -> String {
         let t = string(&self.config()["theme"]);
@@ -67,17 +52,29 @@ impl App {
         Ok(self.data.join(format!("{cid}.json")))
     }
     pub(crate) fn load(&self, cid: &str) -> Result<Value> {
-        Ok(serde_json::from_slice(&fs::read(self.path_of(cid)?)?)?)
+        let mut c = serde_json::from_slice::<Value>(&fs::read(self.path_of(cid)?)?)
+            .ok()
+            .filter(Value::is_object)
+            .ok_or_else(|| Error::bad("This roadmap's file is damaged and can't be opened."))?;
+        // Every route writes into the state object, which a hand-edited or very old file may lack.
+        if !c["state"].is_object() {
+            c["state"] = json!({});
+        }
+        Ok(c)
     }
     pub(crate) fn save(&self, c: &Value) -> Result<()> {
-        fs::create_dir_all(&self.data)?;
-        let path = self.path_of(&string(&c["id"]))?;
-        let tmp = path.with_extension("tmp");
-        fs::write(&tmp, serde_json::to_vec(c)?)?;
-        fs::rename(tmp, path)?;
-        Ok(())
+        write_atomic(&self.path_of(&string(&c["id"]))?, &serde_json::to_vec(c)?)
     }
     pub(crate) fn courses(&self) -> Result<Vec<Value>> {
+        // One unreadable file must not hide the whole library.
+        Ok(self.course_files()?.into_iter().filter_map(|p| serde_json::from_slice::<Value>(&fs::read(p).ok()?).ok()).filter(Value::is_object).collect())
+    }
+    // How many roadmap files cannot be read. Each is parsed and dropped in turn, so only one is in memory at a time.
+    pub(crate) fn damaged(&self) -> Result<usize> {
+        Ok(self.course_files()?.into_iter().filter(|p| !fs::read(p).ok().and_then(|b| serde_json::from_slice::<Value>(&b).ok()).is_some_and(|v| v.is_object())).count())
+    }
+    // The roadmap files, newest first.
+    fn course_files(&self) -> Result<Vec<std::path::PathBuf>> {
         let mut files = match fs::read_dir(&self.data) {
             Ok(d) => d
                 .filter_map(|e| e.ok())
@@ -96,12 +93,7 @@ impl App {
         files.sort_by_cached_key(|p| {
             std::cmp::Reverse(p.metadata().and_then(|m| m.modified()).ok())
         });
-        // One unreadable file must not hide the whole library.
-        Ok(files
-            .into_iter()
-            .filter_map(|p| serde_json::from_slice::<Value>(&fs::read(p).ok()?).ok())
-            .filter(Value::is_object)
-            .collect())
+        Ok(files)
     }
     pub(crate) fn known(&self, skip: &str) -> Result<Vec<(String, String, bool)>> {
         let mut out = vec![];
@@ -149,8 +141,7 @@ impl App {
     pub(crate) fn mark_known(&self, mut c: Value) -> Result<Value> {
         fn words(s: &str) -> HashSet<String> {
             let small="a an the of to in on for and or is are how why what with that this it its as by from not when which you your".split_whitespace().collect::<HashSet<_>>();
-            regex::Regex::new(r"[\p{L}\p{N}_]+")
-                .unwrap()
+            regex(r"[\p{L}\p{N}_]+")
                 .find_iter(&s.to_lowercase())
                 .map(|m| m.as_str().to_string())
                 .filter(|s| !small.contains(s.as_str()))
@@ -188,19 +179,14 @@ impl App {
             .unwrap_or(json!({}))
     }
     pub(crate) fn write_side(&self, name: &str, v: &Value) -> Result<()> {
-        fs::create_dir_all(&self.data)?;
-        let path = self.data.join(name);
-        let tmp = path.with_extension("tmp");
-        fs::write(&tmp, serde_json::to_vec(v)?)?;
-        fs::rename(tmp, path)?;
-        Ok(())
+        write_atomic(&self.data.join(name), &serde_json::to_vec(v)?)
     }
     pub(crate) fn chat_file(&self, cid: &str) -> Result<String> {
         self.path_of(cid)?;
         Ok(format!("{cid}.chat.json"))
     }
     // The client sends the whole conversation each time, so the saved copy is replaced.
-    pub(crate) fn save_chat(&self, cid: &str, lid: &str, msgs: &[Value], answer: &str) {
+    pub(crate) fn save_chat(&self, cid: &str, lid: &str, msgs: &[Value], answer: &str, steps: &[String]) {
         let Ok(name) = self.chat_file(cid) else {
             return;
         };
@@ -211,6 +197,9 @@ impl App {
         let mut all = self.read_side(&name);
         let mut ms = msgs.to_vec();
         ms.push(json!({"role":"assistant","content":answer}));
+        if !steps.is_empty() {
+            ms.last_mut().unwrap()["steps"] = json!(steps);
+        }
         let start = ms.len().saturating_sub(40);
         all[cap(lid, 20)] = json!(&ms[start..]);
         let _ = self.write_side(&name, &all);
@@ -230,7 +219,7 @@ impl App {
         } else {
             self.home.clone()
         };
-        let re = regex::Regex::new(r"[^\p{L}\p{N}_-]+").unwrap();
+        let re = regex(r"[^\p{L}\p{N}_-]+");
         let s = re.replace_all(title, "-");
         let name = cap(s.trim_matches('-'), 60);
         let name = if name.is_empty() { "roadmap" } else { &name };
@@ -358,7 +347,11 @@ impl App {
                 let mut x = clean_lesson(l, &lid, &[]);
                 x["videos"]=json!(list(&l["videos"]).iter().filter(|v|v.is_object()&&matches(r"^[\p{L}\p{N}_-]{11}$",&text(&v["id"]))).take(4).map(|v|json!({"id":v["id"],"title":cap(&string(&v["title"]),200),"channel":cap(&string(&v["channel"]),100),"duration":v["duration"].as_i64().or_else(||v["duration"].as_bool().map(i64::from)).unwrap_or(0),"why":cap(&string(&v["why"]),300),"start":v["start"].as_i64().unwrap_or(0).max(0),"covers":strs(&v["covers"],8).iter().map(|k|cap(k,120)).collect::<Vec<_>>(),"chapters":list(&v["chapters"]).iter().filter(|m|m.is_object()&&(m["t"].is_i64()||m["t"].is_boolean())).take(40).map(|m|json!({"t":m["t"],"title":cap(&string(&m["title"]),120)})).collect::<Vec<_>>()})).collect::<Vec<_>>());
                 if l["practice"].is_object() {
-                    x["practice"] = clean_practice(&l["practice"]);
+                    x["practice"] = clean_practice(&l["practice"], 200);
+                    // Keeps the start of the newest question set when the whole bank came through.
+                    if let Some(from) = l["practice"]["from"].as_u64().filter(|f| (*f as usize) < list(&x["practice"]["quiz"]).len()) {
+                        x["practice"]["from"] = json!(from);
+                    }
                 }
                 for k in ["stub", "added"] {
                     if l[k] == true {
@@ -380,7 +373,7 @@ impl App {
         }
         let old = &d["state"];
         let mut state = json!({});
-        for k in ["checks", "done", "notes", "code", "quiz", "review", "tests"] {
+        for k in ["checks", "done", "notes", "code", "quiz", "review", "tests", "mistakes"] {
             let mut keep = json!({});
             if let Some(o) = old[k].as_object() {
                 for (a, b) in o {
@@ -390,6 +383,11 @@ impl App {
                     let ok = match k {
                         "checks" | "done" => *b == true,
                         "notes" | "code" => b.is_string(),
+                        // The mistakes notebook travels with the progress it came from.
+                        "mistakes" => b.as_object().is_some_and(|o| {
+                            o.keys().all(|k| ["n", "picked", "day", "fixed"].contains(&k.as_str()))
+                                && b["n"].is_u64() && b["day"].is_i64() && b["fixed"].is_boolean() && (b["picked"].is_null() || b["picked"].is_i64())
+                        }),
                         _ => {
                             let pair = match k {
                                 "quiz" => ["score", "total"],
@@ -413,7 +411,9 @@ impl App {
                     }
                 }
             }
-            state[k] = keep;
+            if k != "mistakes" || truth(&keep) {
+                state[k] = keep;
+            }
         }
         // Stage exam results are keyed by stage, not by lesson.
         let mut exams = json!({});
