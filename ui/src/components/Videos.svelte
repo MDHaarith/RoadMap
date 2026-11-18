@@ -28,14 +28,49 @@
     101: 'YouTube does not allow this video to play inside other apps; its owner may have turned that off.',
     150: 'YouTube does not allow this video to play inside other apps; its owner may have turned that off.'
   };
+  let running = (false);
   function playerMessage(e: MessageEvent) {
-    const code = e.data?.roadmapPlayer;
-    if (e.origin === PLAYER && e.source === frame?.contentWindow && typeof code === 'number') playError = reasons[code] || 'YouTube could not play this video here.';
+    if (e.origin !== PLAYER || e.source !== frame?.contentWindow) return;
+    const code = e.data?.roadmapPlayer, on = e.data?.roadmapPlaying;
+    if (typeof code === 'number') playError = reasons[code] || 'YouTube could not play this video here.';
+    if (typeof on === 'boolean') { running = on; if (navigator.mediaSession) navigator.mediaSession.playbackState = on ? 'playing' : 'paused'; }
   }
+  // Media keys and the desktop's media controls (MPRIS on Linux) reach the player through these.
+  function command(cmd: 'play' | 'pause' | 'back' | 'forward') {
+    if (playing && !playError && frame?.contentWindow) frame.contentWindow.postMessage({ roadmapCommand: cmd }, PLAYER);
+    else if (cmd === 'play' && v) playVideo(selected, v.start || 0);
+  }
+  let lastTrack = 0;
+  function track(step: number) {
+    const k = selected + step;
+    // The desktop may deliver one key press both as a key event and as a media-session action.
+    if (Date.now() - lastTrack < 400 || !l.videos?.[k]) return;
+    lastTrack = Date.now(); playVideo(k, l.videos[k].start || 0);
+  }
+  function mediaKey(e: KeyboardEvent) {
+    if (!v) return;
+    const act: Record<string, () => void> = {
+      MediaPlayPause: () => command(playing && running ? 'pause' : 'play'), MediaPlay: () => command('play'), MediaPause: () => command('pause'),
+      MediaRewind: () => command('back'), MediaFastForward: () => command('forward'),
+      MediaTrackPrevious: () => track(-1), MediaTrackNext: () => track(1)
+    };
+    if (act[e.key]) { e.preventDefault(); act[e.key](); }
+  }
+  $effect(() => {
+    const ms = navigator.mediaSession;
+    if (!ms || !v || !playing) return;
+    if (typeof MediaMetadata !== 'undefined') ms.metadata = new MediaMetadata({ title: v.name || v.title, artist: v.channel, album: l.title, artwork: [{ src: 'https://i.ytimg.com/vi/' + enc(v.id) + '/hqdefault.jpg', sizes: '480x360', type: 'image/jpeg' }] });
+    const acts: [MediaSessionAction, MediaSessionActionHandler][] = [
+      ['play', () => command('play')], ['pause', () => command('pause')], ['seekbackward', () => command('back')], ['seekforward', () => command('forward')],
+      ['previoustrack', () => track(-1)], ['nexttrack', () => track(1)]
+    ];
+    for (const [a, f] of acts) try { ms.setActionHandler(a, f); } catch { /* action not supported here */ }
+    return () => { for (const [a] of acts) try { ms.setActionHandler(a, null); } catch { /* not supported */ } ms.metadata = null; ms.playbackState = 'none'; };
+  });
   let applied: typeof seek;
   $effect(() => {
     if (!loading && seek && seek !== applied && l.videos?.[seek.k]) {
-      applied = seek; selected = seek.k; start = seek.at; playing = true;
+      applied = seek; jump(seek.k, seek.at);
       document.getElementById('player')?.scrollIntoView({ block: 'center' });
     }
   });
@@ -59,6 +94,17 @@
     return { destroy() { ro.disconnect(); mo.disconnect(); strip = undefined; canLeft = canRight = false; } };
   }
   function showVideo(k: number) { selected = k; playing = false; start = 0; if (PLAYER) playError = ''; }
+  // The player draws captions itself; they are fetched once per video and handed over when its frame loads.
+  const captionCache: Record<string, Promise<unknown[]>> = {};
+  async function sendCaptions(id: string) {
+    const cues = await (captionCache[id] ||= api<unknown[]>('GET', 'api/captions/' + enc(id)).catch(() => { delete captionCache[id]; return []; }));
+    if (alive && v?.id === id) frame?.contentWindow?.postMessage({ roadmapCaptions: cues }, PLAYER);
+  }
+  // Same video already playing: move it in place (player.js listens), so the timestamp works without a reload.
+  function jump(k: number, at: number) {
+    if (playing && !playError && k === selected && frame?.contentWindow) frame.contentWindow.postMessage({ roadmapSeek: at }, PLAYER);
+    else playVideo(k, at);
+  }
   function playVideo(k: number, at = 0) { if (PLAYER && k !== selected) playError = ''; selected = k; start = at; playing = true; }
   async function freshVideos() {
     refreshing = true;
@@ -74,16 +120,16 @@
     } catch (err) { searchError = message(err); } finally { searching = false; }
   }
 </script>
-<svelte:window onmessage={playerMessage} />
+<svelte:window onmessage={playerMessage} onkeydown={mediaKey} />
 <div id="videos">
   {#if loading}<Waiting skeleton="videos" title="Finding videos for this lesson" hint="this usually takes a few seconds" />
   {:else if error}<LoadError id="retry-videos" what="Videos for this lesson could not load." {error} retry={loadVideos} /><p class="small"><a href={`https://www.youtube.com/results?search_query=${enc(l.query || l.title)}`}>Search YouTube for this lesson</a></p>
   {:else}
     <div class="video-layout"><div class="video-main">
-    {#if v}<div class="player-space"><div class="player" id="player">{#if playing && playError}<div class="player-placeholder player-error" role="alert"><p>{playError}</p><a href={`https://www.youtube.com/watch?v=${enc(v.id)}`}>Open it on YouTube</a></div>{:else if playing}<iframe bind:this={frame} src={`${PLAYER}/player.html?v=${enc(v.id)}&start=${start | 0}`} title={v.title} allowfullscreen allow="autoplay; encrypted-media; picture-in-picture; fullscreen"></iframe>{:else}<img class="player-thumbnail" src={`https://i.ytimg.com/vi/${enc(v.id)}/hqdefault.jpg`} alt="" /><div class="player-placeholder"><button class="btn" id="play-video" aria-label={`Play ${v.title}`} onclick={() => playVideo(selected, v.start || 0)}><Icon name="Watch" /> Play video{v.start ? ` from ${clock(v.start)}` : ''}</button></div>{/if}</div></div>
+    {#if v}<div class="player-space"><div class="player" id="player">{#if playing && playError}<div class="player-placeholder player-error" role="alert"><p>{playError}</p><a href={`https://www.youtube.com/watch?v=${enc(v.id)}`}>Open it on YouTube</a></div>{:else if playing}<iframe bind:this={frame} onload={() => void sendCaptions(v.id)} src={`${PLAYER}/player.html?v=${enc(v.id)}&start=${start | 0}`} title={v.title} allowfullscreen allow="autoplay; encrypted-media; picture-in-picture; fullscreen"></iframe>{:else}<img class="player-thumbnail" src={`https://i.ytimg.com/vi/${enc(v.id)}/hqdefault.jpg`} alt="" /><div class="player-placeholder"><button class="btn" id="play-video" aria-label={`Play ${v.title}`} onclick={() => playVideo(selected, v.start || 0)}><Icon name="Watch" /> Play video{v.start ? ` from ${clock(v.start)}` : ''}</button></div>{/if}</div></div>
       <p class="video-title"><b>{v.name || v.title}</b><span class="small">{#if v.name}On YouTube: {v.title} · {/if}{v.channel}{v.duration ? ' · ' + Math.floor(v.duration / 60) + ' min' : ''} · <a href={`https://www.youtube.com/watch?v=${enc(v.id)}`} title="Use this if the video won’t play here">Open on YouTube</a></span></p>
       <!-- One row that scrolls sideways: any number of parts costs the player the same single line. -->
-      {#if v.chapters?.length}<div class="chapter-strip" class:fade-left={canLeft} class:fade-right={canRight}>{#if canLeft || canRight}<button type="button" class="strip-arrow" aria-label="Earlier parts" disabled={!canLeft} onclick={() => strip?.scrollBy({ left: -strip.clientWidth * 0.8, behavior: 'smooth' })}><Icon name="back" /></button>{/if}<div class="chapters" role="group" aria-label="Jump to a part of this video" use:watchStrip onscroll={measure}>{#each v.chapters as m}<button type="button" onclick={() => playVideo(selected, m.t)}><span>{clock(m.t)}</span>{m.title}</button>{/each}</div>{#if canLeft || canRight}<button type="button" class="strip-arrow" aria-label="Later parts" disabled={!canRight} onclick={() => strip?.scrollBy({ left: strip.clientWidth * 0.8, behavior: 'smooth' })}><Icon name="arrow" /></button>{/if}</div>{/if}
+      {#if v.chapters?.length}<div class="chapter-strip" class:fade-left={canLeft} class:fade-right={canRight}>{#if canLeft || canRight}<button type="button" class="strip-arrow" aria-label="Earlier parts" disabled={!canLeft} onclick={() => strip?.scrollBy({ left: -strip.clientWidth * 0.8, behavior: 'smooth' })}><Icon name="back" /></button>{/if}<div class="chapters" role="group" aria-label="Jump to a part of this video" use:watchStrip onscroll={measure}>{#each v.chapters as m}<button type="button" onclick={() => jump(selected, m.t)}><span>{clock(m.t)}</span>{m.title}</button>{/each}</div>{#if canLeft || canRight}<button type="button" class="strip-arrow" aria-label="Later parts" disabled={!canRight} onclick={() => strip?.scrollBy({ left: strip.clientWidth * 0.8, behavior: 'smooth' })}><Icon name="arrow" /></button>{/if}</div>{/if}
     {:else}<p>{l.novideos ? 'No YouTube video fits this lesson well. Try your own search below.' : 'No videos found. Try a topic search.'}</p>{/if}
     </div><div class="video-choices">
     {#if refreshing || searching}<Waiting inline skeleton="rows" title="Finding videos" />

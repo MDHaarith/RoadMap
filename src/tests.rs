@@ -246,7 +246,10 @@ impl Drop for FakeAI {
     fn drop(&mut self) {
         self.server.unblock();
         if let Some(w) = self.worker.take() {
-            w.join().unwrap();
+            // A second panic during unwind aborts the test binary and hides the real failure.
+            if w.join().is_err() && !std::thread::panicking() {
+                panic!("FakeAI worker panicked");
+            }
         }
     }
 }
@@ -1470,6 +1473,10 @@ fn ideas_mistakes_search_setup_and_exports() {
     assert_eq!(
         crate::ai::transcript_lines(&json!({"events":[{"tStartMs":0,"segs":[{"utf8":"hello"}]},{"tStartMs":5000,"segs":[{"utf8":"\n"}]},{"tStartMs":9000,"segs":[{"utf8":" there"}]},{"tStartMs":25000,"segs":[{"utf8":"next"}]}]})),
         [(0, "hello there".to_string()), (25, "next".to_string())]
+    );
+    assert_eq!(
+        crate::ai::caption_cues(&json!({"events":[{"tStartMs":0,"dDurationMs":1500,"segs":[{"utf8":"hello"},{"utf8":" there"}]},{"tStartMs":1500,"segs":[{"utf8":"\n"}]},{"tStartMs":2000,"segs":[{"utf8":"next"}]}]})),
+        json!([[0, 1500, "hello there"], [2000, 4000, "next"]])
     );
     r("DELETE", &at(""), json!({})).unwrap();
     assert!(!app.data.join(format!("{cid}.chat.json")).exists());
