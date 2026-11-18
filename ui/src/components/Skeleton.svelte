@@ -8,7 +8,9 @@
     {#if kind === 'home'}
       <div class="home-workspace"><div class="today-column"><h1>Today</h1><div class="hero">{@render lines(4)}<i class="sk control"></i></div></div><div class="library-column"><h2>Your library</h2>{@render list(3)}</div></div>
     {:else if kind === 'overview'}
-      <div class="overview"><div class="overview-side">{@render lines(4)}{@render list(3)}</div><div class="overview-main">{#each Array(3) as _}<i class="sk stage-line"></i><div class="skeleton-lessons">{#each Array(4) as _}<div class="skeleton-lesson-row"><i class="sk stop"></i><i class="sk text-line"></i></div>{/each}</div>{/each}</div></div>
+      <div class="overview"><div class="overview-side">{@render lines(4)}{@render list(3)}</div><div class="overview-main">{@render stages()}</div></div>
+    {:else if kind === 'lessons'}
+      <div class="skeleton-needs">{#each Array(3) as _}<div class="skeleton-need-row"><i class="sk box"></i><i class="sk text-line"></i><i class="sk tag"></i></div>{/each}</div>{@render stages()}
     {:else if kind === 'lesson'}
       <div class="skeleton-lesson-layout"><div>{@render lines(3)}<div class="sk rail"></div><Skeleton kind="videos" /></div><div class="skeleton-sidebar">{@render lines(3)}</div></div>
     {:else if kind === 'videos'}
@@ -35,4 +37,5 @@
   </div>
 </div>
 {#snippet lines(n: number)}<div class="skeleton-lines">{#each Array(n) as _, i}<i class="sk text-line" style:width={i === n - 1 ? '62%' : i % 2 ? '88%' : '100%'}></i>{/each}</div>{/snippet}
+{#snippet stages()}{#each Array(3) as _}<i class="sk stage-line"></i><div class="skeleton-lessons">{#each Array(4) as _}<div class="skeleton-lesson-row"><i class="sk stop"></i><i class="sk text-line"></i></div>{/each}</div>{/each}{/snippet}
 {#snippet list(n: number)}{#each Array(n) as _}<div class="skeleton-row"><i class="sk short"></i>{@render lines(2)}</div>{/each}{/snippet}

@@ -1,6 +1,8 @@
 import { api, apiError, chatStream } from './api';
 import { enc, href } from './format';
 import { loadModels } from './models.svelte';
+import { watchThinking } from './thinking';
+import { openUrl } from '@tauri-apps/plugin-opener';
 import { lessons, checked, passed } from './progress';
 import type { Course, Lesson, LibraryCourse, Settings, ReviewData, Message, Session, RunState } from './types';
 
@@ -12,8 +14,12 @@ export const appState = $state({
   review: { count: 0, questions: [] } as ReviewData,
   toast: '', ideasOpen: false, ideas: null as string[] | null,
   busyKey: '', adapting: false,
+  // True while the ChatGPT sign-in page is open in the browser; see signInChatGpt.
+  signingIn: false,
   // What the tutor is doing while a reply is on its way, for example "Reading the video transcript". Empty when idle.
   tutorStatus: '',
+  // The tutor's thinking effort this session; empty means the Settings default.
+  tutorEffort: '',
   // A reply that failed, per lesson: the question it answered and why it failed. Shown in the log with Try again.
   tutorErrors: {} as Record<string, { text: string; error: string }>,
   // Why progress could not be saved; empty once every roadmap's progress is saved.
@@ -83,14 +89,34 @@ export async function flushSave() {
   await saving;
   return !unsaved.size;
 }
-/** Why AI calls would fail before one is made: no service set up, or Codex signed out or not installed. Empty when fine or not known yet. */
-export function aiProblem(cfg: Settings = appState.config): '' | 'none' | 'signed_out' | 'missing' {
+/** Why AI calls would fail before one is made: no service set up, or not signed in to ChatGPT. Empty when fine or not known yet. */
+// ChatGPT reasoning effort: value, label, hint. More effort is slower but plans more carefully.
+export const EFFORTS = [['low', 'Low effort', 'Fastest answers'], ['medium', 'Medium effort', 'Balanced'], ['high', 'High effort', 'Slowest, most careful']];
+export const defaultEffort = () => appState.config.effort || 'medium';
+export function aiProblem(cfg: Settings = appState.config): '' | 'none' | 'signed_out' {
   if (cfg.base === undefined) return '';
   if (!cfg.base || !cfg.model) return 'none';
-  return cfg.codex === 'signed_out' || cfg.codex === 'missing' ? cfg.codex : '';
+  return cfg.base === 'codex' && cfg.codex === 'signed_out' ? 'signed_out' : '';
 }
 export async function refreshConfig() {
   return appState.config = await api<Settings>('GET', 'api/settings');
+}
+/** Opens ChatGPT's sign-in page in the browser and waits until the app is signed in, the sign-in fails, or 10 minutes pass. */
+export async function signInChatGpt() {
+  const { url } = await api<{ url: string }>('POST', 'api/chatgpt/login');
+  await openUrl(url);
+  // Pressed again while waiting (the tab was closed): the page opens again and the first call keeps waiting.
+  if (appState.signingIn) return;
+  appState.signingIn = true;
+  try {
+    for (;;) {
+      await new Promise(r => setTimeout(r, 1500));
+      const s = await api<{ waiting: boolean; error: string }>('GET', 'api/chatgpt/status');
+      if (!s.waiting) { if (s.error) throw new Error(s.error); break; }
+    }
+    await refreshConfig();
+    void loadModels(true);
+  } finally { appState.signingIn = false; }
 }
 /** For actions that replace the roadmap with the server's copy: they must not run over progress that is not saved. */
 export async function saveFirst() {
@@ -103,7 +129,7 @@ export async function loadLibrary() {
   ]);
   if (version !== appState.routeVersion) return;
   appState.library = list; appState.config = cfg; appState.review = review; appState.screen = 'library';
-  // Codex model names come from a local file, so load them early: the tutor then shows "GPT-5.6 Terra", not the raw id.
+  // ChatGPT model names come from the server, so load them early: the tutor then shows "GPT-5.6 Terra", not the raw id.
   if (cfg.base === 'codex') void loadModels();
 }
 export async function route() {
@@ -199,7 +225,9 @@ export async function ask(text: string) {
   // A failed question with no reply is not sent again as history: two questions in a row would confuse the model.
   if (appState.tutorErrors[key]) { if (msgs[msgs.length - 1]?.role === 'user') msgs.pop(); delete appState.tutorErrors[key]; }
   msgs.push({ role: 'user', content: text });
-  const body = { course: c.id, lesson: l.id, messages: $state.snapshot(msgs), stream: true, ...(appState.openVideo ? { video: appState.openVideo } : {}) };
+  // The model's latest thinking summary shows as the status line until the next tool step replaces it.
+  const thinking = watchThinking(t => { if (appState.busyKey === key && !stopped) appState.tutorStatus = t; });
+  const body = { course: c.id, lesson: l.id, messages: $state.snapshot(msgs), stream: true, thinking: thinking.key, effort: appState.tutorEffort || defaultEffort(), ...(appState.openVideo ? { video: appState.openVideo } : {}) };
   appState.busyKey = key; appState.tutorStatus = 'Thinking'; stopped = false;
   msgs.push({ role: 'assistant', content: '' });
   const m = msgs[msgs.length - 1];
@@ -214,7 +242,7 @@ export async function ask(text: string) {
     if (m.content) m.content += '\n\n(The answer was cut off.)'; else msgs.pop();
     appState.tutorErrors[key] = { text, error: message(error) };
     return true;
-  } finally { appState.busyKey = ''; appState.tutorStatus = ''; }
+  } finally { thinking.stop(); appState.busyKey = ''; appState.tutorStatus = ''; }
 }
 /** Sends the question whose reply failed again, in place of the failed turn. */
 export function retryAsk() {

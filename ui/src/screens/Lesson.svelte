@@ -31,7 +31,7 @@
     ...(l.lookups?.length ? [{ id: 'lookup', title: 'Look it up yourself', short: 'Look up', what: 'Compare sources and save useful details in your notes.', next: 'Look up more' }] : []),
     ...(l.files?.length ? [{ id: 'read', title: 'Read the code', short: 'Read code', what: 'Trace how the code works before you change it.', next: 'Read the code' }] : []),
     { id: 'do', title: 'Do it yourself', short: 'Do it', what: 'Try the steps yourself to put the ideas into use.', next: 'Try it yourself' },
-    { id: 'practice', title: 'Practise', short: 'Practise', what: 'Answer questions to check your understanding.', next: 'Practise' },
+    { id: 'practice', title: 'Practice', short: 'Practice', what: 'Answer questions or solve the exercise to check your understanding.', next: 'Practice' },
     { id: 'done', title: 'Done when', short: 'Finish', what: 'Check what you can do before completing the lesson.', next: 'Finish the lesson' },
   ]);
   let si = $derived(steps.findIndex(s => s.id === step));
@@ -91,7 +91,7 @@
       {:else if step === 'graphs'}{#each l.charts || [] as chart}<Chart {chart} />{/each}
       {:else if step === 'lookup'}{#each l.lookups || [] as x, j}<div class="lookup"><a href={`https://duckduckgo.com/?q=${enc(x)}`}><Icon name="Look it up yourself" /> {x}</a><button class="btn secondary sm" aria-label={`Copy search phrase ${j + 1}`} onclick={e => copy(x, e.currentTarget)}><Icon name="copy" /> Copy</button></div>{/each}
       {:else if step === 'read'}<ProjectFiles {c} {l} />
-      {:else if step === 'do'}{#if l.warn}<div class="note warn"><strong><Icon name="Safety" /> Before you begin</strong><p><Formatted text={l.warn} /></p></div>{/if}<ol class="content-list">{#each l.tasks || [] as x}<li><Formatted text={x} /></li>{/each}</ol>
+      {:else if step === 'do'}{#if l.warn}<div class="note warn"><strong><Icon name="Safety" /> Before you begin</strong><p><Formatted text={l.warn} /></p></div>{/if}<ol class="content-list">{#each l.tasks || [] as x}<li><div class="concept-copy"><Formatted text={x} /></div></li>{/each}</ol>
       {:else if step === 'practice'}<Practice {c} {l} />
       {:else if step === 'done'}<div class="checks finish-checks">{#each l.done || [] as x, j}<label><input class="sr" type="checkbox" checked={!!c.state.checks[l.id + '#' + j]} onchange={e => { if (e.currentTarget.checked) c.state.checks[l.id + '#' + j] = true; else delete c.state.checks[l.id + '#' + j]; achievement = ''; save(c); }} /><span class="finish-check" class:complete-mark={!!c.state.checks[l.id + '#' + j]} aria-hidden="true">{#if c.state.checks[l.id + '#' + j]}<Icon name="check" />{/if}</span><span><Formatted text={x} /></span></label>{/each}</div><div class="finish"><div id="fstate" role="status" class={achievement ? 'celebrate' : 'small'}>{#if achievement}<span class="completion-route" aria-hidden="true"><span class="completion-stop complete-mark"><Icon name="check" /></span><i class="completion-traveller"></i><span class="completion-next"></span></span><strong>{achievement}</strong><p>{nextL ? 'Next lesson: ' + nextL.title : 'You have reached the end of this roadmap.'}</p>{:else}{c.state.done[l.id] ? 'Lesson complete.' : checked(c, l).every(Boolean) ? 'All checks are ticked. You can complete the lesson.' : ok ? 'You passed the quiz. You can complete the lesson.' : 'Tick every check, or score at least 80% on the quiz, to complete the lesson.'}{/if}</div></div>{/if}
     </div>

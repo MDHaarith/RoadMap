@@ -2,12 +2,13 @@
   import Skeleton from './Skeleton.svelte';
   import { api } from '../lib/api';
   import ModelPicker from './ModelPicker.svelte';
+  import EffortPicker from './EffortPicker.svelte';
+  import StreamText from './StreamText.svelte';
   import { tick, untrack } from 'svelte';
-  import { appState, ask, retryAsk, save, keyFor, stopAsk, clearChat } from '../lib/state.svelte';
+  import { appState, ask, retryAsk, save, keyFor, stopAsk, clearChat, defaultEffort } from '../lib/state.svelte';
   import { CHIPS } from '../lib/format';
   import type { Course, Lesson } from '../lib/types';
   import Icon from './Icon.svelte';
-  import Formatted from './Formatted.svelte';
   import Waiting from './Waiting.svelte';
   import Elapsed from './Elapsed.svelte';
   import AiSetup from './AiSetup.svelte';
@@ -63,17 +64,17 @@
   <!-- svelte-ignore a11y_click_events_have_key_events, a11y_no_noninteractive_element_interactions — Delegates clicks from the formatter’s keyboard-accessible seek buttons. -->
   <div class="chat-log">
   <div id="log" class="log" role="log" bind:this={log} aria-live="polite" aria-relevant="additions text" onscroll={scrolled} ontogglecapture={() => { if (atBottom) void tick().then(newest); }} onclick={e => { const target = (e.target as Element).closest<HTMLElement>('[data-seek]'); if (target) seek(Number(target.dataset.seek), Number(target.dataset.at)); }}>
-    {#each msgs as m, i}{#if m.content}<div class={`msg message-enter ${m.role === 'user' ? 'u' : 'a'}`}>{#if m.role === 'user'}{m.content}{:else}{#if m.steps?.length === 1}<p class="tutor-steps">{m.steps[0]}</p>{:else if m.steps?.length}<details class="tutor-steps"><summary>Checked {m.steps.length} things</summary><ul>{#each m.steps as step}<li>{step}</li>{/each}</ul></details>{/if}<Formatted text={m.content} tutor />{/if}</div>
+    {#each msgs as m, i}{#if m.content}<div class={`msg message-enter ${m.role === 'user' ? 'u' : 'a'}`}>{#if m.role === 'user'}{m.content}{:else}{#if m.steps?.length === 1}<p class="tutor-steps">{m.steps[0]}</p>{:else if m.steps?.length}<details class="tutor-steps"><summary>Checked {m.steps.length} things</summary><ul>{#each m.steps as step}<li>{step}</li>{/each}</ul></details>{/if}<StreamText text={m.content} live={busy && i === msgs.length - 1} />{/if}</div>
       {#if i === msgs.length - 1 && m.role === 'assistant' && !busy && !/\(The answer was cut off\.\)$/.test(m.content) && m.content !== '(No answer.)'}<div class="tutor-followups" role="group" aria-label="Follow up on this reply">{#each FOLLOWUPS as [name, ask]}<button type="button" disabled={!!appState.busyKey || clearing} onclick={() => send(ask)}>{name}</button>{/each}</div>{/if}{/if}{/each}
     {#if !msgs.length}<div class="tutor-empty"><p class="muted">Ask a question or share what you have tried. The tutor can help you find your next step.</p><div class="ruled tutor-starters">{#each CHIPS as chip}<button type="button" disabled={!!appState.busyKey || clearing} aria-label={chip} onclick={() => send(chip)}><strong>{names[chip]}</strong><span>{descriptions[chip]}</span></button>{/each}</div></div>{/if}
     {#if failed && !busy}<div class="err tutor-error message-enter" role="alert"><p><strong>The tutor could not answer.</strong> {failed.error}</p><button type="button" class="btn secondary sm" disabled={!!appState.busyKey || clearing} onclick={() => void retryAsk()}>Try again</button></div>{/if}
-    {#if busy}<div class="msg a thinking"><span role="status" aria-live="polite">{appState.tutorStatus || 'Preparing a reply'}</span><span aria-hidden="true"><Elapsed /></span><Skeleton rows={3} /></div>{/if}
+    {#if busy}<div class="msg a thinking"><span role="status" aria-live="polite">{#key appState.tutorStatus}<span class="fade-in">{appState.tutorStatus || 'Preparing a reply'}</span>{/key}</span><span aria-hidden="true"><Elapsed /></span>{#if !msgs[msgs.length - 1]?.content}<Skeleton rows={3} />{/if}</div>{/if}
   </div>
   {#if !atBottom && msgs.length}<button type="button" class="btn secondary sm newest" onclick={newest}>Latest reply <span aria-hidden="true">↓</span></button>{/if}
   </div>
   {#if msgs.length}<div class="chips tutor-actions">{#each CHIPS as chip}<button type="button" class="chip" title={chip} aria-label={chip} disabled={!!appState.busyKey || clearing} onclick={() => send(chip)}>{names[chip]}</button>{/each}</div>{/if}
   <div class="composer-wrap">
-  <form id="compose" onsubmit={e => { e.preventDefault(); void send(); }}><label class="sr" for="msg">Message the tutor</label><textarea id="msg" aria-describedby="compose-hint" use:autogrow={{ min: 43, max: 121, value: text }} rows="2" placeholder="Ask about this lesson…" bind:value={text} onkeydown={e => { if (e.key === 'Enter' && !e.shiftKey && !e.isComposing) { e.preventDefault(); void send(); } }}></textarea><div class="composer-actions"><ModelPicker />{#if busy}<button type="button" class="btn secondary sm send" aria-label="Stop reply" onclick={stopAsk}><Icon name="stop" /></button>{:else}<button class="btn sm send" aria-label="Send message" disabled={!!appState.busyKey || clearing || !text.trim()}><Icon name="arrow" /></button>{/if}</div></form>
+  <form id="compose" onsubmit={e => { e.preventDefault(); void send(); }}><label class="sr" for="msg">Message the tutor</label><textarea id="msg" aria-describedby="compose-hint" use:autogrow={{ min: 43, max: 121, value: text }} rows="2" placeholder="Ask about this lesson…" bind:value={text} onkeydown={e => { if (e.key === 'Enter' && !e.shiftKey && !e.isComposing) { e.preventDefault(); void send(); } }}></textarea><div class="composer-actions"><span class="pickers"><ModelPicker />{#if appState.config.base === 'codex'}<EffortPicker bind:value={() => appState.tutorEffort || defaultEffort(), v => appState.tutorEffort = v} />{/if}</span>{#if busy}<button type="button" class="btn secondary sm send" aria-label="Stop reply" onclick={stopAsk}><Icon name="stop" /></button>{:else}<button class="btn sm send" aria-label="Send message" disabled={!!appState.busyKey || clearing || !text.trim()}><Icon name="arrow" /></button>{/if}</div></form>
   <p class="sr" id="compose-hint">Enter to send, Shift+Enter for a new line</p>
   </div>
 </div><div class="side-pane notes-pane" id="pane-notes" role="tabpanel" aria-labelledby="tab-notes" hidden={tab !== 'notes'}><div class="row"><button class="btn secondary sm" disabled={rewriting || !c.state.notes[l.id]?.trim()} onclick={rewrite}>Rewrite my notes</button>{#if previous !== undefined}<button class="link" onclick={() => { c.state.notes[l.id] = previous!; previous = undefined; save(c); }}>Undo rewrite</button>{/if}</div>{#if rewriting}<Waiting skeleton="notes" title="Rewriting your notes" hint="usually 10–30 seconds" />{/if}{#if rewriteError}<p class="err">{rewriteError}</p>{/if}<label class="sr" for="notes">My notes</label><textarea id="notes" readonly={rewriting} rows="3" placeholder="Write what you learned or want to remember." value={c.state.notes[l.id] || ''} oninput={e => { c.state.notes[l.id] = e.currentTarget.value; save(c); }}></textarea><p class="small">Your notes are saved with this lesson.</p></div></aside>

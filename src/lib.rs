@@ -1,6 +1,7 @@
 pub mod mcp;
 mod ai;
 mod api;
+mod chatgpt;
 pub use api::request_body;
 mod exercise;
 mod project;
@@ -9,7 +10,7 @@ mod storage;
 
 use serde_json::{json, Value};
 use std::{
-    collections::HashSet,
+    collections::{HashMap, HashSet},
     fs,
     path::PathBuf,
     sync::{
@@ -90,11 +91,12 @@ pub struct App {
     pub(crate) stop_chat: AtomicBool,
     // How many yt-dlp processes are running; see `yt`.
     pub(crate) yt_running: (Mutex<usize>, std::sync::Condvar),
-    // The last `codex login status` answer and when it was asked; see `codex_status`.
-    pub(crate) codex_seen: Mutex<Option<(std::time::Instant, &'static str)>>,
+    // This app's own ChatGPT sign-in; see `chatgpt.rs`.
+    pub(crate) chatgpt: chatgpt::ChatGpt,
+    // The latest thinking summary of each request that is still running, by the key the page sent; see `thinking`.
+    pub(crate) thoughts: Mutex<HashMap<String, String>>,
     pub(crate) pick: Box<dyn Fn(&str) -> String + Send + Sync>,
     pub(crate) yt_program: PathBuf,
-    pub(crate) codex_program: PathBuf,
 }
 impl App {
     pub fn new(pick: impl Fn(&str) -> String + Send + Sync + 'static) -> Result<Arc<Self>> {
@@ -114,8 +116,6 @@ impl App {
             dirs::config_dir().ok_or_else(|| Error::bad("Config directory is unavailable."))?,
         );
         Ok(Arc::new(Self {
-            // An app started from the desktop menu may not have ~/.local/bin on PATH, where Codex installs itself.
-            codex_program: if cfg!(windows) || on_path("codex") { "codex".into() } else { home.join(".local/bin/codex") },
             data: data.join("roadmap-app"),
             conf: config.join("roadmap-app").join("config.json"),
             home,
@@ -128,7 +128,8 @@ impl App {
             day_offset: AtomicI64::new(0),
             stop_chat: AtomicBool::new(false),
             yt_running: Default::default(),
-            codex_seen: Mutex::new(None),
+            chatgpt: Default::default(),
+            thoughts: Mutex::new(HashMap::new()),
             pick: Box::new(pick),
             yt_program: if cfg!(windows) { "yt-dlp.exe" } else { "yt-dlp" }.into(),
         }))

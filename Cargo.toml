@@ -16,7 +16,8 @@ serde = { version = "1", features = ["derive"] }
 dirs = "6"
 getrandom = "0.3"
 tauri = { version = "2", features = [] }
-tauri-plugin-dialog = "2"
+# The desktop's own file chooser (KDE's on Plasma) through the portal, not GTK's.
+tauri-plugin-dialog = { version = "2", default-features = false, features = ["xdg-portal"] }
 tauri-plugin-opener = "2"
 tauri-plugin-updater = "2"
 serde_json = { version = "1.0", features = ["preserve_order"] }
@@ -24,6 +25,8 @@ regex = "1"
 tempfile = "3"
 ureq = { version = "2.12", features = ["native-certs"] }
 tiny_http = "0.12"
+sha2 = "0.10"
+base64 = "0.22"
 chrono = { version = "0.4", default-features = false, features = ["clock"] }
 
 # statvfs for the exercise sandbox's disk watch; already in the build through other crates.
