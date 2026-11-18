@@ -147,11 +147,54 @@ impl App {
             };
             let d = fetch().map_err(|_| Error::bad("Could not load models. Check the AI service address and API key in Settings."))?;
             for m in list(&d["data"]) {
-                if let Some(id) = m["id"].as_str() { models.push(json!({"id":id,"name":id})); }
+                if let Some(id) = m["id"].as_str() {
+                    models.push(json!({"id":id,"name":m["name"].as_str().filter(|n| !n.trim().is_empty()).unwrap_or(id)}));
+                }
             }
             models.sort_by_key(|m| string(&m["name"]));
         }
         Ok(models)
+    }
+    /// A provider's models without the ones the learner removed in Settings; `removed` lists those, so they can come back.
+    fn shown(c: &Value, base: &str, models: Vec<Value>) -> Value {
+        let hidden = list(&c["hidden"][base.trim_end_matches('/')]);
+        let (removed, models): (Vec<Value>, Vec<Value>) = models.into_iter().partition(|m| hidden.contains(&m["id"]));
+        json!({"models":models,"removed":removed})
+    }
+    /// Lists the models of a service before it is saved, so Settings can offer them as choices.
+    pub(crate) fn fetch_models(&self, b: &Value) -> Result<Value> {
+        let base = string(&b["base"]).trim().trim_end_matches('/').to_string();
+        if base != "codex" && !matches(r"^https?://", &base) {
+            return Err(Error::bad("Base URL must start with http:// or https://, or be the word codex."));
+        }
+        let c = self.config();
+        // A key typed in the form wins; otherwise the one saved for this service.
+        let key = Some(string(&b["key"]).trim().to_string()).filter(|k| !k.is_empty())
+            .unwrap_or_else(|| if c["base"] == base.as_str() { string(&c["key"]) } else { string(&c["providers"][&base]["key"]) });
+        Ok(Self::shown(&c, &base, Self::provider_models(&base, &key)?))
+    }
+    /// Removes a model from every model menu, or brings it back.
+    pub(crate) fn hide_model(&self, b: &Value) -> Result<Value> {
+        let base = string(&b["base"]).trim().trim_end_matches('/').to_string();
+        let model = string(&b["model"]).trim().to_string();
+        if base.is_empty() || model.is_empty() {
+            return Err(Error::bad("Choose a model first."));
+        }
+        let _guard = self.guard();
+        let mut c = self.config();
+        if truth(&b["hidden"]) && string(&c["base"]).trim_end_matches('/') == base && c["model"] == model.as_str() {
+            return Err(Error::bad("This is the model the app uses now. Set another one as default first."));
+        }
+        let mut ids: Vec<Value> = list(&c["hidden"][&base]).iter().filter(|x| **x != model.as_str()).cloned().collect();
+        if truth(&b["hidden"]) {
+            ids.push(json!(model));
+        }
+        if !c["hidden"].is_object() {
+            c["hidden"] = json!({});
+        }
+        c["hidden"][&base] = json!(ids);
+        self.write_config(&c)?;
+        Ok(json!({}))
     }
     /// `models` is the current provider's list (Settings uses it); `groups` holds every provider set up so far.
     pub(crate) fn models(&self) -> Result<Value> {
@@ -168,8 +211,8 @@ impl App {
             jobs.into_iter().map(|j| j.join().unwrap_or_else(|_| Err(Error::bad("Could not load models.")))).collect()
         });
         let groups: Vec<Value> = bases.iter().zip(lists).map(|(b, r)| match r {
-            Ok(models) => json!({"base":b,"name":provider_name(b),"models":models}),
-            Err(e) => json!({"base":b,"name":provider_name(b),"models":[],"error":e.message}),
+            Ok(models) => merge(json!({"base":b,"name":provider_name(b)}), Self::shown(&c, b, models)),
+            Err(e) => json!({"base":b,"name":provider_name(b),"models":[],"removed":[],"error":e.message}),
         }).collect();
         // One service failing still lists the others; its error is shown in its own section.
         let mine = groups.iter().find(|g| g["base"] == base.as_str()).cloned().unwrap_or_default();
@@ -782,6 +825,75 @@ impl App {
         }
         Ok(pr)
     }
+    /// A fresh stage exam on every attempt. The questions join their lessons' question banks (marked `exam`), so the
+    /// mistakes notebook and the daily review keep working with bank indexes; the lesson quiz leaves them out.
+    pub(crate) fn build_exam(&self, cid: &str, stage: u64) -> Result<Value> {
+        let c = self.load(cid)?;
+        let ls: Vec<&Value> = list(&c["phases"]).iter().filter(|p| p["stage"].as_u64() == Some(stage))
+            .flat_map(|p| list(&p["lessons"])).filter(|l| !truth(&l["stub"])).collect();
+        if ls.is_empty() || !c["stages"][stage as usize].is_object() {
+            return Err(Error::missing());
+        }
+        let mut rows = vec![
+            format!("Course: {}", text(&c["title"])),
+            format!("The learner's goal: {}", text(&c["prompt"])),
+            format!("Level: {}", level(&c)),
+            format!("Stage {}: {}", stage + 1, text(&c["stages"][stage as usize]["title"])),
+        ];
+        let mut seen = vec![];
+        for l in &ls {
+            rows.push(format!("\nLesson {}: {}\nGoal: {}\nConcepts: {}", text(&l["id"]), text(&l["title"]), text(&l["goal"]), joined(&l["concepts"])));
+            // Only captions already on disk: the exam should not wait on YouTube.
+            if let Some(v) = list(&l["videos"]).first() {
+                let saved = fs::read(self.data.join("transcripts").join(format!("{}.json", string(&v["id"])))).ok()
+                    .and_then(|b| serde_json::from_slice::<Vec<(i64, String)>>(&b).ok()).filter(|x| !x.is_empty());
+                if let Some(lines) = saved {
+                    rows.push(format!("What its video \"{}\" says: {}", text(&v["title"]), cap(&transcript_sample(&lines), 1800)));
+                }
+            }
+            seen.extend(list(&l["practice"]["quiz"]).iter().map(|q| format!("- {}", text(&q["q"]))));
+        }
+        if !seen.is_empty() {
+            rows.push(format!("\nQuestions the learner has already seen:\n{}", seen[seen.len().saturating_sub(60)..].join("\n")));
+        }
+        let schema = obj(json!({"questions":arr(obj(json!({"lesson":s(),"q":s(),"options":arr(s()),"answer":{"type":"integer"},"why":s()})))}));
+        let d = parse(&self.llm(messages(EXAM_PROMPT, rows.join("\n")), "exam", schema)?, "an exam")?;
+        let ids: Vec<String> = ls.iter().map(|l| string(&l["id"])).collect();
+        let picked: Vec<(String, Value)> = list(&d["questions"]).iter().take(20).filter_map(|q| {
+            let lid = text(&q["lesson"]);
+            let x = list(&clean_practice(&json!({"quiz":[q]}), 1)["quiz"]).first().cloned()?;
+            ids.contains(&lid).then_some((lid, x))
+        }).collect();
+        if picked.len() < 3 {
+            return Err(Error::bad("The AI returned too few usable exam questions. Try again, or use a stronger model."));
+        }
+        let _guard = self.guard();
+        let mut c = self.load(cid)?;
+        let mut out = vec![];
+        for (lid, mut q) in picked {
+            let slot = lesson_mut(&mut c, &lid)?;
+            if !slot["practice"].is_object() {
+                slot["practice"] = json!({"quiz":[],"exercise":null});
+            }
+            if !slot["practice"]["quiz"].is_array() {
+                slot["practice"]["quiz"] = json!([]);
+            }
+            let bank = slot["practice"]["quiz"].as_array_mut().unwrap();
+            let i = match bank.iter().position(|o| o["q"] == q["q"]) {
+                Some(i) => i,
+                // Import keeps 200 questions per lesson; a question past that would lose its mistakes entry.
+                None if bank.len() >= 200 => continue,
+                None => {
+                    q["exam"] = json!(true);
+                    bank.push(q);
+                    bank.len() - 1
+                }
+            };
+            out.push(merge(bank[i].clone(), json!({"lesson":lid,"i":i})));
+        }
+        self.save(&c)?;
+        Ok(json!({"questions":out}))
+    }
     fn yt(&self, args: &[String]) -> Result<Value> {
         // Prefetch runs four lessons at once and each checks eight videos: unlimited, that is 32 yt-dlp processes and a sluggish computer.
         let (count, freed) = &self.yt_running;
@@ -794,12 +906,15 @@ impl App {
             }
         }
         let _done = Done(&self.yt_running);
-        let (status, out, err, timeout) = process(
-            Command::new(&self.yt_program)
-                .args(["-J", "--no-warnings"])
-                .args(args),
-            60,
-        )
+        // YouTube needs a JS challenge solver: yt-dlp enables only deno by default, so allow node and bun too and fetch the solver script.
+        const JS: [&str; 8] = ["--js-runtimes", "deno", "--js-runtimes", "node", "--js-runtimes", "bun", "--remote-components", "ejs:github"];
+        let run = |js: &[&str]| process(Command::new(&self.yt_program).args(["-J", "--no-warnings"]).args(js).args(args), 60);
+        let mut r = run(&JS);
+        // yt-dlp older than 2025.11 does not know these options; run it the old way.
+        if matches!(&r, Ok((s, _, e, _)) if *s != 0 && e.contains("no such option")) {
+            r = run(&[]);
+        }
+        let (status, out, err, timeout) = r
         .map_err(|e| {
             if e.kind() == std::io::ErrorKind::NotFound {
                 Error::bad(if cfg!(target_os = "linux") { "yt-dlp is not installed. Run: sudo dnf install yt-dlp" } else { "yt-dlp is not installed. Install yt-dlp and add it to PATH." })

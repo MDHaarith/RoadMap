@@ -114,6 +114,11 @@ impl FakeAI {
                 } else if system.contains("mark one review answer") {
                     assert!(user.contains("Concept to explain: hydration"));
                     json!({"right":user.split("answer:").nth(1).unwrap().contains("water"),"feedback":"It is the water to flour ratio.","points":[{"text":"Water weight divided by flour weight","hit":false},{"text":"","hit":true},"junk"]}).to_string()
+                } else if system.contains("end-of-stage exam") {
+                    assert!(user.contains("Stage 1: Basics") && user.contains("Lesson 1.1: Mix") && !user.contains("Lesson 1.2"), "{user}");
+                    let q = |s: &str| json!({"lesson":"1.1","q":s,"options":["a","b","c","d"],"answer":1,"why":"w"});
+                    let n = if user.contains("- Exam one?") { "Exam four?" } else { "Exam one?" };
+                    json!({"questions":[q(n),q("Exam two?"),q("Exam three?"),{"lesson":"9.9","q":"Gone?","options":["a","b"],"answer":0,"why":""},{"lesson":"1.1","q":"Bad?","options":["a"],"answer":0,"why":""}]}).to_string()
                 } else if system.contains("You designed this course earlier") {
                     assert!(
                         user.contains("- 1.1 Mix [completed, quiz 1 of 1")
@@ -125,7 +130,7 @@ impl FakeAI {
                 } else if system.contains("practice material") {
                     if user.contains("- Why rest dough?") {
                         practice().to_string()
-                    } else if user.contains("already has these questions") {
+                    } else if user.contains("already has these questions") && !user.contains("- Exam one?") {
                         assert!(user.contains("- What is hydration?") && user.contains("The exercise is null."), "{user}");
                         json!({"quiz":[practice()["quiz"][0],{"q":"Why rest dough?","options":["Gluten relaxes","It cools"],"answer":0,"why":"Rest."}],"exercise":null}).to_string()
                     } else {
@@ -1226,6 +1231,41 @@ fn long_roadmap_outline_expand_and_revise() {
     assert_eq!(back["phases"][1]["stage"], 1);
     assert_eq!(back["phases"][1]["lessons"][0]["stub"], true);
     fs::remove_file(app.path_of(&string(&back["id"])).unwrap()).unwrap();
+    // The import screen lists exported files found in the home folders.
+    let files = app.route("GET", "api/import/files", &json!({})).unwrap();
+    assert!(list(&files["files"]).iter().any(|f| f["path"] == file["path"] && f["template"] == false && f["lessons"].as_u64() > Some(1)), "{files}");
+
+    // A stage exam is written fresh on each attempt and joins its lessons' question banks, outside the lesson quiz.
+    let exam_path = format!("api/courses/{cid}/exam");
+    let bank = |app: &Arc<App>| list(&app.load(&cid).unwrap()["phases"][0]["lessons"][0]["practice"]["quiz"]).to_vec();
+    let n0 = bank(&app).len();
+    let first_exam = app.route("POST", &exam_path, &json!({"stage":0})).unwrap();
+    let qs = list(&first_exam["questions"]).to_vec();
+    assert_eq!(qs.iter().map(|q| text(&q["q"])).collect::<Vec<_>>(), ["Exam one?", "Exam two?", "Exam three?"]);
+    assert_eq!((qs[0]["lesson"].clone(), qs[0]["i"].clone()), (json!("1.1"), json!(n0)));
+    assert_eq!(bank(&app).len(), n0 + 3);
+    assert!(bank(&app)[n0..].iter().all(|q| q["exam"] == true));
+    let again = app.route("POST", &exam_path, &json!({"stage":0})).unwrap();
+    assert_eq!(again["questions"][0]["q"], "Exam four?");
+    assert_eq!(again["questions"][1]["i"], qs[1]["i"]);
+    assert_eq!(bank(&app).len(), n0 + 4);
+    app.route("POST", "api/mistake", &json!({"course":cid,"lesson":"1.1","i":qs[2]["i"]})).unwrap();
+    assert!(list(&app.route("GET", "api/mistakes", &json!({})).unwrap()["items"]).iter().any(|m| m["q"] == "Exam three?"));
+    assert_eq!(app.route("POST", &exam_path, &json!({"stage":5})).unwrap_err().status, 404);
+    if n0 == 0 {
+        // A bank of exam questions only still gets the lesson's own quiz, after them.
+        let pr = app.route("POST", &format!("api/courses/{cid}/practice"), &json!({"lesson":"1.1"})).unwrap();
+        assert_eq!(pr["from"], 4);
+        assert!(list(&pr["quiz"]).len() > 4);
+    }
+    // Removed models leave the menus; the model in use cannot be removed.
+    let hide = |model: &str, hidden: bool| app.route("PUT", "api/models/hidden", &json!({"base":ai.base,"model":model,"hidden":hidden}));
+    assert!(hide("m", true).is_err());
+    hide("x", true).unwrap();
+    assert_eq!(app.config()["hidden"][ai.base.trim_end_matches('/')], json!(["x"]));
+    hide("x", false).unwrap();
+    assert_eq!(app.config()["hidden"][ai.base.trim_end_matches('/')], json!([]));
+    assert!(app.route("POST", "api/models/fetch", &json!({"base":"ftp://x"})).is_err());
 
     let path = format!("api/courses/{cid}");
     let state = json!({"checks":{},"done":{"1.1":true},"notes":{}});

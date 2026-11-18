@@ -8,6 +8,7 @@
   import Icon from '../components/Icon.svelte';
   import Waiting from '../components/Waiting.svelte';
   import BusyLabel from '../components/BusyLabel.svelte';
+  import ModelPicker from '../components/ModelPicker.svelte';
   let { empty = false }: { empty?: boolean } = $props();
   let kind = $state('build'), folder = $state(''), prompt = $state(''), level = $state('Complete beginner'), size = $state('');
   let picking = $state(false), building = $state(false), waiting = $state(false), designing = $state(false);
@@ -79,7 +80,7 @@
       <div class="examples" id="goal-examples" aria-label="Example goals" hidden={kind === 'project'}><span class="small">Try:</span>{#each ['Build an ESP32 weather station', 'Bake my first sourdough', 'Learn Python with a todo CLI'] as x}<button type="button" onclick={() => { prompt = x; promptEl.focus(); }}>{x}</button>{/each}</div>
       <fieldset class="field levels" aria-describedby="level-hint"><legend>Where are you starting?</legend><div class="segmented full">{#each levels as [v, t]}<label><input type="radio" name="level" value={v} bind:group={level} />{t}</label>{/each}</div><p class="hint" id="level-hint">{levelHint}</p></fieldset>
       <fieldset class="field" id="size-field" aria-describedby="size-hint"><legend>How far do you want to go?</legend><div class="segmented full">{#each sizes as [v, t, m]}<label><input type="radio" name="size" value={v} bind:group={size} /><span>{t}<small>{m}</small></span></label>{/each}</div><p class="hint" id="size-hint">{sized[3]} At about five hours a week.</p></fieldset>
-      <div class="create-go"><button class="btn big" id="build-roadmap" disabled={noService}>{error ? 'Try again' : 'Build my roadmap'} <Icon name="arrow" /></button>{#if error}<p class="create-error" role="alert"><strong>The roadmap could not be built.</strong> {error} If it keeps failing, check the AI service in <a href="#/settings">Settings</a>.</p>{:else}<span class="small">Next: a few quick questions about what you already know.</span>{/if}</div>
+      <div class="create-go"><button class="btn big" id="build-roadmap" disabled={noService}>{error ? 'Try again' : 'Build my roadmap'} <Icon name="arrow" /></button>{#if error}<p class="create-error" role="alert"><strong>The roadmap could not be built.</strong> {error} If it keeps failing, check the AI service in <a href="#/settings">Settings</a>.</p>{:else}<span class="small">Next: a few quick questions about what you already know.</span>{/if}<span class="create-model"><label class="small" for="create-model">AI model</label><ModelPicker id="create-model" /></span></div>
     </div>
     <div id="building" hidden={!building} class={designing ? 'designing' : 'placement'}>
       {#if prompt.trim()}<p class="create-goal"><span>Your goal</span> {prompt}</p>{/if}

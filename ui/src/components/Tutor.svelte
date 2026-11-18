@@ -1,16 +1,15 @@
 <script lang="ts">
   import Skeleton from './Skeleton.svelte';
   import { api } from '../lib/api';
-  import { models, loadModels, modelName } from '../lib/models.svelte';
+  import ModelPicker from './ModelPicker.svelte';
   import { tick, untrack } from 'svelte';
-  import { appState, ask, retryAsk, save, keyFor, stopAsk, clearChat, refreshConfig } from '../lib/state.svelte';
+  import { appState, ask, retryAsk, save, keyFor, stopAsk, clearChat } from '../lib/state.svelte';
   import { CHIPS } from '../lib/format';
   import type { Course, Lesson } from '../lib/types';
   import Icon from './Icon.svelte';
   import Formatted from './Formatted.svelte';
   import Waiting from './Waiting.svelte';
   import Elapsed from './Elapsed.svelte';
-  import Select from './Select.svelte';
   import AiSetup from './AiSetup.svelte';
   import { autogrow } from '../lib/autogrow';
   import { confirmAsk } from './Confirm.svelte';
@@ -26,23 +25,6 @@
       previous = before; c.state.notes[l.id] = result.notes; save(c);
     } catch (e) { rewriteError = e instanceof Error ? e.message : String(e); }
     finally { rewriting = false; }
-  }
-  // Menu values are "provider\nmodel": the same model id can exist at two providers.
-  let modelOptions = $derived.by(() => {
-    const current = appState.config.base + '\n' + appState.config.model;
-    const options: { value: string; label: string; hint?: string; group?: string }[] = models.groups.flatMap(g => g.models.map(m => ({ value: g.base + '\n' + m.id, label: m.name, hint: m.note || undefined, group: g.name })));
-    if (!options.some(o => o.value === current)) options.unshift({ value: current, label: modelName(appState.config.model) || 'Choose model' });
-    return options;
-  });
-  let modelProblems = $derived([models.error, ...models.groups.filter(g => g.error && g.base !== appState.config.base).map(g => `${g.name}: ${g.error}`)].filter(Boolean).join('\n'));
-  async function chooseModel(value: string) {
-    const cut = value.indexOf('\n'), base = value.slice(0, cut), model = value.slice(cut + 1);
-    try {
-      await api('PUT', 'api/model', { model, base });
-      if (base === appState.config.base) appState.config.model = model;
-      else { await refreshConfig(); void loadModels(true); }
-    }
-    catch (e) { models.error = e instanceof Error ? e.message : String(e); }
   }
   let log: HTMLDivElement;
   let key = $derived(keyFor(c, l)), msgs = $derived(appState.chats[key] || []);
@@ -91,7 +73,7 @@
   </div>
   {#if msgs.length}<div class="chips tutor-actions">{#each CHIPS as chip}<button type="button" class="chip" title={chip} aria-label={chip} disabled={!!appState.busyKey || clearing} onclick={() => send(chip)}>{names[chip]}</button>{/each}</div>{/if}
   <div class="composer-wrap">
-  <form id="compose" onsubmit={e => { e.preventDefault(); void send(); }}><label class="sr" for="msg">Message the tutor</label><textarea id="msg" aria-describedby="compose-hint" use:autogrow={{ min: 43, max: 121, value: text }} rows="2" placeholder="Ask about this lesson…" bind:value={text} onkeydown={e => { if (e.key === 'Enter' && !e.shiftKey && !e.isComposing) { e.preventDefault(); void send(); } }}></textarea><div class="composer-actions"><Select ariaLabel="AI model" loading={models.loading && !models.error} title={modelProblems || (models.loading ? 'Loading models…' : '')} onopen={() => void loadModels()} value={appState.config.base + '\n' + appState.config.model} onchange={value => void chooseModel(value)} heading="AI model for the whole app" options={modelOptions} />{#if busy}<button type="button" class="btn secondary sm send" aria-label="Stop reply" onclick={stopAsk}><Icon name="stop" /></button>{:else}<button class="btn sm send" aria-label="Send message" disabled={!!appState.busyKey || clearing || !text.trim()}><Icon name="arrow" /></button>{/if}</div></form>
+  <form id="compose" onsubmit={e => { e.preventDefault(); void send(); }}><label class="sr" for="msg">Message the tutor</label><textarea id="msg" aria-describedby="compose-hint" use:autogrow={{ min: 43, max: 121, value: text }} rows="2" placeholder="Ask about this lesson…" bind:value={text} onkeydown={e => { if (e.key === 'Enter' && !e.shiftKey && !e.isComposing) { e.preventDefault(); void send(); } }}></textarea><div class="composer-actions"><ModelPicker />{#if busy}<button type="button" class="btn secondary sm send" aria-label="Stop reply" onclick={stopAsk}><Icon name="stop" /></button>{:else}<button class="btn sm send" aria-label="Send message" disabled={!!appState.busyKey || clearing || !text.trim()}><Icon name="arrow" /></button>{/if}</div></form>
   <p class="sr" id="compose-hint">Enter to send, Shift+Enter for a new line</p>
   </div>
 </div><div class="side-pane notes-pane" id="pane-notes" role="tabpanel" aria-labelledby="tab-notes" hidden={tab !== 'notes'}><div class="row"><button class="btn secondary sm" disabled={rewriting || !c.state.notes[l.id]?.trim()} onclick={rewrite}>Rewrite my notes</button>{#if previous !== undefined}<button class="link" onclick={() => { c.state.notes[l.id] = previous!; previous = undefined; save(c); }}>Undo rewrite</button>{/if}</div>{#if rewriting}<Waiting skeleton="notes" title="Rewriting your notes" hint="usually 10–30 seconds" />{/if}{#if rewriteError}<p class="err">{rewriteError}</p>{/if}<label class="sr" for="notes">My notes</label><textarea id="notes" readonly={rewriting} rows="3" placeholder="Write what you learned or want to remember." value={c.state.notes[l.id] || ''} oninput={e => { c.state.notes[l.id] = e.currentTarget.value; save(c); }}></textarea><p class="small">Your notes are saved with this lesson.</p></div></aside>

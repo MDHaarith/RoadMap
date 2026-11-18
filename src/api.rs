@@ -195,6 +195,8 @@ impl App {
     pub fn route(self: &Arc<Self>, method: &str, path: &str, b: &Value) -> Result<Value> {
         match (method, path) {
             ("GET", "api/models") => return self.models(),
+            ("POST", "api/models/fetch") => return self.fetch_models(b),
+            ("PUT", "api/models/hidden") => return self.hide_model(b),
             ("PUT", "api/model") => {
                 self.choose_model(b)?;
                 return Ok(json!({}));
@@ -323,8 +325,10 @@ impl App {
                 }
                 return Ok(out);
             }
+            ("GET", "api/import/files") => return self.import_files(),
             ("POST", "api/import") => {
-                let f = (self.pick)("file");
+                // A file chosen from the import screen's list; otherwise the system file picker.
+                let f = if truth(&b["path"]) { string(&b["path"]) } else { (self.pick)("file") };
                 return if f.is_empty() {
                     Ok(json!({}))
                 } else {
@@ -360,7 +364,7 @@ impl App {
             _ => {}
         }
         let re = regex(
-            r"^api/courses/([0-9a-f]{12})(/notes|/state|/videos|/practice|/paused|/adapt|/revise|/expand|/export|/summary|/setup|/work|/edit|/apply|/prefs|/chat)?$",
+            r"^api/courses/([0-9a-f]{12})(/notes|/state|/videos|/practice|/paused|/adapt|/revise|/expand|/export|/summary|/setup|/work|/edit|/apply|/prefs|/chat|/exam)?$",
         );
         let m = re.captures(path).ok_or_else(Error::missing)?;
         let cid = &m[1];
@@ -589,10 +593,16 @@ impl App {
                 self.fetch_transcripts(vids.clone());
                 Ok(json!(if vids.is_empty() { old.to_vec() } else { vids }))
             }
+            ("POST", "/exam") => {
+                let stage = b["stage"].as_u64().ok_or_else(|| Error::bad("Choose a stage."))?;
+                self.build_exam(cid, stage)
+            }
             ("POST", "/practice") => {
                 let c = self.load(cid)?;
                 let l = lesson(&c, &b["lesson"])?;
-                let fresh = truth(&b["fresh"]);
+                // A bank holding only stage exam questions still needs the lesson's own quiz.
+                let own = |p: &Value| list(&p["quiz"]).iter().any(|q| q["exam"] != true);
+                let fresh = truth(&b["fresh"]) || (truth(&l["practice"]) && !own(&l["practice"]));
                 if truth(&l["practice"]) && !fresh {
                     return Ok(l["practice"].clone());
                 }

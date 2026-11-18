@@ -128,7 +128,7 @@ export async function route() {
       return;
     }
     appState.course = null;
-    if (a === 'settings' || a === 'review' || a === 'mistakes' || a === 'search') appState.screen = a;
+    if (a === 'settings' || a === 'review' || a === 'mistakes' || a === 'search' || a === 'import') appState.screen = a;
     else await loadLibrary();
   } catch (error) {
     if (version !== appState.routeVersion) return;

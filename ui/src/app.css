@@ -207,6 +207,7 @@ input[type=checkbox]:checked::after { content: ''; width: 9px; height: 5px; bord
 .menu-list button small { font-weight: 400; color: var(--muted); font-size: var(--t-xs); }
 .menu-list button:hover:not(:disabled) { background: var(--hover); }
 .menu-list button:disabled { color: var(--muted); }
+.menu-list button.danger, .menu-list button.danger small { color: var(--danger); }
 .menu-list hr { border: 0; border-top: 1px solid var(--line); margin: 6px 0; }
 
 /* ---------- Waiting states ---------- */
@@ -672,6 +673,16 @@ button.option:hover:not(:disabled) { border-color: var(--accent); background: va
 .status-card .icon { margin-top: 3px; color: var(--muted); }
 .status-card.ok { border-top: 0; }
 .status-card.ok .icon { color: var(--success); }
+.models-box { padding: var(--s3) 0 var(--s4); border-top: 1px solid var(--line); }
+.models-head { margin-bottom: var(--s2); }
+.model-filter { margin-bottom: var(--s2); }
+.model-list { max-height: 264px; overflow-y: auto; }
+.model-row { display: flex; align-items: center; gap: var(--s4); min-height: 32px; padding: var(--s1) 0; font-size: var(--t-sm); }
+.model-row .grow { min-width: 0; display: flex; flex-direction: column; }
+.model-row b { font-weight: 550; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+.model-row small { color: var(--muted); font-family: var(--mono); font-size: var(--t-xs); overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+.model-row .link { white-space: nowrap; }
+.models-box .disclosure { margin-top: var(--s2); }
 .status-card strong { display: block; font-weight: 600; }
 .status-card p { margin: 2px 0 0; font-size: var(--t-sm); color: var(--ink-2); }
 .status-card .service-url { font-family: var(--mono); font-size: var(--t-xs); }
@@ -711,6 +722,8 @@ button.option:hover:not(:disabled) { border-color: var(--accent); background: va
 .privacy strong { color: var(--ink-2); font-weight: 600; }
 .create-error { flex: 1; min-width: 260px; margin: 0; font-size: var(--t-sm); color: var(--danger); line-height: 1.45; }
 .create-go { display: flex; align-items: center; flex-wrap: wrap; gap: var(--s2) var(--s4); margin-top: var(--s5); }
+.create-model { margin-left: auto; display: inline-flex; align-items: center; gap: var(--s2); min-width: 0; }
+.create-model .select-trigger { width: 220px; }
 .create-goal { font-size: var(--t-sm); color: var(--ink-2); padding-bottom: var(--s3); border-bottom: 1px solid var(--line); margin-bottom: var(--s5); }
 .create-goal span { color: var(--muted); font-weight: 550; margin-right: var(--s2); }
 .placement h2 { margin-bottom: var(--s2); }
@@ -1060,3 +1073,16 @@ button:active:not(:disabled), .btn:active { transform: scale(.97); }
 .wrap:has(> .waiting.initial) { margin: 0; }
 .wrap:has(> .waiting.initial .skeleton-question) { margin: var(--s7) auto 0; }
 .skeleton-code .file-heading { width: 30%; height: 18px; margin: 0 0 8px; }
+
+/* Import: ruled roadmap files, each with a route stop (blue for an export with progress, grey for a template). */
+.import-row { display: flex; align-items: flex-start; gap: var(--s5); padding: var(--s5) 0; }
+.import-row h3 { font-size: var(--t-md); font-weight: 600; margin: 2px 0; }
+.import-row p { color: var(--ink-2); font-size: var(--t-sm); max-width: 72ch; }
+.import-row .grow { min-width: 0; }
+.import-row > .btn { flex: none; margin-top: 2px; }
+.import-stop { flex: none; width: 12px; height: 12px; margin-top: 5px; border-radius: 50%; border: 2px solid var(--accent); background: var(--surface); }
+.import-stop.template { border-color: var(--line-strong); }
+.import-kind { color: var(--muted); }
+.import-meta { display: flex; align-items: center; flex-wrap: wrap; gap: var(--s2) var(--s4); margin-top: var(--s3); }
+.import-meta .small { color: var(--muted); overflow: hidden; text-overflow: ellipsis; white-space: nowrap; max-width: 100%; }
+#mistakes-roadmap { width: 300px; max-width: 100%; }
