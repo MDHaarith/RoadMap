@@ -89,6 +89,9 @@ impl FakeAI {
                         json!({"done":false,"q":"Baked before?","options":["No, never","Yes",3]})
                     }
                     .to_string()
+                } else if system.contains("You name the videos") {
+                    assert!(user.contains("Lesson: Mix") && user.contains("0. Full lesson (Baker). Covers hydration."), "{user}");
+                    json!({"names":["Mixing by hand", "extra"]}).to_string()
                 } else if system.contains("verify the videos") {
                     // The transcript check: the fixture has chapters and no captions.
                     assert!(user.contains("Concepts (numbered for covers): 0. "), "{user}");
@@ -300,7 +303,8 @@ fn python_spec_end_to_end() {
         day_offset: AtomicI64::new(0),
         stop_chat: AtomicBool::new(false),
         yt_running: Default::default(),
-        codex_seen: Mutex::new(None),
+        chatgpt: crate::chatgpt::ChatGpt::at("http://127.0.0.1:9", "http://127.0.0.1:9"),
+        thoughts: Mutex::new(Default::default()),
         pick: Box::new(move |k| {
             if k == "file" {
                 export_s.clone()
@@ -309,7 +313,6 @@ fn python_spec_end_to_end() {
             }
         }),
         yt_program: tmp.path().join("yt-dlp"),
-        codex_program: tmp.path().join("codex"),
     };
     fs::write(
         &app.yt_program,
@@ -324,7 +327,8 @@ fn python_spec_end_to_end() {
     assert_eq!(picked(app.config()), json!({"base":"codex","model":"chosen","key":"keep","small":"cheap"}));
     assert_eq!(app.route("PUT", "api/model", &json!({"model":" "})).unwrap_err().status, 400);
     let models = app.route("GET", "api/models", &json!({})).unwrap();
-    assert_eq!(models["models"][0], json!({"id":"default","name":"Codex default","note":"Uses the model set in Codex itself."}));
+    // Not signed in to ChatGPT: its section says how to sign in instead of listing models.
+    assert!(text(&models["error"]).contains("Sign in with ChatGPT"), "{models}");
     assert_eq!(models["current"], "chosen");
     // Providers are remembered: the menu lists both, and picking a model from one switches to its key.
     let other = "http://127.0.0.1:9/v1";
@@ -391,7 +395,7 @@ fn python_spec_end_to_end() {
     );
     assert_eq!(
         call(&base, "GET", "api/settings", json!({})).1,
-        json!({"base":ai.base,"model":"m","small":"","usage":{},"key_set":true,"theme":"dark","videos":{"style":"","length":"","lang":"","recent":""},"damaged":0})
+        json!({"base":ai.base,"model":"m","small":"","usage":{},"key_set":true,"theme":"dark","videos":{"style":"","length":"","lang":"","recent":""},"effort":"medium","damaged":0})
     );
     assert_eq!(
         fs::metadata(&app.conf).unwrap().permissions().mode() & 0o777,
@@ -418,11 +422,12 @@ fn python_spec_end_to_end() {
             &base,
             "POST",
             "api/placement",
-            json!({"prompt":"bake bread","answers":told})
+            json!({"prompt":"bake bread","level":"Beginner","answers":told})
         )
         .1["q"],
         "Used an oven?"
     );
+    assert!(string(&ai.last()["messages"][1]["content"]).contains("The level I picked: Beginner"));
     assert_eq!(call(&base,"POST","api/placement",json!({"prompt":"bake bread","answers":[{"q":"Baked before?","a":"No, never"},"junk",{"q":"Used an oven?","a":"Yes"}]})).1,json!({"done":true}));
     let n = ai.seen.lock().unwrap().len();
     assert_eq!(
@@ -495,6 +500,12 @@ fn python_spec_end_to_end() {
         .1,
         vids
     );
+    // Videos picked without a name get one in the course's terms, once.
+    let named = call(&base, "POST", &format!("{course_path}/video-names"), json!({"lesson":"1.1"})).1;
+    assert_eq!((named[0]["name"].as_str(), named[0]["title"].as_str()), (Some("Mixing by hand"), Some("Full lesson")), "{named}");
+    let n = ai.seen.lock().unwrap().len();
+    assert_eq!(call(&base, "POST", &format!("{course_path}/video-names"), json!({"lesson":"1.1"})).1, named);
+    assert_eq!(ai.seen.lock().unwrap().len(), n);
     assert_eq!(
         call(
             &base,
@@ -723,7 +734,7 @@ fn python_spec_end_to_end() {
     );
     let saved = call(&base, "GET", &course_path, json!({})).1;
     assert_eq!(saved["state"], state);
-    assert_eq!(saved["phases"][0]["lessons"][0]["videos"], vids);
+    assert_eq!(saved["phases"][0]["lessons"][0]["videos"], named);
     assert_eq!(saved["phases"][0]["lessons"][0]["practice"], pr);
     assert_eq!(saved["phases"][0]["lessons"][0]["known"], json!({}));
     assert_eq!(
@@ -1002,7 +1013,71 @@ fn isolated_app(tmp: &std::path::Path) -> Arc<App> {
     a.home = tmp.into();
     a.data = tmp.join("data");
     a.conf = tmp.join("config.json");
+    // Never the real ChatGPT.
+    a.chatgpt = crate::chatgpt::ChatGpt::at("http://127.0.0.1:9", "http://127.0.0.1:9");
     app
+}
+/// A stand-in for ChatGPT's sign-in and Codex server. It keeps each /responses body with its account header,
+/// and answers them in order from `answers` (event-stream text, see `sse_text` and `sse_call`).
+struct FakeChatGpt {
+    issuer: String,
+    seen: Arc<Mutex<Vec<Value>>>,
+    answers: Arc<Mutex<std::collections::VecDeque<String>>>,
+}
+impl FakeChatGpt {
+    fn new() -> Self {
+        let server = tiny_http::Server::http("127.0.0.1:0").unwrap();
+        let issuer = format!("http://{}", server.server_addr().to_ip().unwrap());
+        let (seen, answers) = (Arc::new(Mutex::new(vec![])), Arc::new(Mutex::new(std::collections::VecDeque::<String>::new())));
+        let (seen2, answers2) = (seen.clone(), answers.clone());
+        thread::spawn(move || {
+            for mut req in server.incoming_requests() {
+                let mut body = String::new();
+                let _ = req.as_reader().read_to_string(&mut body);
+                let url = req.url().to_string();
+                let account = req.headers().iter().find(|h| h.field.equiv("chatgpt-account-id")).map(|h| h.value.to_string()).unwrap_or_default();
+                let reply = if url.starts_with("/oauth/token") {
+                    json!({"access_token":jwt(4_000_000_000),"refresh_token":"r2"}).to_string()
+                } else if url.starts_with("/api/models") {
+                    json!({"models":[{"slug":"m1","display_name":"M One","visibility":"list"},{"slug":"inside","visibility":"hide"}]}).to_string()
+                } else {
+                    let mut b: Value = serde_json::from_str(&body).unwrap_or_default();
+                    b["account"] = json!(account);
+                    seen2.lock().unwrap().push(b);
+                    answers2.lock().unwrap().pop_front().unwrap_or_default()
+                };
+                let _ = req.respond(tiny_http::Response::from_string(reply).with_header(tiny_http::Header::from_bytes("Content-Type", "text/event-stream").unwrap()));
+            }
+        });
+        Self { issuer, seen, answers }
+    }
+    fn use_in(&self, app: &mut Arc<App>) {
+        Arc::get_mut(app).unwrap().chatgpt = crate::chatgpt::ChatGpt::at(&self.issuer, &format!("{}/api", self.issuer));
+    }
+    fn answer(&self, sse: String) {
+        self.answers.lock().unwrap().push_back(sse);
+    }
+    fn body(&self, i: usize) -> Value {
+        self.seen.lock().unwrap()[i].clone()
+    }
+}
+fn jwt(exp: u64) -> String {
+    use base64::Engine;
+    format!("h.{}.s", base64::engine::general_purpose::URL_SAFE_NO_PAD.encode(json!({"exp":exp}).to_string()))
+}
+fn signed_in(app: &App, exp: u64) {
+    fs::write(app.conf.with_file_name("chatgpt.json"), json!({"access_token":jwt(exp),"refresh_token":"r1","account_id":"acct","email":"me@example.com"}).to_string()).unwrap();
+}
+fn sse(events: &[Value]) -> String {
+    let mut all: Vec<Value> = events.to_vec();
+    all.push(json!({"type":"response.completed","response":{"usage":{"input_tokens":7,"output_tokens":3}}}));
+    all.iter().map(|e| format!("data: {e}\n\n")).collect()
+}
+fn sse_text(t: &str) -> String {
+    sse(&[json!({"type":"response.output_text.delta","delta":t})])
+}
+fn sse_call(name: &str, args: &str) -> String {
+    sse(&[json!({"type":"response.output_item.done","item":{"type":"function_call","call_id":"c1","name":name,"arguments":args}})])
 }
 #[test]
 fn sse_tool_fragments_stream_fallback_and_ai_errors() {
@@ -1458,7 +1533,6 @@ fn video_picks_are_never_padded() {
         let mut app = isolated_app(tmp.path());
         let a = Arc::get_mut(&mut app).unwrap();
         a.yt_program = tmp.path().join("yt-dlp");
-        a.codex_program = tmp.path().join("no-codex"); // never the real CLI
         fs::write(&a.yt_program, format!("#!/bin/sh\ncat <<'FIXTURE'\n{}\nFIXTURE\n", found())).unwrap();
         fs::set_permissions(&a.yt_program, fs::Permissions::from_mode(0o755)).unwrap();
         if let Some(ai) = ai {
@@ -1690,14 +1764,23 @@ fn chat_stops_keeps_what_arrived_and_clears() {
 }
 #[test]
 #[cfg(unix)] // Uses Unix shell fixtures, permissions or symlinks.
-fn stop_ends_a_running_codex_answer() {
+fn stop_ends_a_running_chatgpt_answer() {
     let tmp = tempfile::tempdir().unwrap();
     let mut app = isolated_app(tmp.path());
-    let a = Arc::get_mut(&mut app).unwrap();
-    // A stand-in for Codex that never answers in time.
-    a.codex_program = tmp.path().join("codex");
-    fs::write(&a.codex_program, "#!/bin/sh\ncat > /dev/null\nexec sleep 30\n").unwrap();
-    fs::set_permissions(&a.codex_program, fs::Permissions::from_mode(0o755)).unwrap();
+    // A stand-in for ChatGPT that starts the answer and then sends nothing for 30 seconds.
+    let listener = std::net::TcpListener::bind("127.0.0.1:0").unwrap();
+    let api = format!("http://{}", listener.local_addr().unwrap());
+    thread::spawn(move || {
+        if let Ok((mut s, _)) = listener.accept() {
+            let mut buf = [0; 65536];
+            let _ = std::io::Read::read(&mut s, &mut buf);
+            let _ = s.write_all(b"HTTP/1.1 200 OK\r\nContent-Type: text/event-stream\r\n\r\n");
+            thread::sleep(Duration::from_secs(30));
+        }
+    });
+    Arc::get_mut(&mut app).unwrap().chatgpt = crate::chatgpt::ChatGpt::at("http://127.0.0.1:9", &api);
+    app.write_config(&json!({"base":"codex","model":"m1"})).unwrap();
+    signed_in(&app, 4_000_000_000);
     let mut c = course();
     c["id"] = json!("0123456789ab");
     c["phases"][0]["lessons"][0]["id"] = json!("1.1");
@@ -1711,7 +1794,7 @@ fn stop_ends_a_running_codex_answer() {
     let body = json!({"course":"0123456789ab","lesson":"1.1","messages":[{"role":"user","content":"help"}]});
     let stopped = app.chat_stream(&body, &mut |_| Ok(()));
     assert_eq!(stopped.unwrap_err().status, 499);
-    assert!(start.elapsed() < Duration::from_secs(10), "stop did not end the Codex run");
+    assert!(start.elapsed() < Duration::from_secs(10), "stop did not end the ChatGPT answer");
     worker.join().unwrap();
 }
 #[test]
@@ -1740,7 +1823,25 @@ fn real_ai() {
     let out = std::path::PathBuf::from(env("REAL_AI_OUT"));
     fs::create_dir_all(&out).unwrap();
     let tmp = tempfile::tempdir().unwrap();
-    let app = isolated_app(tmp.path());
+    let mut app = isolated_app(tmp.path());
+    // With no other service set, the real ChatGPT, signed in with a copy of REAL_AI_CHATGPT (the app's chatgpt.json).
+    // A refresh during the run replaces the refresh token, so the copy is written back; otherwise the app would be signed out.
+    let source = std::path::PathBuf::from(env("REAL_AI_CHATGPT"));
+    if env("REAL_AI_BASE").is_empty() {
+        Arc::get_mut(&mut app).unwrap().chatgpt = Default::default();
+        if let Ok(b) = fs::read(&source) {
+            fs::write(app.conf.with_file_name("chatgpt.json"), b).unwrap();
+        }
+    }
+    struct WriteBack(std::path::PathBuf, std::path::PathBuf);
+    impl Drop for WriteBack {
+        fn drop(&mut self) {
+            if let (Ok(now), Ok(was)) = (fs::read(&self.0), fs::read(&self.1)) {
+                if now != was { let _ = fs::write(&self.1, now); }
+            }
+        }
+    }
+    let _back = WriteBack(app.conf.with_file_name("chatgpt.json"), source);
     if !env("REAL_AI_BASE").is_empty() {
         let key = fs::read_to_string(env("REAL_AI_KEY_FILE")).unwrap_or_default();
         app.save_config(&json!({"base":env("REAL_AI_BASE"),"model":env("REAL_AI_MODEL"),"small":env("REAL_AI_SMALL"),"key":key}))
@@ -1841,21 +1942,13 @@ fn real_notes_and_captions() {
 }
 
 #[test]
-#[cfg(unix)] // Uses a Unix shell stand-in for Codex.
 fn review_marks_the_question_that_was_shown() {
     let tmp = tempfile::tempdir().unwrap();
     let mut app = isolated_app(tmp.path());
-    let a = Arc::get_mut(&mut app).unwrap();
-    // Codex stand-in: keeps each prompt and answers from numbered files.
-    a.codex_program = tmp.path().join("codex");
-    fs::write(
-        &a.codex_program,
-        "#!/bin/sh\nd=$(dirname \"$0\")\nif [ \"$1\" = login ]; then exit 0; fi\nn=$(cat \"$d/n\" 2>/dev/null || echo 0)\nn=$((n+1))\necho $n > \"$d/n\"\ncat > \"$d/prompt$n\"\ncat \"$d/answer$n\"\necho\n",
-    )
-    .unwrap();
-    fs::set_permissions(&a.codex_program, fs::Permissions::from_mode(0o755)).unwrap();
-    let mark = json!({"right":true,"feedback":"Good.","points":[]}).to_string();
-    fs::write(tmp.path().join("answer1"), json!({"type":"item.completed","item":{"type":"agent_message","text":mark}}).to_string()).unwrap();
+    let gpt = FakeChatGpt::new();
+    gpt.use_in(&mut app);
+    signed_in(&app, 4_000_000_000);
+    gpt.answer(sse_text(&json!({"right":true,"feedback":"Good.","points":[]}).to_string()));
     let cid = "0123456789ab";
     let today = app.today();
     let mut c = json!({"id":cid,"title":"Bake bread","summary":"s","prompt":"bread","level":"new",
@@ -1874,7 +1967,7 @@ fn review_marks_the_question_that_was_shown() {
     assert_eq!(ai::recall_k(&c["state"]["review"]["1.1#explain"], 2), usize::from(shown == "hydration"), "the moved date must point at the other concept");
     let (code, r) = call(&app, "POST", "api/review/answer", json!({"course":cid,"lesson":"1.1","i":"explain","q":shown,"answer":"water"}));
     assert_eq!((code, &r["right"]), (200, &json!(true)), "{r}");
-    let prompt = fs::read_to_string(tmp.path().join("prompt1")).unwrap();
+    let prompt = gpt.body(0).to_string();
     assert!(prompt.contains(&format!("Concept to explain: {shown}")) && !prompt.contains(&format!("Concept to explain: {other}")), "{prompt}");
 
     // The lesson is rewritten: the shown question is gone, so nothing is marked, the AI is not asked and no review date moves.
@@ -1895,7 +1988,7 @@ fn review_marks_the_question_that_was_shown() {
         assert!(text(&r["message"]).contains("loading again"), "{r}");
     }
     assert_eq!(app.load(cid).unwrap()["state"], before);
-    assert!(!tmp.path().join("prompt2").exists());
+    assert_eq!(gpt.seen.lock().unwrap().len(), 1);
     // A multiple-choice answer is saved for the question with the text shown, wherever it now sits in the list.
     c["phases"][0]["lessons"][0]["practice"]["quiz"] = json!([{"q":"New?","options":["a","b"],"answer":0,"why":""},{"q":"Q zero?","options":["a","b"],"answer":0,"why":""}]);
     app.save(&c).unwrap();
@@ -1906,69 +1999,105 @@ fn review_marks_the_question_that_was_shown() {
 }
 
 #[test]
-#[cfg(unix)] // Uses Unix shell fixtures, permissions or symlinks.
-fn codex_is_the_default_service_and_can_call_tutor_tools() {
+fn thinking_summaries_are_kept_per_request_and_cleared() {
+    let tmp = tempfile::tempdir().unwrap();
+    let app = isolated_app(tmp.path());
+    let seen = app.thinking("k1", || {
+        app.thought("**Ordering the stages**\n\nMore detail.");
+        call(&app, "GET", "api/thinking/k1", json!({})).1
+    });
+    assert_eq!(seen["text"], "Ordering the stages");
+    assert_eq!(call(&app, "GET", "api/thinking/k1", json!({})).1["text"], "");
+    app.thought("no request is listening");
+    assert!(app.thoughts.lock().unwrap().is_empty());
+}
+
+#[test]
+fn chatgpt_is_the_default_service_and_can_call_tutor_tools() {
     let tmp = tempfile::tempdir().unwrap();
     let mut app = isolated_app(tmp.path());
-    let a = Arc::get_mut(&mut app).unwrap();
-    // A stand-in for the Codex command: it keeps each prompt and schema it was given, and answers from numbered files.
-    a.codex_program = tmp.path().join("codex");
-    fs::write(
-        &a.codex_program,
-        "#!/bin/sh\nd=$(dirname \"$0\")\nif [ \"$1\" = login ]; then exit $(cat \"$d/login\" 2>/dev/null || echo 0); fi\nn=$(cat \"$d/n\" 2>/dev/null || echo 0)\nn=$((n+1))\necho $n > \"$d/n\"\ncat > \"$d/prompt$n\"\necho \"$*\" > \"$d/args$n\"\necho '{\"type\":\"thread.started\"}'\ncat \"$d/answer$n\"\necho\necho '{\"type\":\"turn.completed\",\"usage\":{\"input_tokens\":7,\"output_tokens\":3}}'\n",
-    )
-    .unwrap();
-    fs::set_permissions(&a.codex_program, fs::Permissions::from_mode(0o755)).unwrap();
-    let said = |n: u8, text: Value| {
-        fs::write(tmp.path().join(format!("answer{n}")), json!({"type":"item.completed","item":{"type":"agent_message","text":text.to_string()}}).to_string()).unwrap()
-    };
-    let read = |name: &str| fs::read_to_string(tmp.path().join(name)).unwrap();
+    let gpt = FakeChatGpt::new();
+    gpt.use_in(&mut app);
     let settings = call(&app, "GET", "api/settings", json!({})).1;
-    assert_eq!((settings["base"].as_str(), settings["codex"].as_str()), (Some("codex"), Some("ready")));
-    // Signed out: `codex login status` exits 1. The answer is kept for 30 seconds, so the cache is cleared here.
-    fs::write(tmp.path().join("login"), "1").unwrap();
-    assert_eq!(call(&app, "GET", "api/settings", json!({})).1["codex"], "ready");
-    *app.codex_seen.lock().unwrap() = None;
-    assert_eq!(call(&app, "GET", "api/settings", json!({})).1["codex"], "signed_out");
-    fs::remove_file(tmp.path().join("login")).unwrap();
-    *app.codex_seen.lock().unwrap() = None;
-    said(1, json!({"done":false,"q":"Have you used a terminal?","options":["No, never","Yes"]}));
-    let (code, q) = call(&app, "POST", "api/placement", json!({"prompt":"bake bread","answers":[]}));
-    assert_eq!((code, q["q"].as_str()), (200, Some("Have you used a terminal?")), "{q}");
-    assert!(read("prompt1").contains("What I want: bake bread"));
-    assert!(read("args1").contains("--output-schema") && !read("args1").contains("-m "));
-    // The tutor asks for a tool in its first answer; the app runs it and asks again with the result.
+    assert_eq!((settings["base"].as_str(), settings["codex"].as_str()), (Some("codex"), Some("signed_out")));
+    let (code, e) = call(&app, "POST", "api/placement", json!({"prompt":"bake bread","answers":[]}));
+    assert!(code == 400 && text(&e["error"]).contains("Sign in with ChatGPT"), "{e}");
+    signed_in(&app, 4_000_000_000);
+    let settings = call(&app, "GET", "api/settings", json!({})).1;
+    assert_eq!((settings["codex"].as_str(), settings["chatgpt_email"].as_str()), (Some("ready"), Some("me@example.com")));
+    // Hidden models stay out of the menu.
+    let models = call(&app, "GET", "api/models", json!({})).1;
+    assert_eq!(models["models"].as_array().unwrap().iter().map(|m| string(&m["id"])).collect::<Vec<_>>(), ["default", "m1"], "{models}");
+    // "default" is the first model ChatGPT lists; the system prompt goes in "instructions" and the schema in "text".
+    gpt.answer(sse(&[
+        json!({"type":"response.reasoning_summary_text.delta","delta":"**Choosing a question**"}),
+        json!({"type":"response.output_text.delta","delta":"{\"done\":false,\"q\":\"Have you baked before?\","}),
+        json!({"type":"response.output_text.delta","delta":"\"options\":[\"No, never\",\"Yes\"]}"}),
+    ]));
+    let (code, q) = call(&app, "POST", "api/placement", json!({"prompt":"bake bread","answers":[],"thinking":"k9","effort":"high"}));
+    assert_eq!((code, q["q"].as_str()), (200, Some("Have you baked before?")), "{q}");
+    let b = gpt.body(0);
+    assert_eq!((b["model"].as_str(), b["account"].as_str(), b["store"].as_bool()), (Some("m1"), Some("acct"), Some(false)));
+    assert!(text(&b["instructions"]).contains("placement interview") && b["input"].to_string().contains("What I want: bake bread"), "{b}");
+    assert_eq!((b["text"]["format"]["type"].as_str(), b["reasoning"]["effort"].as_str()), (Some("json_schema"), Some("high")));
+    // The tutor asks for a tool; the app runs it and sends the call and its result back as items.
     let mut c = course();
     c["id"] = json!("0123456789ab");
     c["phases"][0]["lessons"][0]["id"] = json!("1.1");
     app.save(&c).unwrap();
-    said(2, json!({"reply":"","tool":"get_lesson","arguments":"{\"id\":\"1.1\"}"}));
-    said(3, json!({"reply":"Look at the water.","tool":"","arguments":""}));
-    let (code, r) = call(&app, "POST", "api/chat", json!({"course":"0123456789ab","lesson":"1.1","messages":[{"role":"user","content":"help"}]}));
-    assert_eq!((code, r["text"].as_str()), (200, Some("Look at the water.")));
-    assert!(read("prompt2").contains("- get_lesson:") && read("prompt3").contains("Tool result:\nLesson 1.1: Mix"));
+    gpt.answer(sse_call("get_lesson", "{\"id\":\"1.1\"}"));
+    gpt.answer(sse(&[json!({"type":"response.output_text.delta","delta":"Look at "}), json!({"type":"response.output_text.delta","delta":"the water."})]));
+    let mut pieces = vec![];
+    let body = json!({"course":"0123456789ab","lesson":"1.1","messages":[{"role":"user","content":"help"}]});
+    let answer = app.chat_stream(&body, &mut |p| { pieces.push(p.to_string()); Ok(()) }).unwrap();
+    assert_eq!((answer.as_str(), pieces), ("Look at the water.", vec!["Look at ".to_string(), "the water.".to_string()]));
+    assert!(gpt.body(1)["tools"].to_string().contains("get_lesson"));
+    // The tutor uses the Settings default effort unless the request picks one.
+    assert_eq!(gpt.body(1)["reasoning"]["effort"], "medium");
+    assert_eq!(call(&app, "PUT", "api/effort", json!({"effort":"max"})).0, 400);
+    assert_eq!(call(&app, "PUT", "api/effort", json!({"effort":"low"})).0, 200);
+    assert_eq!(call(&app, "GET", "api/settings", json!({})).1["effort"], "low");
+    let items = gpt.body(2)["input"].to_string();
+    assert!(items.contains("\"function_call\"") && items.contains("\"call_id\":\"c1\"") && items.contains("Lesson 1.1: Mix"), "{items}");
     assert_eq!(app.read_side("usage.json")["in"], 21);
-    // The open video's captions reach the tutor in its first prompt, with no tool call.
-    c["phases"][0]["lessons"][0]["videos"] = json!([{"id":"aaaaaaaaaaa","title":"Full lesson","channel":"Baker"}]);
-    app.save(&c).unwrap();
-    fs::create_dir_all(app.data.join("transcripts")).unwrap();
-    fs::write(app.data.join("transcripts/aaaaaaaaaaa.json"), r#"[[65,"Fold the dough gently"]]"#).unwrap();
-    said(4, json!({"reply":"Fold it.","tool":"","arguments":""}));
-    let (code, _) = call(&app, "POST", "api/chat", json!({"course":"0123456789ab","lesson":"1.1","video":"aaaaaaaaaaa","messages":[{"role":"user","content":"what does the video say?"}]}));
-    assert_eq!(code, 200);
-    assert!(read("prompt4").contains("the video the learner is watching") && read("prompt4").contains("[1:05] Fold the dough gently"));
-    // A tutor reply that ignored the JSON shape is still shown, word for word.
-    fs::write(tmp.path().join("answer5"), json!({"type":"item.completed","item":{"type":"agent_message","text":"Plain words, no JSON."}}).to_string()).unwrap();
-    let (code, r) = call(&app, "POST", "api/chat", json!({"course":"0123456789ab","lesson":"1.1","messages":[{"role":"user","content":"hi"}]}));
-    assert_eq!((code, r["text"].as_str()), (200, Some("Plain words, no JSON.")), "{r}");
-    // No answer line at all is an error the learner can act on.
+    // A failed answer says what ChatGPT said.
+    gpt.answer("data: {\"type\":\"response.failed\",\"response\":{\"error\":{\"message\":\"model gone\"}}}\n\n".into());
     let (code, e) = call(&app, "POST", "api/placement", json!({"prompt":"bake bread","answers":[]}));
-    assert_eq!(code, 400);
-    assert!(text(&e["error"]).contains("codex login"));
-    // Not installed at all.
-    let mut gone = isolated_app(tmp.path());
-    Arc::get_mut(&mut gone).unwrap().codex_program = tmp.path().join("no-such-codex");
-    assert_eq!(call(&gone, "GET", "api/settings", json!({})).1["codex"], "missing");
+    assert!(code == 400 && text(&e["error"]).contains("model gone"), "{e}");
+    // An access token about to expire is refreshed first, and the new refresh token is kept.
+    signed_in(&app, 1);
+    gpt.answer(sse_text("{\"done\":true,\"q\":\"\",\"options\":[]}"));
+    assert_eq!(call(&app, "POST", "api/placement", json!({"prompt":"bake bread","answers":[]})).0, 200);
+    let saved: Value = serde_json::from_slice(&fs::read(app.conf.with_file_name("chatgpt.json")).unwrap()).unwrap();
+    assert_eq!((saved["refresh_token"].as_str(), saved["email"].as_str()), (Some("r2"), Some("me@example.com")));
+    // Signing out forgets the tokens.
+    assert_eq!(call(&app, "POST", "api/chatgpt/logout", json!({})).1["status"], "signed_out");
+    assert!(!app.conf.with_file_name("chatgpt.json").exists());
+}
+
+#[test]
+fn chatgpt_sign_in_through_the_browser() {
+    let tmp = tempfile::tempdir().unwrap();
+    let mut app = isolated_app(tmp.path());
+    let gpt = FakeChatGpt::new();
+    gpt.use_in(&mut app);
+    let url = string(&call(&app, "POST", "api/chatgpt/login", json!({})).1["url"]);
+    assert!(url.starts_with(&format!("{}/oauth/authorize?", gpt.issuer)) && url.contains("code_challenge_method=S256") && url.contains("redirect_uri=http%3A%2F%2Flocalhost%3A1455%2Fauth%2Fcallback"), "{url}");
+    // Asking again while the browser is open gives the same address.
+    assert_eq!(string(&call(&app, "POST", "api/chatgpt/login", json!({})).1["url"]), url);
+    assert_eq!(call(&app, "GET", "api/chatgpt/status", json!({})).1["waiting"], true);
+    let state = url.split("state=").nth(1).unwrap().split('&').next().unwrap();
+    let back = |q: &str| ureq::get(&format!("http://127.0.0.1:1455/auth/callback?{q}")).call().map(|r| r.status()).unwrap_or_else(|e| match e { ureq::Error::Status(s, _) => s, _ => 0 });
+    // A visit with another state is not this sign-in's answer.
+    assert_eq!(back("code=x&state=wrong"), 400);
+    assert_eq!(back(&format!("code=abc&state={state}")), 200);
+    let start = Instant::now();
+    while call(&app, "GET", "api/chatgpt/status", json!({})).1["waiting"] == true {
+        assert!(start.elapsed() < Duration::from_secs(5));
+        thread::sleep(Duration::from_millis(20));
+    }
+    let s = call(&app, "GET", "api/chatgpt/status", json!({})).1;
+    assert_eq!((s["status"].as_str(), s["error"].as_str()), (Some("ready"), Some("")), "{s}");
 }
 
 // BENCH_DATA=~/.local/share/roadmap-app cargo test --release --lib bench_reads -- --ignored --nocapture
@@ -2055,13 +2184,6 @@ fn damaged_files_stale_keys_and_plain_errors() {
     assert_eq!(call(&app, "PUT", "api/courses/aaaaaaaaaaaa/paused", json!({"paused":true})).0, 200);
     // Atomic writes leave no temporary files behind.
     assert!(fs::read_dir(&app.data).unwrap().flatten().all(|e| !e.file_name().to_string_lossy().contains("tmp")));
-    // Codex failures name the cause and what to do.
-    assert!(ai::codex_problem("You've hit your usage limit. Try again at 3 PM.", "").contains("allowance"));
-    assert!(ai::codex_problem("", "Error: 401 Unauthorized").contains("codex login"));
-    assert!(ai::codex_problem("stream disconnected before completion", "").contains("internet"));
-    assert!(ai::codex_problem("", "").contains("Try again"));
-    // `codex login` starts a new sign-in and can drop the current one; the learner is only ever sent to the read-only check.
-    assert!(ai::codex_problem("something odd", "").contains("`codex login status`"));
     // The daily recall question reaches every concept of an eight-concept lesson, not only the first five.
     assert_eq!((0..8).map(|d| ai::recall_k(&json!({"step":4,"due":20000 + d}), 8)).collect::<HashSet<_>>().len(), 8);
 }

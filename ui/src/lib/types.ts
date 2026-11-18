@@ -3,15 +3,15 @@ export interface Usage { in?: number; out?: number; calls?: number; since?: numb
 export interface VideoPrefs { style: string; length: string; lang: string; recent: string }
 export interface PlanOption { label: string; note: string; added: { title: string; goal: string; after?: number; phase?: boolean; lessons?: string[] }[]; dropped: string[]; changed: { from: string; title: string; goal: string }[]; plan: object }
 export interface PlanPreview { options: PlanOption[]; note: string }
-/** codex: only when the AI service is Codex. ready = installed and signed in; signed_out = run `codex login` in a terminal; missing = not installed.
+/** codex: only when the AI service is ChatGPT (base "codex"). ready = this app is signed in; signed_out = press Sign in with ChatGPT.
  *  damaged: how many roadmap files could not be read and are left out of the library (kept on disk untouched). */
-export interface Settings { videos: VideoPrefs; base: string; model: string; small?: string; key_set?: boolean; theme: Theme; usage?: Usage; codex?: 'ready' | 'signed_out' | 'missing'; damaged: number }
+export interface Settings { videos: VideoPrefs; base: string; model: string; small?: string; key_set?: boolean; theme: Theme; usage?: Usage; codex?: 'ready' | 'signed_out'; chatgpt_email?: string; effort?: string; damaged: number }
 /** steps: what the tutor looked up before this reply, in the order it did so. */
 export interface Message { role: 'user' | 'assistant'; content: string; steps?: string[] }
 /** exam: a stage exam question kept in its lesson's bank; the lesson quiz leaves it out. */
 export interface Quiz { q: string; options: string[]; answer: number; why: string; exam?: boolean }
 export interface Exercise { title: string; prompt: string; lang: string; starter: string; tests: string }
-export interface Video { id: string; title: string; channel: string; duration?: number; why?: string; start?: number; covers?: string[]; searched?: boolean; chapters?: { t: number; title: string }[] }
+export interface Video { id: string; title: string; name?: string; channel: string; duration?: number; why?: string; start?: number; covers?: string[]; searched?: boolean; chapters?: { t: number; title: string }[] }
 export interface Chart { title: string; kind: 'line' | 'bar'; x: string; y: string; labels: string[]; series: { name: string; values: number[] }[]; note: string }
 export interface Lesson { id: string; title: string; goal: string; query: string; concepts?: string[]; known?: string[]; tasks?: string[]; done?: string[]; lookups?: string[]; files?: string[]; warn?: string; charts?: Chart[]; stub?: boolean; added?: boolean; videos?: Video[]; novideos?: boolean; practice?: { quiz?: Quiz[]; from?: number; recall?: string[]; exercise?: Exercise } }
 export interface Phase { title: string; blurb: string; stage?: number; lessons: Lesson[] }

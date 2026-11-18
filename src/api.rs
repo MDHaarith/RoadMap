@@ -192,9 +192,20 @@ impl App {
             json!({"count":due.len(),"questions":due.into_iter().take(10).map(|(_,q)|q).collect::<Vec<_>>()}),
         )
     }
+    // A page that sends "thinking" with a request can read what the model is thinking from GET api/thinking/<key> while it waits.
     pub fn route(self: &Arc<Self>, method: &str, path: &str, b: &Value) -> Result<Value> {
+        if let Some(key) = path.strip_prefix("api/thinking/") {
+            let thoughts = self.thoughts.lock().unwrap_or_else(|e| e.into_inner());
+            return Ok(json!({"text":thoughts.get(key).cloned().unwrap_or_default()}));
+        }
+        self.with_effort(&b["effort"], || self.thinking(&cap(&string(&b["thinking"]), 64), || self.route_on(method, path, b)))
+    }
+    fn route_on(self: &Arc<Self>, method: &str, path: &str, b: &Value) -> Result<Value> {
         match (method, path) {
             ("GET", "api/models") => return self.models(),
+            ("POST", "api/chatgpt/login") => return self.chatgpt_login(),
+            ("GET", "api/chatgpt/status") => return Ok(self.chatgpt_status()),
+            ("POST", "api/chatgpt/logout") => return self.chatgpt_logout(),
             ("POST", "api/models/fetch") => return self.fetch_models(b),
             ("PUT", "api/models/hidden") => return self.hide_model(b),
             ("PUT", "api/model") => {
@@ -204,9 +215,11 @@ impl App {
             ("GET", "api/settings") => {
                 let c = self.config();
                 let mut out = json!({"base":c.get("base").unwrap_or(&json!("")),"model":c.get("model").unwrap_or(&json!("")),"small":string(&c["small"]),"usage":self.read_side("usage.json"),"key_set":truth(&c["key"]),"theme":self.theme(),"videos":clean_prefs(&c["videos"]),
-                    "damaged":self.damaged()?});
+                    "effort":self.default_effort(),"damaged":self.damaged()?});
                 if c["base"] == "codex" {
-                    out["codex"] = json!(self.codex_status());
+                    let s = self.chatgpt_status();
+                    out["codex"] = s["status"].clone();
+                    out["chatgpt_email"] = s["email"].clone();
                 }
                 return Ok(out);
             }
@@ -223,6 +236,14 @@ impl App {
                 }
                 let _guard = self.guard();
                 self.write_config(&merge(self.config(), json!({"theme":b["theme"]})))?;
+                return Ok(json!({}));
+            }
+            ("PUT", "api/effort") => {
+                if !crate::ai::EFFORTS.iter().any(|e| b["effort"] == *e) {
+                    return Err(Error::bad("Unknown effort."));
+                }
+                let _guard = self.guard();
+                self.write_config(&merge(self.config(), json!({"effort":b["effort"]})))?;
                 return Ok(json!({}));
             }
             ("PUT", "api/settings") => {
@@ -272,10 +293,10 @@ impl App {
                 if prompt.is_empty() && folder.is_empty() {
                     return Err(Error::bad("Say what you want to learn first."));
                 }
-                if path == "api/placement" {
-                    return self.placement(&prompt, &folder, &b["answers"]);
-                }
                 let mut level = vec![cap(&b.get("level").map(text).unwrap_or_default(), 100)];
+                if path == "api/placement" {
+                    return self.placement(&prompt, &level[0], &folder, &b["answers"]);
+                }
                 let answers = said(&b["answers"]);
                 if !answers.is_empty() {
                     level.push("Placement check:".into());
@@ -364,7 +385,7 @@ impl App {
             _ => {}
         }
         let re = regex(
-            r"^api/courses/([0-9a-f]{12})(/notes|/state|/videos|/practice|/paused|/adapt|/revise|/expand|/export|/summary|/setup|/work|/edit|/apply|/prefs|/chat|/exam)?$",
+            r"^api/courses/([0-9a-f]{12})(/notes|/state|/videos|/video-names|/practice|/paused|/adapt|/revise|/expand|/export|/summary|/setup|/work|/edit|/apply|/prefs|/chat|/exam)?$",
         );
         let m = re.captures(path).ok_or_else(Error::missing)?;
         let cid = &m[1];
@@ -543,6 +564,7 @@ impl App {
                 self.save(&c)?;
                 Ok(json!({}))
             }
+            ("POST", "/video-names") => self.name_videos(cid, &b["lesson"]),
             ("POST", "/videos") => {
                 let c = self.load(cid)?;
                 let l = lesson(&c, &b["lesson"])?;
@@ -676,7 +698,9 @@ impl App {
                 pieces.push_str(piece);
                 Ok(())
             };
-            self.tutor(&c, &merge(l.clone(), json!({"watching":body["video"]})), msgs.clone(), &mut Some(&mut out), on_status)
+            self.with_effort(&body["effort"], || self.thinking(&cap(&string(&body["thinking"]), 64), || {
+                self.tutor(&c, &merge(l.clone(), json!({"watching":body["video"]})), msgs.clone(), &mut Some(&mut out), on_status)
+            }))
         };
         match result {
             // A stopped reply keeps what had arrived and adds no note; the page already knows.

@@ -1,6 +1,6 @@
 use crate::*;
 use crate::{
-    exercise::{clean_practice, language, process, process_until, run_code, LANGS},
+    exercise::{clean_practice, language, process, run_code, LANGS},
     project::root_of,
     prompts::*,
 };
@@ -11,6 +11,51 @@ use std::{
     time::Duration,
 };
 pub(crate) type Sink<'a> = Option<&'a mut dyn FnMut(&str) -> Result<()>>;
+thread_local! {
+    // The key of the request this thread is answering, so a Codex call deep inside it can report what the model is thinking.
+    static THINKING: std::cell::RefCell<String> = const { std::cell::RefCell::new(String::new()) };
+    // The reasoning effort the learner picked for this request (roadmap creation or the tutor), or empty.
+    static EFFORT: std::cell::Cell<&'static str> = const { std::cell::Cell::new("") };
+}
+pub(crate) const EFFORTS: [&str; 3] = ["low", "medium", "high"];
+fn effort_of(v: &Value) -> &'static str {
+    EFFORTS.into_iter().find(|e| v == *e).unwrap_or("")
+}
+impl App {
+    /// Runs `f` with ChatGPT's reasoning effort set from the request's "effort" field.
+    pub(crate) fn with_effort<T>(&self, v: &Value, f: impl FnOnce() -> T) -> T {
+        EFFORT.with(|e| e.set(effort_of(v)));
+        let r = f();
+        EFFORT.with(|e| e.set(""));
+        r
+    }
+    /// The default effort from Settings.
+    pub(crate) fn default_effort(&self) -> &'static str {
+        match effort_of(&self.config()["effort"]) {
+            "" => "medium",
+            e => e,
+        }
+    }
+    /// Runs `f` with its thinking summaries kept under `key`, where `GET api/thinking/<key>` reads the latest one.
+    pub(crate) fn thinking<T>(&self, key: &str, f: impl FnOnce() -> T) -> T {
+        if key.is_empty() {
+            return f();
+        }
+        THINKING.with(|k| *k.borrow_mut() = key.into());
+        let r = f();
+        THINKING.with(|k| k.borrow_mut().clear());
+        self.thoughts.lock().unwrap_or_else(|e| e.into_inner()).remove(key);
+        r
+    }
+    // Codex titles each summary in bold ("**Ordering the stages**"); only that title line is shown.
+    pub(crate) fn thought(&self, text: &str) {
+        let key = THINKING.with(|k| k.borrow().clone());
+        let line = text.lines().map(|l| l.trim().trim_matches('*').trim()).find(|l| !l.is_empty()).unwrap_or("");
+        if !key.is_empty() && !line.is_empty() {
+            self.thoughts.lock().unwrap_or_else(|e| e.into_inner()).insert(key, cap(line, 200));
+        }
+    }
+}
 fn s() -> Value {
     json!({"type":"string"})
 }
@@ -107,7 +152,7 @@ pub(crate) fn said(v: &Value) -> Vec<String> {
 pub(crate) fn provider_name(base: &str) -> String {
     let host = base.split("://").nth(1).unwrap_or(base).split('/').next().unwrap_or(base);
     match () {
-        _ if base == "codex" => "Codex (ChatGPT sign-in)".into(),
+        _ if base == "codex" => "ChatGPT (sign in)".into(),
         _ if host.contains("generativelanguage.googleapis.com") => "Google Gemini".into(),
         _ if host.contains("openrouter.ai") => "OpenRouter".into(),
         _ if host.contains("api.openai.com") => "OpenAI".into(),
@@ -122,22 +167,12 @@ fn messages(system: &str, user: String) -> Vec<Value> {
     ]
 }
 impl App {
-    /// Models of one provider: Codex reads its local cache, any other service is asked for `/models`.
-    fn provider_models(base: &str, key: &str) -> Result<Vec<Value>> {
+    /// Models of one provider: ChatGPT lists the ones this sign-in may use, any other service is asked for `/models`.
+    fn provider_models(&self, base: &str, key: &str) -> Result<Vec<Value>> {
         let mut models = vec![];
         if base == "codex" {
-            models.push(json!({"id":"default","name":"Codex default","note":"Uses the model set in Codex itself."}));
-            let home = std::env::var_os("CODEX_HOME").map(PathBuf::from)
-                .or_else(|| dirs::home_dir().map(|h| h.join(".codex")));
-            if let Some(cache) = home.and_then(|h| fs::read(h.join("models_cache.json")).ok())
-                .and_then(|b| serde_json::from_slice::<Value>(&b).ok()) {
-                for m in list(&cache["models"]) {
-                    // Codex marks its internal models "hide"; its own picker leaves them out too.
-                    if let Some(id) = m["slug"].as_str().filter(|id| *id != "default" && m["visibility"] != "hide") {
-                        models.push(json!({"id":id,"name":m["display_name"].as_str().unwrap_or(id),"note":m["description"].as_str().unwrap_or("")}));
-                    }
-                }
-            }
+            models.push(json!({"id":"default","name":"ChatGPT default","note":"The first model ChatGPT offers."}));
+            models.extend(self.chatgpt_models()?);
         } else {
             let url = format!("{}/models", base.trim_end_matches('/'));
             let fetch = || -> std::result::Result<Value, Box<dyn std::error::Error>> {
@@ -171,7 +206,7 @@ impl App {
         // A key typed in the form wins; otherwise the one saved for this service.
         let key = Some(string(&b["key"]).trim().to_string()).filter(|k| !k.is_empty())
             .unwrap_or_else(|| if c["base"] == base.as_str() { string(&c["key"]) } else { string(&c["providers"][&base]["key"]) });
-        Ok(Self::shown(&c, &base, Self::provider_models(&base, &key)?))
+        Ok(Self::shown(&c, &base, self.provider_models(&base, &key)?))
     }
     /// Removes a model from every model menu, or brings it back.
     pub(crate) fn hide_model(&self, b: &Value) -> Result<Value> {
@@ -207,7 +242,7 @@ impl App {
         let key_of = |b: &str| if b == base { string(&c["key"]) } else { string(&c["providers"][b]["key"]) };
         // Asked side by side, so one slow or offline service does not hold up the rest.
         let lists: Vec<Result<Vec<Value>>> = std::thread::scope(|s| {
-            let jobs: Vec<_> = bases.iter().map(|b| { let k = key_of(b); s.spawn(move || Self::provider_models(b, &k)) }).collect();
+            let jobs: Vec<_> = bases.iter().map(|b| { let k = key_of(b); s.spawn(move || self.provider_models(b, &k)) }).collect();
             jobs.into_iter().map(|j| j.join().unwrap_or_else(|_| Err(Error::bad("Could not load models.")))).collect()
         });
         let groups: Vec<Value> = bases.iter().zip(lists).map(|(b, r)| match r {
@@ -273,7 +308,11 @@ impl App {
         let c = self.config();
         if c["base"] == "codex" {
             let model = string(if small && truth(&c["small"]) { &c["small"] } else { &c["model"] });
-            return self.ask_codex(&model, msgs, on_text, &extra);
+            // The effort picked for this request wins; otherwise quick jobs stay fast and the rest use the Settings default.
+            let mut extra = extra;
+            let picked = EFFORT.with(|e| e.get());
+            extra["effort"] = json!(if !picked.is_empty() { picked } else if small { "low" } else { self.default_effort() });
+            return self.ask_chatgpt(&model, msgs, on_text, &extra);
         }
         if !truth(&c["base"]) || !truth(&c["model"]) {
             return Err(Error::bad("Set up the AI service in Settings first."));
@@ -393,147 +432,14 @@ impl App {
             json!({"content":content,"tool_calls":if calls.is_empty(){Value::Null}else{json!(calls.into_values().collect::<Vec<_>>())}}),
         )
     }
-    // Base "codex" runs the learner's own signed-in Codex command instead of an HTTP service, so there is no key to paste.
-    // Codex takes one prompt and has no function calling, so the chat becomes a transcript and a tool call becomes a JSON field.
-    // shortcut: the answer arrives whole, not as a stream; read message deltas from the event lines if Codex starts sending them.
-    fn ask_codex(
-        &self,
-        model: &str,
-        msgs: &[Value],
-        on_text: &mut Sink<'_>,
-        extra: &Value,
-    ) -> Result<Value> {
-        let tools = list(&extra["tools"]);
-        let mut schema = extra["response_format"]["json_schema"]["schema"].clone();
-        let mut prompt = String::from("You are answering for another app, not working in a folder. Do not run commands, read files or search the web: everything you need is in this text, and your whole reply is handed to that app.\n");
-        for m in msgs {
-            let who = match m["role"].as_str().unwrap_or("") {
-                "system" => "",
-                "assistant" => "Assistant:\n",
-                "tool" => "Tool result:\n",
-                _ => "User:\n",
-            };
-            prompt.push_str(&format!("\n{who}{}\n", text(&m["content"])));
-            for k in list(&m["tool_calls"]) {
-                let f = &k["function"];
-                prompt.push_str(&format!("(called the tool {} with {})\n", text(&f["name"]), text(&f["arguments"])));
-            }
-        }
-        if !tools.is_empty() {
-            prompt.push_str("\nTools you may call, one per reply:\n");
-            for t in tools {
-                let f = &t["function"];
-                prompt.push_str(&format!("- {}: {} Arguments: {}\n", text(&f["name"]), text(&f["description"]), f["parameters"]["properties"]));
-            }
-            prompt.push_str("To call a tool, put its name in \"tool\" and its arguments as a JSON object written as text in \"arguments\", and leave \"reply\" empty. Otherwise leave \"tool\" and \"arguments\" empty and put your answer in \"reply\".\n");
-            schema = obj(json!({"reply":s(),"tool":s(),"arguments":s()}));
-        }
-        let dir = tempfile::tempdir()?;
-        let file = |name: &str, body: &str| -> Result<std::path::PathBuf> {
-            let p = dir.path().join(name);
-            fs::write(&p, body)?;
-            Ok(p)
-        };
-        let mut cmd = codex_command(&self.codex_program);
-        // The learner's own Codex settings carry plugins and a slow reasoning level meant for coding, so they are left out.
-        cmd.args(["exec", "--ignore-user-config", "--ignore-rules", "--skip-git-repo-check", "--ephemeral", "--json", "-s", "read-only", "-c", "model_reasoning_effort=low", "-C"])
-            .arg(dir.path());
-        if schema.is_object() {
-            cmd.arg("--output-schema").arg(file("schema.json", &schema.to_string())?);
-        }
-        if !model.is_empty() && model != "default" {
-            cmd.args(["-m", model]);
-        }
-        let input = fs::File::open(file("prompt.txt", &prompt)?)?;
-        // Only a tutor reply has a sink, and only that can be stopped by the learner.
-        let stop = on_text.is_some().then_some(&self.stop_chat);
-        let (_, out, err, timeout) = process_until(cmd.arg("-"), 900, input.into(), stop, None).map_err(|e| {
-            if e.kind() == std::io::ErrorKind::NotFound {
-                Error::bad("Codex is not installed, and the app uses it for every AI answer. Install the Codex command, run `codex login` in a terminal to sign in with ChatGPT, then try again.")
-            } else {
-                e.into()
-            }
-        })?;
-        if stop.is_some_and(|s| s.load(Ordering::Relaxed)) {
-            return Err(Error::stopped());
-        }
-        if timeout {
-            return Err(Error::bad("Codex took longer than 15 minutes and was stopped. Try again."));
-        }
-        let (mut answer, mut problem) = (None, String::new());
-        for d in out.lines().filter_map(|l| serde_json::from_str::<Value>(l).ok()) {
-            if d["type"] == "item.completed" && d["item"]["type"] == "agent_message" {
-                answer = Some(string(&d["item"]["text"]));
-            } else if d["type"] == "turn.completed" {
-                let u = &d["usage"];
-                self.count(u["input_tokens"].as_u64().unwrap_or(0), u["output_tokens"].as_u64().unwrap_or(0));
-            } else if d["type"] == "error" || d["type"] == "turn.failed" {
-                problem = string(if d["message"].is_string() { &d["message"] } else { &d["error"]["message"] });
-            }
-        }
-        let Some(answer) = answer else {
-            return Err(Error::bad(codex_problem(&problem, &err)));
-        };
-        let mut reply = answer;
-        if !tools.is_empty() {
-            // A reply that ignored the JSON shape is still the tutor's answer, so it is shown as it came.
-            if let Some(d) = serde_json::from_str::<Value>(&reply).ok().filter(Value::is_object) {
-                if truth(&d["tool"]) {
-                    return Ok(json!({"content":"","tool_calls":[{"id":"call_1","type":"function","function":{"name":d["tool"],"arguments":d["arguments"]}}]}));
-                }
-                reply = string(&d["reply"]);
-            }
-        }
-        if let Some(out) = on_text.as_mut() {
-            if !reply.is_empty() {
-                out(&reply)?;
-            }
-        }
-        Ok(json!({"content":reply}))
-    }
-    /// "ready", "signed_out" or "missing", from `codex login status`, which only reads the saved sign-in and never changes it.
-    /// An answer is reused for 30 seconds; an older one is still returned at once while a fresh one is asked for in the background,
-    /// so only the very first call waits (about 10 ms, at most 3 seconds).
-    pub(crate) fn codex_status(self: &Arc<Self>) -> &'static str {
-        let mut seen = self.codex_seen.lock().unwrap_or_else(|e| e.into_inner());
-        match *seen {
-            Some((at, s)) if at.elapsed() < Duration::from_secs(30) => s,
-            Some((_, s)) => {
-                // Marked fresh under the same lock that found it stale, so a burst of page loads starts one check, not one each.
-                *seen = Some((std::time::Instant::now(), s));
-                drop(seen);
-                let app = self.clone();
-                std::thread::spawn(move || {
-                    let now = app.ask_codex_status();
-                    *app.codex_seen.lock().unwrap_or_else(|e| e.into_inner()) = Some((std::time::Instant::now(), now));
-                });
-                s
-            }
-            None => {
-                drop(seen);
-                let now = self.ask_codex_status();
-                *self.codex_seen.lock().unwrap_or_else(|e| e.into_inner()) = Some((std::time::Instant::now(), now));
-                now
-            }
-        }
-    }
-    fn ask_codex_status(&self) -> &'static str {
-        match process(codex_command(&self.codex_program).args(["login", "status"]), 3) {
-            Ok((0, _, _, false)) => "ready",
-            Err(e) if e.kind() == std::io::ErrorKind::NotFound => "missing",
-            // A slow or failing check is not proof of a sign-out; the next AI call says exactly what is wrong.
-            Ok((_, _, _, true)) | Err(_) => "ready",
-            Ok(_) => "signed_out",
-        }
-    }
     fn llm(&self, msgs: Vec<Value>, name: &str, schema: Value) -> Result<String> {
         let small = ["practice", "videos", "mark", "placement"].contains(&name);
         let m=self.ask_as(small,&msgs,&mut None,json!({"response_format":{"type":"json_schema","json_schema":{"name":name,"strict":true,"schema":schema}}}))?;
         Ok(string(&m["content"]))
     }
-    pub(crate) fn placement(&self, prompt: &str, folder: &str, answers: &Value) -> Result<Value> {
+    pub(crate) fn placement(&self, prompt: &str, level: &str, folder: &str, answers: &Value) -> Result<Value> {
         let asked = said(answers);
-        if asked.len() >= 7 {
+        if asked.len() >= 5 {
             return Ok(json!({"done":true}));
         }
         let mut rows = vec![format!(
@@ -544,6 +450,9 @@ impl App {
                 prompt
             }
         )];
+        if !level.is_empty() {
+            rows.push(format!("The level I picked: {level}"));
+        }
         if !folder.is_empty() {
             rows.push(format!(
                 "The project's files: {}",
@@ -1260,7 +1169,7 @@ impl App {
             .llm(
                 messages(VIDEO_CHECK_PROMPT, rows.join("\n")),
                 "videos",
-                obj(json!({"picks":arr(obj(json!({"i":{"type":"integer"},"why":s(),"start":{"type":"integer"},"covers":arr(json!({"type":"integer"}))})))})),
+                obj(json!({"picks":arr(obj(json!({"i":{"type":"integer"},"name":s(),"why":s(),"start":{"type":"integer"},"covers":arr(json!({"type":"integer"}))})))})),
             )
             .and_then(|r| parse(&r, "a video choice"));
         // The check failed: the title-based shortlist stands.
@@ -1295,6 +1204,11 @@ impl App {
             let why = cap(&string(&k["why"]), 300);
             if !why.trim().is_empty() {
                 v["why"] = json!(why);
+            }
+            // The course's own name for the video; the YouTube title stays in "title".
+            let name = cap(string(&k["name"]).trim(), 80);
+            if !name.is_empty() {
+                v["name"] = json!(name);
             }
             let start = k["start"].as_i64().unwrap_or(0);
             // A start in the last tenth, or past the end, is a mistake: play from the beginning.
@@ -1375,6 +1289,37 @@ impl App {
             }
             app.fetching.lock().unwrap_or_else(|e| e.into_inner()).remove(&cid);
         });
+    }
+    /// Gives the lesson's videos picked before names existed a name in the course's terms. Returns the videos.
+    pub(crate) fn name_videos(&self, cid: &str, lid: &Value) -> Result<Value> {
+        let c = self.load(cid)?;
+        let l = lesson(&c, lid)?;
+        let need: Vec<Value> = list(&l["videos"]).iter().filter(|v| !truth(&v["name"])).cloned().collect();
+        if need.is_empty() {
+            return Ok(json!(list(&l["videos"])));
+        }
+        let rows = format!(
+            "Course: {}\nLesson: {}\nGoal: {}\nConcepts: {}\nVideos:\n{}",
+            text(&c["title"]), text(&l["title"]), text(&l["goal"]), joined(&l["concepts"]),
+            need.iter().enumerate().map(|(i, v)| format!("{i}. {} ({}). {}", text(&v["title"]), text(&v["channel"]), text(&v["why"]))).collect::<Vec<_>>().join("\n")
+        );
+        let d = parse(&self.llm(messages(VIDEO_NAMES_PROMPT, rows), "videos", obj(json!({"names":arr(s())})))?, "video names")?;
+        let names = list(&d["names"]);
+        let _guard = self.guard();
+        let mut c = self.load(cid)?;
+        let l = lesson_mut(&mut c, &string(&l["id"]))?;
+        let mut videos = list(&l["videos"]).to_vec();
+        for (v, name) in need.iter().zip(names) {
+            let name = cap(string(name).trim(), 80);
+            if let Some(x) = videos.iter_mut().find(|x| x["id"] == v["id"] && !truth(&x["name"])) {
+                if !name.is_empty() {
+                    x["name"] = json!(name);
+                }
+            }
+        }
+        l["videos"] = json!(videos);
+        self.save(&c)?;
+        Ok(json!(videos))
     }
     pub(crate) fn prefetch_inner(&self, cid: &str) -> Result<()> {
         let mut c = self.load(cid)?;
@@ -1984,7 +1929,7 @@ fn apply_changes(c: &mut Value, d: &Value, revise: bool) -> Result<Value> {
 }
 // urllib used the proxy for this URL's scheme and respected no_proxy.
 // ureq's automatic proxy discovery does neither, so preserve that policy here.
-fn agent(url: &str, secs: u64) -> std::result::Result<ureq::Agent, ureq::Error> {
+pub(crate) fn agent(url: &str, secs: u64) -> std::result::Result<ureq::Agent, ureq::Error> {
     let mut agent = ureq::AgentBuilder::new()
         .timeout(Duration::from_secs(secs))
         .redirects(10)
@@ -2228,43 +2173,3 @@ fn forget(c: &mut Value, lid: &str) {
     }
 }
 
-// What the learner is told when Codex ends without an answer: the usual causes in plain words, else Codex's own message.
-pub(crate) fn codex_problem(problem: &str, err: &str) -> String {
-    let said = if problem.is_empty() { tail(err.trim(), 300) } else { cap(problem.trim(), 300) };
-    let low = said.to_lowercase();
-    let has = |words: &[&str]| words.iter().any(|w| low.contains(w));
-    if has(&["usage limit", "rate limit", "429", "too many requests", "quota"]) {
-        format!("You have used up your ChatGPT allowance for now, so Codex cannot answer. Wait until it resets and try again. Codex said: {said}")
-    } else if has(&["401", "unauthorized", "not logged in", "log in", "login", "sign in", "expired", "refresh token"]) {
-        "Codex is signed out. Open a terminal, run `codex login`, sign in with ChatGPT, then try again.".into()
-    } else if has(&["error sending request", "stream disconnected", "connection", "network", "dns", "timed out"]) {
-        "Codex could not reach ChatGPT. Check your internet connection and try again.".into()
-    } else {
-        let tail = if said.is_empty() { String::new() } else { format!(" Codex said: {said}") };
-        format!("Codex stopped without an answer. Try again; if it keeps happening, run `codex login status` in a terminal to see whether you are still signed in.{tail}")
-    }
-}
-// Run npm's native executable directly so prompts and arguments never enter a shell.
-fn codex_command(program: impl AsRef<std::ffi::OsStr>) -> Command {
-    let program = program.as_ref();
-    #[cfg(windows)]
-    if program == std::ffi::OsStr::new("codex") {
-        if let Some(path) = std::env::var_os("PATH") {
-            for dir in std::env::split_paths(&path) {
-                for relative in [
-                    "codex.exe",
-                    "node_modules/@openai/codex/node_modules/@openai/codex-win32-x64/vendor/x86_64-pc-windows-msvc/codex/codex.exe",
-                    "node_modules/@openai/codex/vendor/x86_64-pc-windows-msvc/codex/codex.exe",
-                ] {
-                    let executable = dir.join(relative);
-                    if executable.is_file() { return Command::new(executable); }
-                }
-            }
-        }
-    }
-    Command::new(program)
-}
-#[test]
-fn codex_command_preserves_program() {
-    assert_eq!(codex_command("custom codex").get_program(), "custom codex");
-}

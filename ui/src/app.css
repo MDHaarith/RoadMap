@@ -127,7 +127,7 @@ input[type=search]::-webkit-search-decoration, input[type=search]::-webkit-searc
 textarea { resize: none; display: block; }
 input:focus-visible, textarea:focus-visible, .select-trigger:focus-visible { outline: 2px solid var(--accent-ink); outline-offset: 0; border-color: transparent; border-radius: var(--r); }
 ::placeholder { color: var(--muted); opacity: 1; }
-input[type=checkbox], input[type=radio] { width: 18px; height: 18px; margin: 0; accent-color: var(--accent); flex: none; }
+input[type=checkbox], input[type=radio] { width: 18px; height: 18px; min-height: 0; margin: 0; accent-color: var(--accent); flex: none; }
 input[type=checkbox] { appearance: none; -webkit-appearance: none; border: 1px solid var(--field-line); border-radius: var(--r-sm); background: var(--surface); display: grid; place-content: center; cursor: pointer; }
 input[type=checkbox]:checked { background: var(--accent); border-color: var(--accent); }
 input[type=checkbox]:checked::after { content: ''; width: 9px; height: 5px; border-left: 2px solid var(--on-accent); border-bottom: 2px solid var(--on-accent); transform: translateY(-1px) rotate(-45deg); }
@@ -216,6 +216,19 @@ input[type=checkbox]:checked::after { content: ''; width: 9px; height: 5px; bord
 .waiting h3, .waiting strong { font-size: var(--t-md); font-weight: 600; margin: 0; display: block; }
 .waiting p { margin: 4px 0 0; color: var(--muted); font-size: var(--t-sm); }
 .waiting .elapsed { font-variant-numeric: tabular-nums; color: var(--ink-2); font-weight: 550; }
+.wrap.narrow.create.designing { max-width: 1440px; margin: 0; }
+.creating .overview-side h1 { font-size: var(--t-2xl); margin: 0 0 var(--s3); }
+.creating .create-goal { border: 0; padding: 0; }
+.creating-time { margin: var(--s3) 0 0; color: var(--muted); font-size: var(--t-sm); font-variant-numeric: tabular-nums; }
+.creating-time .elapsed { color: var(--ink-2); font-weight: 550; }
+/* What the model is thinking or writing now: large enough to read, and new lines slide in. */
+.waiting p.thought, .thought { margin: var(--s3) 0 0; font-size: var(--t-md); line-height: 1.4; font-weight: 550; color: var(--ink-2); animation: fade-in 600ms ease-out both; }
+.fade-in { animation: fade-in 600ms ease-out both; }
+/* Streamed tutor words fade in as they are released. */
+.stream-tail { white-space: pre-wrap; }
+.stream-tail .word { animation: word-in 500ms ease-out both; }
+@keyframes fade-in { from { opacity: 0; } }
+@keyframes word-in { from { opacity: 0; filter: blur(3px); } }
 .waiting.inline { padding: var(--s2) var(--s3); border: 0; background: none; gap: var(--s2); align-items: center; font-size: var(--t-sm); color: var(--muted); }
 
 /* ---------- Top bar ---------- */
@@ -290,7 +303,7 @@ input[type=checkbox]:checked::after { content: ''; width: 9px; height: 5px; bord
 .lib-card .card-actions { display: flex; gap: var(--s4); font-size: var(--t-sm); }
 .lib-card .card-actions .link { color: var(--muted); }
 .lib-card .card-actions .link:hover:not(:disabled) { color: var(--ink); }
-.lib-card .card-actions .link.danger:hover:not(:disabled) { color: var(--danger); }
+.lib-card .card-actions .link.danger { color: var(--danger); }
 .paused-cards .lib-card h3 a { color: var(--muted); }
 
 /* ---------- Roadmap page ---------- */
@@ -487,7 +500,7 @@ main:has(.lesson-layout .support:not([hidden])) { padding-right: calc(var(--side
 .newest { position: absolute; bottom: var(--s2); right: var(--s3); box-shadow: var(--overlay-shadow); }
 .log .muted { margin: 0; }
 .msg { padding: var(--s2) var(--s3); border-radius: var(--r); line-height: 1.65; max-width: 92%; min-width: 0; white-space: pre-wrap; }
-.msg.u { align-self: flex-end; background: var(--accent-soft); color: var(--ink); border-bottom-right-radius: var(--r-sm); }
+.msg.u { align-self: flex-end; background: var(--ink); color: var(--on-accent); border-bottom-right-radius: var(--r-sm); }
 .msg.a { align-self: stretch; max-width: 100%; padding: var(--s2) 0; white-space: normal; }
 .msg.u + .msg.a { margin-top: var(--s2); }
 .msg.a pre { background: var(--surface-2); font-size: var(--t-xs); white-space: pre; overflow-wrap: normal; overflow-x: auto; max-width: 100%; }
@@ -506,9 +519,9 @@ main:has(.lesson-layout .support:not([hidden])) { padding-right: calc(var(--side
 .tutor-steps[open] > summary::before { transform: rotate(45deg); }
 .tutor-steps > summary:hover { color: var(--ink-2); }
 .tutor-steps ul { margin: var(--s1) 0 0; padding-left: 13px; }
-.tutor-followups { display: flex; flex-wrap: wrap; gap: 0 var(--s1); margin: calc(-1 * var(--s2)) 0 0 -6px; }
-.tutor-followups button { min-height: 24px; padding: 2px 6px; border: 0; border-radius: 999px; background: none; color: var(--accent-ink); font-size: var(--t-xs); font-weight: 500; }
-.tutor-followups button:hover:not(:disabled) { background: var(--accent-soft); }
+.tutor-followups { display: flex; flex-wrap: wrap; gap: 6px; margin: 0; }
+.tutor-followups button { min-height: 24px; padding: 2px 10px; border: 0; border-radius: 999px; background: none; color: var(--ink); box-shadow: inset 0 0 0 1px var(--field-line); font-size: var(--t-xs); font-weight: 500; }
+.tutor-followups button:hover:not(:disabled) { background: var(--hover); color: var(--ink); }
 .tutor-followups button:disabled { color: var(--muted); }
 .tutor-error { padding: var(--s3); font-size: var(--t-xs); }
 .tutor-error p { margin: 0 0 var(--s2); }
@@ -602,7 +615,8 @@ main:has(.lesson-layout .support:not([hidden])) { padding-right: calc(var(--side
 .lesson-article .quiz-question > .options { grid-row: 3 / 5; }
 .lesson-article .quiz-question > .feedback { grid-column: 2; grid-row: 3; margin-top: 0; max-width: 72ch; }
 .lesson-article .quiz-question > .row { grid-column: 2; grid-row: 4; }
-.exercise > .output { grid-column: 2; grid-row: 4 / 7; }
+/* Starts level with the code box, not its label. */
+.exercise > .output { grid-column: 2; grid-row: 5 / 7; }
 .exercise > p { max-width: 72ch; }
 .lesson-article .practice-start { max-width: 72ch; text-align: left; }
 .lesson-article .practice-start p { margin-left: 0; }
@@ -638,6 +652,16 @@ button.option:hover:not(:disabled) { border-color: var(--accent); background: va
 .code-label label { margin: 0 0 6px; }
 .code-label span { font-size: var(--t-xs); color: var(--muted); }
 #code, .codebox { font: var(--t-sm)/1.6 var(--mono); min-height: 240px; tab-size: 4; background: var(--surface-2); white-space: pre; }
+/* The coloured copy sits over the code box, which keeps the caret and selection; both scroll together. */
+.code-editor { position: relative; }
+.code-editor #code { color: transparent; caret-color: var(--ink); }
+.code-editor #code::selection { color: transparent; background: rgba(26, 102, 201, .22); }
+.code-hl { position: absolute; inset: 0; margin: 0; padding: 3px var(--s3); border: 1px solid transparent; /* room to scroll as far as the code box, whose scrollbars shorten it */ padding-bottom: 60px; padding-right: 60px; background: none; font: var(--t-sm)/1.6 var(--mono); tab-size: 4; white-space: pre; overflow: hidden; pointer-events: none; color: var(--ink); }
+.hl-k { color: #7c3aed; font-weight: 600; }
+.hl-f { color: #1a66c9; }
+.hl-s { color: #1a7f45; }
+.hl-n { color: #b45309; }
+.hl-c { color: #6b7280; font-style: italic; }
 .run-actions { margin: var(--s3) 0; }
 .output { border: 1px solid var(--line); border-radius: var(--r); overflow: hidden; }
 .output-header { display: flex; align-items: center; gap: var(--s2); padding: var(--s2) var(--s3); font-size: var(--t-sm); font-weight: 600; background: var(--bg-subtle); border-bottom: 1px solid var(--line); }
@@ -722,8 +746,12 @@ button.option:hover:not(:disabled) { border-color: var(--accent); background: va
 .privacy strong { color: var(--ink-2); font-weight: 600; }
 .create-error { flex: 1; min-width: 260px; margin: 0; font-size: var(--t-sm); color: var(--danger); line-height: 1.45; }
 .create-go { display: flex; align-items: center; flex-wrap: wrap; gap: var(--s2) var(--s4); margin-top: var(--s5); }
-.create-model { margin-left: auto; display: inline-flex; align-items: center; gap: var(--s2); min-width: 0; }
+.create-pickers { display: flex; flex-wrap: wrap; gap: var(--s2) var(--s5); margin-top: var(--s5); }
+.create-pickers + .create-go { margin-top: var(--s4); }
+.create-model { display: inline-flex; align-items: center; gap: var(--s2); min-width: 0; }
 .create-model .select-trigger { width: 220px; }
+.create-model + .create-model .select-trigger { width: 160px; }
+.composer-actions .pickers { display: flex; gap: var(--s2); min-width: 0; }
 .create-goal { font-size: var(--t-sm); color: var(--ink-2); padding-bottom: var(--s3); border-bottom: 1px solid var(--line); margin-bottom: var(--s5); }
 .create-goal span { color: var(--muted); font-weight: 550; margin-right: var(--s2); }
 .placement h2 { margin-bottom: var(--s2); }
@@ -1054,7 +1082,12 @@ button:active:not(:disabled), .btn:active { transform: scale(.97); }
 }
 .skeleton-home .skeleton-row { min-height: 92px; }
 .skeleton-home .hero { min-height: 140px; }
-.skeleton-overview .stage-line { width: 65%; height: 18px; margin: 0 0 16px; }
+.skeleton .stage-line { width: 65%; height: 18px; margin: 0 0 16px; }
+.skeleton-needs { display: grid; gap: 10px; padding: 12px 0 20px; margin-bottom: 20px; border-bottom: 1px solid var(--line); }
+.skeleton-need-row { display: flex; align-items: center; gap: 12px; }
+.skeleton-need-row .box { width: 18px; height: 18px; flex: none; }
+.skeleton-need-row .text-line { width: 45%; }
+.skeleton-need-row .tag { width: 72px; height: 18px; margin-left: auto; border-radius: 999px; }
 .skeleton-lessons { border-block: 1px solid var(--line); margin-bottom: 24px; }
 .skeleton-lesson-row { display: flex; align-items: center; gap: 16px; height: 40px; padding-inline: 12px; }
 .skeleton-lesson-row .stop { width: 22px; height: 22px; border-radius: 50%; flex: none; }

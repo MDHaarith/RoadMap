@@ -4,7 +4,7 @@ type Group = { base: string; name: string; models: Model[]; error?: string };
 // `items` is the current provider's list (Settings); `groups` is every provider set up, for the model menu.
 export const models = $state({ items: [] as Model[], groups: [] as Group[], error: '', loading: false });
 let request: Promise<void> | undefined;
-export const modelName = (id: string) => id === 'default' ? 'Codex default' : models.items.find(m => m.id === id)?.name || id;
+export const modelName = (id: string) => id === 'default' ? 'ChatGPT default' : models.items.find(m => m.id === id)?.name || id;
 export function loadModels(fresh = false) {
   if (fresh) request = undefined;
   return request ||= (async () => {
