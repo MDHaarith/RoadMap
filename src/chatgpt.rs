@@ -203,6 +203,7 @@ impl App {
     fn chatgpt_call(&self, path: &str, body: Option<&Value>, secs: u64) -> Result<ureq::Response> {
         let url = format!("{}{path}", self.chatgpt.api);
         let mut force = false;
+        let mut tries = 0;
         loop {
             let (token, account) = self.chatgpt_token(force)?;
             let g = agent(&url, secs).map_err(|_| Error::bad("Can't reach ChatGPT. Check your internet connection and try again."))?;
@@ -218,6 +219,8 @@ impl App {
                 Ok(r) => return Ok(r),
                 // An access token can be withdrawn before it expires; one refresh, then the error stands.
                 Err(ureq::Error::Status(401, _)) if !force => force = true,
+                // A busy server or a dropped connection often works a moment later: two more tries, 2 then 6 seconds apart.
+                Err(ureq::Error::Status(500.., _) | ureq::Error::Transport(_)) if tries < 2 && self.retry_wait(tries) => tries += 1,
                 Err(ureq::Error::Status(code, r)) => {
                     let mut bytes = vec![];
                     let _ = r.into_reader().take(2000).read_to_end(&mut bytes);
@@ -227,8 +230,9 @@ impl App {
                     return Err(Error::bad(match code {
                         401 | 403 => "ChatGPT turned down this app's sign-in. Open Settings and sign in with ChatGPT again.".into(),
                         429 => format!("You have used up your ChatGPT allowance for now. Wait until it resets and try again. ChatGPT said: {said}"),
-                        500.. => format!("ChatGPT had a problem on its side (error {code}). Try again in a minute."),
-                        _ => format!("ChatGPT turned down the request (error {code}): {said}"),
+                        500.. => format!("ChatGPT had a problem on its side (error {code}). Try again in a minute. If it keeps failing, you can pick another AI service in Settings."),
+                        // The sign-in borrows Codex's private server, which OpenAI can change without notice.
+                        _ => format!("ChatGPT turned down the request (error {code}): {said}. If this keeps happening, OpenAI may have changed the service this app uses; you can pick another AI service in Settings."),
                     }));
                 }
                 Err(_) => return Err(Error::bad("Can't reach ChatGPT. Check your internet connection and try again.")),
@@ -317,11 +321,12 @@ impl App {
                     content.push_str(&t);
                     if let Some(out) = on_text.as_mut() {
                         out(&t)?;
-                    } else if t.contains('"') {
+                    } else if let Some(title) = t.contains('"').then(|| last_title(&content)).flatten() {
                         // Low effort often means no reasoning summary at all, so the wait shows the part being written instead.
-                        if let Some(title) = last_title(&content) {
-                            self.thought(&format!("Writing “{title}”"));
-                        }
+                        self.thought(&format!("Writing “{title}”"));
+                    } else if content.len() == t.len() {
+                        // The first words of the answer: the thinking, if any, is over.
+                        self.thought("Writing the answer");
                     }
                 }
                 "response.reasoning_summary_text.delta" => {

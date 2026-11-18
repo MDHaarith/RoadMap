@@ -1,7 +1,7 @@
 use crate::*;
 use crate::{
     ai::{question_changed, recall_ask, recall_k, said, shown_quiz},
-    exercise::{install_lang, run_code},
+    exercise::{install_lang, install_tool, run_code},
 };
 impl App {
     pub(crate) fn library_list(&self) -> Result<Value> {
@@ -33,6 +33,7 @@ impl App {
             }
         }
         self.save(&c)?;
+        self.log_activity(1, right as u64, 1);
         Ok(r)
     }
     // A wrong quiz or exam answer goes in the mistakes notebook and comes back in today's review.
@@ -159,10 +160,17 @@ impl App {
             let r = &st["review"];
             for l in lessons(&c) {
                 let lid = string(&l["id"]);
+                let base = json!({"course":c["id"],"roadmap":c["title"],"lesson":l["id"],"lesson_title":l["title"]});
+                // Cards made from the learner's notes are due on their own schedule, quiz or no quiz.
+                for (k, card) in list(&l["cards"]).iter().enumerate() {
+                    let i = format!("c{k}");
+                    if let Some(when) = r[format!("{lid}#{i}")]["due"].as_i64().filter(|d| *d <= self.today()) {
+                        due.push((when, merge(base.clone(), json!({"i":i,"kind":"card","q":card["front"],"back":card["back"]}))));
+                    }
+                }
                 if st["quiz"].get(&lid).is_none() {
                     continue;
                 }
-                let base = json!({"course":c["id"],"roadmap":c["title"],"lesson":l["id"],"lesson_title":l["title"]});
                 let pr = &l["practice"];
                 let mut items = list(&pr["quiz"])
                     .iter()
@@ -218,7 +226,7 @@ impl App {
             ("GET", "api/settings") => {
                 let c = self.config();
                 let mut out = json!({"base":c.get("base").unwrap_or(&json!("")),"model":c.get("model").unwrap_or(&json!("")),"small":string(&c["small"]),"usage":self.read_side("usage.json"),"key_set":truth(&c["key"]),"theme":self.theme(),"videos":clean_prefs(&c["videos"]),
-                    "effort":self.default_effort(),"damaged":self.damaged()?});
+                    "effort":self.default_effort(),"damaged":self.damaged()?,"goal":self.goal(),"os":std::env::consts::OS,"unsandboxed":truth(&c["unsandboxed"])});
                 if c["base"] == "codex" {
                     let s = self.chatgpt_status();
                     out["codex"] = s["status"].clone();
@@ -282,11 +290,25 @@ impl App {
             ("POST", "api/mistake") => return self.mistake(b),
             ("GET", "api/mistakes") => return self.mistakes(),
             ("GET", "api/review") => return self.review_due(),
+            ("GET", "api/activity") => return Ok(self.activity()),
+            ("GET", "api/progress") => return self.stats(),
+            ("PUT", "api/goal") => return self.set_goal(b),
+            ("GET", "api/stamp") => return Ok(self.library_stamp()),
+            ("PUT", "api/unsandboxed") => {
+                let _guard = self.guard();
+                self.write_config(&merge(self.config(), json!({"unsandboxed":truth(&b["on"])})))?;
+                return Ok(json!({}));
+            }
             ("POST", "api/review") => {
                 // The question is found by the text the page showed, not by its place in the list, which changes with new questions.
                 let q = string(&b["q"]);
+                let card = b["kind"] == "card";
                 return self.reviewed(&text(&b["course"]), &cap(&text(&b["lesson"]), 20), truth(&b["right"]), |l| {
-                    shown_quiz(l, &q).map(|j| j.to_string())
+                    if card {
+                        list(&l["cards"]).iter().position(|x| string(&x["front"]) == q).map(|k| format!("c{k}"))
+                    } else {
+                        shown_quiz(l, &q).map(|j| j.to_string())
+                    }
                 });
             }
             ("POST", "api/review/answer") => return self.review_answer(b),
@@ -323,6 +345,7 @@ impl App {
                 return Ok(c);
             }
             ("POST", "api/run") => {
+                self.may_run()?;
                 let c = self.load(&text(&b["course"]))?;
                 let l = lesson(&c, &b["lesson"])?;
                 let ex = &l["practice"]["exercise"];
@@ -388,7 +411,7 @@ impl App {
             _ => {}
         }
         let re = regex(
-            r"^api/courses/([0-9a-f]{12})(/notes|/state|/videos|/video-names|/practice|/paused|/adapt|/revise|/expand|/export|/summary|/setup|/work|/edit|/apply|/prefs|/chat|/exam)?$",
+            r"^api/courses/([0-9a-f]{12})(/notes|/state|/videos|/video-names|/practice|/paused|/adapt|/revise|/expand|/export|/summary|/setup|/work|/edit|/apply|/prefs|/chat|/exam|/cards|/check|/offline)?$",
         );
         let m = re.captures(path).ok_or_else(Error::missing)?;
         let cid = &m[1];
@@ -404,9 +427,21 @@ impl App {
                 }
                 self.fetch_transcripts(lessons(&c).flat_map(|l| list(&l["videos"]).to_vec()).collect());
                 c["chats"] = self.read_side(&self.chat_file(cid)?);
+                c["saved_videos"] = json!(self.saved_videos(&c));
+                // Phases written since offline was turned on get their videos too.
+                if truth(&c["offline"]) {
+                    self.save_videos(cid.to_string());
+                }
                 Ok(c)
             }
+            ("POST", "/cards") => self.make_cards(cid, b),
+            ("POST", "/check") => self.check_work(cid, b),
+            ("GET", "/offline") => self.offline_status(cid),
+            ("POST", "/offline") => self.set_offline(cid, b),
             ("DELETE", "") => {
+                if truth(&self.load(cid)?["offline"]) {
+                    self.set_offline(cid, &json!({"on":false}))?;
+                }
                 let _guard = self.guard();
                 fs::remove_file(self.path_of(cid)?)?;
                 let _ = fs::remove_file(self.data.join(self.chat_file(cid)?));
@@ -472,8 +507,20 @@ impl App {
                         }
                     }
                 }
+                // Newly finished lessons and quizzes count toward the daily goal.
+                // shortcut: unticking and ticking a lesson again counts it twice; keep a per-day set of counted ids if that matters.
+                let mut steps = b["done"].as_object().into_iter().flatten().filter(|(k, v)| truth(v) && !truth(&old["done"][k.as_str()])).count() as u64;
+                let (mut right, mut asked) = (0, 0);
+                for (lid, q) in b["quiz"].as_object().into_iter().flatten() {
+                    if old["quiz"][lid.as_str()] != *q && q["total"].as_u64().is_some_and(|t| t > 0) {
+                        steps += 1;
+                        right += q["score"].as_u64().unwrap_or(0);
+                        asked += q["total"].as_u64().unwrap_or(0);
+                    }
+                }
                 c["state"] = st;
                 self.save(&c)?;
+                self.log_activity(steps, right, asked);
                 Ok(json!({}))
             }
             ("POST", "/notes") => self.rewrite_notes(cid, b),
@@ -529,6 +576,13 @@ impl App {
             ("POST", "/summary") => self.summary(&self.load(cid)?),
             ("POST", "/setup") => {
                 let c = self.load(cid)?;
+                // Only a program this roadmap's list names can be installed.
+                if let Some(cmd) = b["install"].as_str() {
+                    if !list(&c["needs"]).iter().any(|n| n["command"] == cmd) {
+                        return Err(Error::missing());
+                    }
+                    return install_tool(cmd);
+                }
                 let mut found = json!({});
                 for cmd in list(&c["needs"])
                     .iter()

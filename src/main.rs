@@ -90,7 +90,7 @@ fn main() {
         .manage(updates::Updates::default())
         .setup(|app| {
             let handle = app.handle().clone();
-            app.manage(App::new(move |kind| {
+            let roadmap = App::new(move |kind| {
                 let dialog = handle.dialog().file();
                 let picked = if kind == "folder" {
                     dialog
@@ -105,7 +105,9 @@ fn main() {
                     .and_then(|file| file.into_path().ok())
                     .map(|path| path.to_string_lossy().into_owned())
                     .unwrap_or_default()
-            })?);
+            })?;
+            let _ = player::VIDEOS.set(roadmap.data.join("videos"));
+            app.manage(roadmap);
             Ok(())
         })
         .invoke_handler(tauri::generate_handler![api, chat_stream, updates::update_status, updates::update_check, updates::update_install])

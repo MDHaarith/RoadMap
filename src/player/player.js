@@ -6,6 +6,8 @@
   var q = new URLSearchParams(location.search);
   var id = q.get('v') || '';
   var start = Math.max(0, parseInt(q.get('start') || '0', 10) || 0);
+  // local=1: the app saved this video for offline use, and this server plays its own copy instead of YouTube.
+  var local = q.get('local') === '1';
   var ready = false, player = null, pending = null, dragging = false, idleTimer = 0;
   var $ = function (s) { return document.getElementById(s); };
   var wrap = $('wrap'), seek = $('seek'), time = $('time');
@@ -48,6 +50,7 @@
   // YouTube draws its title bar and suggestions at the edges of its frame. The frame is made taller than the box so those
   // edges fall outside it, and twice as large then scaled to half, because YouTube picks quality by player size.
   function layout() {
+    if (local) return;
     var f = $('player'), W = wrap.clientWidth, H = wrap.clientHeight;
     var vw = Math.min(W, H * 16 / 9), vh = vw * 9 / 16, pad = vh * 0.2;
     f.style.left = (W - vw) / 2 + 'px'; f.style.top = (H - vh) / 2 - pad + 'px';
@@ -115,7 +118,37 @@
     if (e.source === parent && typeof t === 'number' && isFinite(t)) jump(t);
   });
 
+  // YouTube states: 1 playing, 2 paused, 0 ended.
+  function stateChanged(s) {
+    $('play-icon').setAttribute('d', s === 1 ? 'M6 5h4v14H6zm8 0h4v14h-4z' : 'M8 5v14l11-7z');
+    $('play').setAttribute('aria-label', s === 1 ? 'Pause' : 'Play');
+    $('play').title = s === 1 ? 'Pause (K or Space)' : 'Play (K or Space)';
+    if (s === 1 || s === 2 || s === 0) parent.postMessage({ roadmapPlaying: s === 1 }, '*');
+    wrap.classList.toggle('ended', s === 0);
+    wake(); tick();
+  }
+  // The saved copy in a <video>, behind the same few calls the YouTube player answers, so the controls above work unchanged.
+  if (local) {
+    ready = true;
+    var v = document.createElement('video');
+    v.id = 'player'; v.autoplay = true; v.playsInline = true;
+    v.style.cssText = 'position:absolute;inset:0;width:100%;height:100%;background:#000';
+    v.src = '/video/' + id + '.mp4';
+    $('player').replaceWith(v);
+    var state = function () { return v.ended ? 0 : v.paused ? 2 : 1; };
+    player = {
+      getPlayerState: state, playVideo: function () { v.play().catch(function () {}); }, pauseVideo: function () { v.pause(); },
+      seekTo: function (t) { v.currentTime = t; }, getDuration: function () { return v.duration || 0; }, getCurrentTime: function () { return v.currentTime; },
+      isMuted: function () { return v.muted; }, mute: function () { v.muted = true; }, unMute: function () { v.muted = false; },
+      setPlaybackRate: function (r) { v.playbackRate = r; }
+    };
+    ['play', 'pause', 'ended'].forEach(function (e) { v.addEventListener(e, function () { stateChanged(state()); }); });
+    v.addEventListener('error', function () { report(5); });
+    v.addEventListener('loadedmetadata', function () { if (start) v.currentTime = start; if (pending !== null) { jump(pending); pending = null; } });
+    setMuteIcon(); tick(); setInterval(tick, 250); wake();
+  }
   window.onYouTubeIframeAPIReady = function () {
+    if (local) return;
     ready = true;
     layout();
     new YT.Player('player', {
@@ -128,14 +161,7 @@
           player = e.target; layout(); setMuteIcon(); if (player.unloadModule) player.unloadModule('captions'); tick(); setInterval(tick, 250); wake();
           if (pending !== null) { jump(pending); pending = null; }
         },
-        onStateChange: function (e) {
-          $('play-icon').setAttribute('d', e.data === 1 ? 'M6 5h4v14H6zm8 0h4v14h-4z' : 'M8 5v14l11-7z');
-          $('play').setAttribute('aria-label', e.data === 1 ? 'Pause' : 'Play');
-          $('play').title = e.data === 1 ? 'Pause (K or Space)' : 'Play (K or Space)';
-          if (e.data === 1 || e.data === 2 || e.data === 0) parent.postMessage({ roadmapPlaying: e.data === 1 }, '*');
-          wrap.classList.toggle('ended', e.data === 0);
-          wake(); tick();
-        },
+        onStateChange: function (e) { stateChanged(e.data); },
         onError: function (e) { report(e.data); }
       }
     });
