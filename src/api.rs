@@ -198,6 +198,9 @@ impl App {
             let thoughts = self.thoughts.lock().unwrap_or_else(|e| e.into_inner());
             return Ok(json!({"text":thoughts.get(key).cloned().unwrap_or_default()}));
         }
+        if let Some(id) = path.strip_prefix("api/captions/") {
+            return self.captions(id);
+        }
         self.with_effort(&b["effort"], || self.thinking(&cap(&string(&b["thinking"]), 64), || self.route_on(method, path, b)))
     }
     fn route_on(self: &Arc<Self>, method: &str, path: &str, b: &Value) -> Result<Value> {

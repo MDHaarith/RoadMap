@@ -891,6 +891,30 @@ impl App {
         write_atomic(&f, &serde_json::to_vec(&lines)?)?;
         Ok(lines)
     }
+    // Timed caption lines ([start ms, end ms, text]) for the app's own player, kept on disk after the first read.
+    pub(crate) fn captions(&self, id: &str) -> Result<Value> {
+        if !matches(r"^[\p{L}\p{N}_-]{11}$", id) {
+            return Err(Error::missing());
+        }
+        let f = self.data.join("captions").join(format!("{id}.json"));
+        if let Some(v) = fs::read(&f).ok().and_then(|b| serde_json::from_slice::<Value>(&b).ok()) {
+            return Ok(v);
+        }
+        let d = self.yt(&["--skip-download".into(), format!("https://www.youtube.com/watch?v={id}")])?;
+        let cues = match caption_url(&d) {
+            None => json!([]),
+            Some(url) => {
+                let r = agent(&url, 30)
+                    .and_then(|a| a.get(&url).call())
+                    .map_err(|_| Error::bad("The captions could not be fetched. Check your internet connection and try again."))?;
+                let j: Value = serde_json::from_reader(r.into_reader().take(8 << 20))
+                    .map_err(|_| Error::bad("The captions could not be read."))?;
+                caption_cues(&j)
+            }
+        };
+        write_atomic(&f, &serde_json::to_vec(&cues)?)?;
+        Ok(cues)
+    }
     // What the learner changed since their last commit, limited to the files the app may read.
     fn project_changes(&self, root: &str) -> Result<String> {
         let (root, files, _) = self.read_project(root)?;
@@ -2026,6 +2050,19 @@ fn caption_url(d: &Value) -> Option<String> {
                 .filter(|u| u.starts_with("https://"))
                 .map(String::from)
         })
+}
+// YouTube's json3 captions as [start ms, end ms, text] cues, one per caption event.
+pub(crate) fn caption_cues(j: &Value) -> Value {
+    let cues: Vec<Value> = list(&j["events"])
+        .iter()
+        .filter_map(|e| {
+            let said = list(&e["segs"]).iter().filter_map(|x| x["utf8"].as_str()).collect::<String>();
+            let said = said.split_whitespace().collect::<Vec<_>>().join(" ");
+            let t = e["tStartMs"].as_i64()?;
+            (!said.is_empty()).then(|| json!([t, t + e["dDurationMs"].as_i64().unwrap_or(2000), said]))
+        })
+        .collect();
+    Value::Array(cues)
 }
 // YouTube's json3 captions as (second, text) rows of about twenty seconds each.
 pub(crate) fn transcript_lines(j: &Value) -> Vec<(i64, String)> {

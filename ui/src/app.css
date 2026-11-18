@@ -566,7 +566,7 @@ main:has(.lesson-layout .support:not([hidden])) { padding-right: calc(var(--side
 .player-error { align-content: center; gap: var(--s2); padding: var(--s5); text-align: center; color: var(--player-fg); }
 .player-error p { margin: 0; max-width: 460px; color: var(--player-fg); }
 .player-error a { color: var(--player-link); font-weight: 550; text-decoration: underline; text-underline-offset: 3px; }
-.video-title { display: flex; justify-content: space-between; gap: var(--s4); align-items: baseline; margin: var(--s3) 0 0; }
+.video-title { display: flex; flex-direction: column; gap: 2px; margin: var(--s3) 0 0; }
 .video-title b { font-weight: 600; }
 .chapter-strip { display: flex; align-items: center; gap: var(--s2); margin-top: var(--s2); }
 .chapters { flex: 1; min-width: 0; display: flex; gap: 6px; overflow-x: auto; scroll-snap-type: x proximity; }
@@ -1057,7 +1057,7 @@ button:active:not(:disabled), .btn:active { transform: scale(.97); }
 /* Basis 0 keeps the lesson menu beside a long title; an edit preview (basis 100%) still takes its own line. */
 .lesson-title-row { flex: 1 1 0; min-width: 0; }
 .lesson-article > .row.between { align-items: flex-start; }
-.video-title .small { flex: none; white-space: nowrap; }
+.video-title .small { color: var(--muted); }
 #completed:not([hidden]) { display: inline-flex; flex: none; width: auto; padding: 2px 7px; font-size: 11px; background: var(--bg-subtle); color: var(--muted); }
 .lesson-content:has(#videos) .step-heading { display: block; }
 .step-heading h2 { font-size: 13px; font-weight: 500; color: var(--ink-2); }
