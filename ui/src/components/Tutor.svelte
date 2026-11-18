@@ -5,7 +5,7 @@
   import EffortPicker from './EffortPicker.svelte';
   import StreamText from './StreamText.svelte';
   import { tick, untrack } from 'svelte';
-  import { appState, ask, retryAsk, save, keyFor, stopAsk, clearChat, defaultEffort } from '../lib/state.svelte';
+  import { appState, ask, retryAsk, save, keyFor, stopAsk, clearChat, defaultEffort, flushSave, message } from '../lib/state.svelte';
   import { CHIPS } from '../lib/format';
   import type { Course, Lesson } from '../lib/types';
   import Icon from './Icon.svelte';
@@ -26,6 +26,16 @@
       previous = before; c.state.notes[l.id] = result.notes; save(c);
     } catch (e) { rewriteError = e instanceof Error ? e.message : String(e); }
     finally { rewriting = false; }
+  }
+  // Review cards made from these notes; the server keeps them with the lesson and schedules them in the daily review.
+  let carding = $state(false), cardsNote = $state(''), cardsError = $state('');
+  async function makeCards() {
+    carding = true; cardsNote = ''; cardsError = '';
+    try {
+      await flushSave();
+      const r = await api<{ cards: { front: string; back: string }[] }>('POST', 'api/courses/' + encodeURIComponent(c.id) + '/cards', { lesson: l.id });
+      l.cards = r.cards; cardsNote = `${r.cards.length} review card${r.cards.length === 1 ? '' : 's'} made. They come back in your daily review from tomorrow.`;
+    } catch (e) { cardsError = message(e); } finally { carding = false; }
   }
   let log: HTMLDivElement;
   let key = $derived(keyFor(c, l)), msgs = $derived(appState.chats[key] || []);
@@ -77,4 +87,4 @@
   <form id="compose" onsubmit={e => { e.preventDefault(); void send(); }}><label class="sr" for="msg">Message the tutor</label><textarea id="msg" aria-describedby="compose-hint" use:autogrow={{ min: 43, max: 121, value: text }} rows="2" placeholder="Ask about this lesson…" bind:value={text} onkeydown={e => { if (e.key === 'Enter' && !e.shiftKey && !e.isComposing) { e.preventDefault(); void send(); } }}></textarea><div class="composer-actions"><span class="pickers"><ModelPicker />{#if appState.config.base === 'codex'}<EffortPicker bind:value={() => appState.tutorEffort || defaultEffort(), v => appState.tutorEffort = v} />{/if}</span>{#if busy}<button type="button" class="btn secondary sm send" aria-label="Stop reply" onclick={stopAsk}><Icon name="stop" /></button>{:else}<button class="btn sm send" aria-label="Send message" disabled={!!appState.busyKey || clearing || !text.trim()}><Icon name="arrow" /></button>{/if}</div></form>
   <p class="sr" id="compose-hint">Enter to send, Shift+Enter for a new line</p>
   </div>
-</div><div class="side-pane notes-pane" id="pane-notes" role="tabpanel" aria-labelledby="tab-notes" hidden={tab !== 'notes'}><div class="row"><button class="btn secondary sm" disabled={rewriting || !c.state.notes[l.id]?.trim()} onclick={rewrite}>Rewrite my notes</button>{#if previous !== undefined}<button class="link" onclick={() => { c.state.notes[l.id] = previous!; previous = undefined; save(c); }}>Undo rewrite</button>{/if}</div>{#if rewriting}<Waiting skeleton="notes" title="Rewriting your notes" hint="usually 10–30 seconds" />{/if}{#if rewriteError}<p class="err">{rewriteError}</p>{/if}<label class="sr" for="notes">My notes</label><textarea id="notes" readonly={rewriting} rows="3" placeholder="Write what you learned or want to remember." value={c.state.notes[l.id] || ''} oninput={e => { c.state.notes[l.id] = e.currentTarget.value; save(c); }}></textarea><p class="small">Your notes are saved with this lesson.</p></div></aside>
+</div><div class="side-pane notes-pane" id="pane-notes" role="tabpanel" aria-labelledby="tab-notes" hidden={tab !== 'notes'}><div class="row"><button class="btn secondary sm" disabled={rewriting || !c.state.notes[l.id]?.trim()} onclick={rewrite}>Rewrite my notes</button>{#if previous !== undefined}<button class="link" onclick={() => { c.state.notes[l.id] = previous!; previous = undefined; save(c); }}>Undo rewrite</button>{/if}<button class="btn secondary sm" id="make-cards" disabled={carding || rewriting || !c.state.notes[l.id]?.trim()} title="Turn your notes into questions for the daily review" onclick={makeCards}>{l.cards?.length ? 'Make new review cards' : 'Make review cards'}</button></div>{#if carding}<Waiting skeleton="notes" title="Making review cards from your notes" hint="usually 10–30 seconds" />{/if}{#if cardsError}<p class="err">{cardsError}</p>{:else if cardsNote}<p class="small cards-note" role="status">{cardsNote}</p>{:else if l.cards?.length}<p class="small cards-note">{l.cards.length} review card{l.cards.length === 1 ? '' : 's'} made from these notes. New ones replace them.</p>{/if}{#if rewriting}<Waiting skeleton="notes" title="Rewriting your notes" hint="usually 10–30 seconds" />{/if}{#if rewriteError}<p class="err">{rewriteError}</p>{/if}<label class="sr" for="notes">My notes</label><textarea id="notes" readonly={rewriting} rows="3" placeholder="Write what you learned or want to remember." value={c.state.notes[l.id] || ''} oninput={e => { c.state.notes[l.id] = e.currentTarget.value; save(c); }}></textarea><p class="small">Your notes are saved with this lesson.</p></div></aside>

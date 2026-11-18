@@ -4,6 +4,8 @@ mod api;
 mod chatgpt;
 pub use api::request_body;
 mod exercise;
+mod habits;
+mod offline;
 mod project;
 mod prompts;
 mod storage;
@@ -95,6 +97,11 @@ pub struct App {
     pub(crate) chatgpt: chatgpt::ChatGpt,
     // The latest thinking summary of each request that is still running, by the key the page sent; see `thinking`.
     pub(crate) thoughts: Mutex<HashMap<String, String>>,
+    // Offline video saving per roadmap: {"running", "stop", "failed", "error"}; see `offline.rs`.
+    pub(crate) offline: Mutex<HashMap<String, Value>>,
+    // Parsed roadmap files with the modified time and size they were read at; see `parsed` in storage.rs.
+    #[allow(clippy::type_complexity)]
+    pub(crate) parsed: Mutex<HashMap<PathBuf, ((Option<std::time::SystemTime>, u64), Option<Arc<Value>>)>>,
     pub(crate) pick: Box<dyn Fn(&str) -> String + Send + Sync>,
     pub(crate) yt_program: PathBuf,
 }
@@ -130,6 +137,8 @@ impl App {
             yt_running: Default::default(),
             chatgpt: Default::default(),
             thoughts: Mutex::new(HashMap::new()),
+            offline: Mutex::new(HashMap::new()),
+            parsed: Mutex::new(HashMap::new()),
             pick: Box::new(pick),
             yt_program: if cfg!(windows) { "yt-dlp.exe" } else { "yt-dlp" }.into(),
         }))

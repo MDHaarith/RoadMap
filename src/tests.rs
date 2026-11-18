@@ -308,6 +308,8 @@ fn python_spec_end_to_end() {
         yt_running: Default::default(),
         chatgpt: crate::chatgpt::ChatGpt::at("http://127.0.0.1:9", "http://127.0.0.1:9"),
         thoughts: Mutex::new(Default::default()),
+        offline: Mutex::new(Default::default()),
+        parsed: Mutex::new(Default::default()),
         pick: Box::new(move |k| {
             if k == "file" {
                 export_s.clone()
@@ -398,7 +400,7 @@ fn python_spec_end_to_end() {
     );
     assert_eq!(
         call(&base, "GET", "api/settings", json!({})).1,
-        json!({"base":ai.base,"model":"m","small":"","usage":{},"key_set":true,"theme":"dark","videos":{"style":"","length":"","lang":"","recent":""},"effort":"medium","damaged":0})
+        json!({"base":ai.base,"model":"m","small":"","usage":{},"key_set":true,"theme":"dark","videos":{"style":"","length":"","lang":"","recent":""},"effort":"medium","damaged":0,"goal":3,"os":std::env::consts::OS,"unsandboxed":false})
     );
     assert_eq!(
         fs::metadata(&app.conf).unwrap().permissions().mode() & 0o777,
@@ -1091,7 +1093,7 @@ fn sse_tool_fragments_stream_fallback_and_ai_errors() {
     app.save_config(&json!({"base":format!("http://{address}/v1"),"model":"m"}))
         .unwrap();
     let worker = thread::spawn(move || {
-        for i in 0..5 {
+        for i in 0..7 {
             let mut req = server.recv().unwrap();
             let mut data = String::new();
             req.as_reader().read_to_string(&mut data).unwrap();
@@ -2327,4 +2329,79 @@ fn reopening_a_roadmap_queues_each_caption_fetch_once() {
     assert!(app.queue_transcripts(videos.clone()).is_empty());
     app.transcribing.lock().unwrap().remove("aaaaaaaaaaa");
     assert_eq!(app.queue_transcripts(videos), ["aaaaaaaaaaa"]);
+}
+#[test]
+fn daily_goal_streak_progress_cards_and_library_stamp() {
+    let tmp = tempfile::tempdir().unwrap();
+    let app = isolated_app(tmp.path());
+    let cid = "abcdefabcdef";
+    let quiz = json!([{"q":"Q1?","options":["a","b"],"answer":0,"why":""},{"q":"Q2?","options":["a","b"],"answer":1,"why":""}]);
+    app.save(&json!({"id":cid,"title":"Bread","summary":"","prompt":"","phases":[{"title":"P","blurb":"","lessons":[
+        {"id":"1.1","title":"Starter","goal":"g","practice":{"quiz":quiz,"exercise":null},"cards":[{"front":"Why rest dough?","back":"Gluten relaxes."}]},
+        {"id":"1.2","title":"Shape","goal":"g"}]}],"state":{"checks":{},"done":{},"notes":{},"last":"1.1","review":{"1.1#c0":{"step":-1,"due":0}}}})).unwrap();
+    let stamp = call(&app, "GET", "api/stamp", json!({})).1;
+    let r = |m: &str, p: &str, b: Value| call(&app, m, p, b);
+    assert_eq!(r("PUT", "api/goal", json!({"goal":0})).0, 400);
+    r("PUT", "api/goal", json!({"goal":2}));
+    // Day 1: a finished lesson and a quiz meet the goal of 2.
+    app.day_offset.store(-1, Ordering::Relaxed);
+    let st = |done: Value, quiz: Value| json!({"checks":{},"done":done,"notes":{},"quiz":quiz,"last":"1.1"});
+    assert_eq!(r("PUT", &format!("api/courses/{cid}/state"), st(json!({"1.1":true}), json!({"1.1":{"score":1,"total":2}}))).0, 200);
+    // The same state again counts nothing more.
+    r("PUT", &format!("api/courses/{cid}/state"), st(json!({"1.1":true}), json!({"1.1":{"score":1,"total":2}})));
+    let a = r("GET", "api/activity", json!({})).1;
+    assert_eq!((a["done"].as_u64(), a["streak"].as_u64(), a["goal"].as_u64()), (Some(2), Some(1), Some(2)));
+    // Day 2 has nothing yet: the streak from yesterday still stands until today is over.
+    app.day_offset.store(0, Ordering::Relaxed);
+    assert_eq!(r("GET", "api/activity", json!({})).1["streak"], 1);
+    assert_ne!(r("GET", "api/stamp", json!({})).1, stamp);
+    // The card is due; a review answer is found by the card's front and counts toward today.
+    let due = r("GET", "api/review", json!({})).1;
+    let card = list(&due["questions"]).iter().find(|q| q["kind"] == "card").cloned().unwrap();
+    assert_eq!(card["back"], "Gluten relaxes.");
+    let res = r("POST", "api/review", json!({"course":cid,"lesson":"1.1","kind":"card","q":"Why rest dough?","right":true})).1;
+    assert_eq!(res["step"], 0);
+    assert!(r("POST", "api/review", json!({"course":cid,"lesson":"1.1","kind":"card","q":"Gone?","right":true})).1["changed"] == true);
+    let a = r("GET", "api/activity", json!({})).1;
+    assert_eq!((a["done"].as_u64(), a["streak"].as_u64(), a["best"].as_u64()), (Some(1), Some(1), Some(1)));
+    let p = r("GET", "api/progress", json!({})).1;
+    assert_eq!(p["weak"][0]["lesson"], "1.1");
+    assert_eq!(p["weeks"][7]["asked"], 3);
+    assert_eq!(p["lessons_done"], 1);
+    // Cards need notes; no AI is reached.
+    assert_eq!(r("POST", &format!("api/courses/{cid}/cards"), json!({"lesson":"1.1"})).0, 400);
+    // A project check needs a connected folder.
+    assert_eq!(r("POST", &format!("api/courses/{cid}/check"), json!({"lesson":"1.1"})).0, 400);
+    // Only a program the roadmap's list names can be installed.
+    assert_eq!(r("POST", &format!("api/courses/{cid}/setup"), json!({"install":"sh"})).0, 404);
+    let off = r("GET", &format!("api/courses/{cid}/offline"), json!({})).1;
+    assert_eq!((off["on"].as_bool(), off["total"].as_u64()), (Some(false), Some(0)));
+    assert_eq!(r("GET", &format!("api/courses/{cid}"), json!({})).1["saved_videos"], json!([]));
+}
+#[test]
+#[ignore]
+// cargo test --release --lib big_library_timing -- --ignored --nocapture
+fn big_library_timing() {
+    let tmp = tempfile::tempdir().unwrap();
+    let app = isolated_app(tmp.path());
+    let q = json!({"q":"A question that is about as long as a real one, with some detail?","options":["one option","another option","a third one","the last"],"answer":1,"why":"Because the second option is the one that fits the situation described."});
+    for n in 0..8 {
+        let phases = (1..=15).map(|p| json!({"title":format!("Phase {p}"),"blurb":"b","lessons":(1..=10).map(|l| json!({"id":format!("{p}.{l}"),"title":format!("Lesson {p}.{l} about something"),
+            "goal":"A goal sentence of ordinary length for a lesson.","concepts":["A concept that is a whole paragraph long, as real roadmaps have them, roughly three hundred characters, explaining the idea in some depth so that the learner understands it well enough to apply it in their own project later on.","second concept","third concept"],
+            "tasks":["task one","task two"],"practice":{"quiz":vec![q.clone(); 30]},"videos":[{"id":"aaaaaaaaaaa","title":"t","channel":"c"}]})).collect::<Vec<_>>()})).collect::<Vec<_>>();
+        let done = (1..=15).flat_map(|p| (1..=10).map(move |l| (format!("{p}.{l}"), json!(p < 8)))).collect::<serde_json::Map<_, _>>();
+        app.save(&json!({"id":format!("{n:012x}"),"title":format!("Roadmap {n}"),"summary":"s","prompt":"p","phases":phases,"state":{"done":done,"checks":{},"notes":{},"quiz":{},"last":"1.1"}})).unwrap();
+    }
+    let size: u64 = fs::read_dir(&app.data).unwrap().flatten().map(|e| e.metadata().unwrap().len()).sum();
+    let time = |what: &str, f: &dyn Fn()| {
+        let t = Instant::now();
+        for _ in 0..5 { f(); }
+        println!("{what}: {:.1} ms", t.elapsed().as_secs_f64() * 1000. / 5.);
+    };
+    println!("8 roadmaps x 150 lessons, {} KB on disk", size >> 10);
+    time("library list", &|| { app.library_list().unwrap(); });
+    time("review due", &|| { app.review_due().unwrap(); });
+    time("progress page", &|| { app.stats().unwrap(); });
+    time("open one roadmap (mark_known)", &|| { app.mark_known(app.load("000000000000").unwrap()).unwrap(); });
+    time("library stamp", &|| { app.library_stamp(); });
 }

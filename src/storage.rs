@@ -95,13 +95,30 @@ impl App {
     pub(crate) fn save(&self, c: &Value) -> Result<()> {
         write_atomic(&self.path_of(&string(&c["id"]))?, &serde_json::to_vec(c)?)
     }
-    pub(crate) fn courses(&self) -> Result<Vec<Value>> {
+    pub(crate) fn courses(&self) -> Result<Vec<Arc<Value>>> {
+        let files = self.course_files()?;
+        self.parsed.lock().unwrap_or_else(|e| e.into_inner()).retain(|p, _| files.contains(p));
         // One unreadable file must not hide the whole library.
-        Ok(self.course_files()?.into_iter().filter_map(|p| serde_json::from_slice::<Value>(&fs::read(p).ok()?).ok()).filter(Value::is_object).collect())
+        Ok(files.iter().filter_map(|p| self.parsed(p)).collect())
     }
-    // How many roadmap files cannot be read. Each is parsed and dropped in turn, so only one is in memory at a time.
+    // How many roadmap files cannot be read.
     pub(crate) fn damaged(&self) -> Result<usize> {
-        Ok(self.course_files()?.into_iter().filter(|p| !fs::read(p).ok().and_then(|b| serde_json::from_slice::<Value>(&b).ok()).is_some_and(|v| v.is_object())).count())
+        Ok(self.course_files()?.iter().filter(|p| self.parsed(p).is_none()).count())
+    }
+    // A roadmap file parsed once and kept until its modified time or size changes: the home page, review and search each read
+    // every roadmap, and a six-month roadmap is about a megabyte of JSON. None when the file is not a readable roadmap.
+    fn parsed(&self, p: &Path) -> Option<Arc<Value>> {
+        let m = fs::metadata(p).ok()?;
+        let stamp = (m.modified().ok(), m.len());
+        let mut cache = self.parsed.lock().unwrap_or_else(|e| e.into_inner());
+        if let Some((s, v)) = cache.get(p) {
+            if *s == stamp {
+                return v.clone();
+            }
+        }
+        let v = fs::read(p).ok().and_then(|b| serde_json::from_slice::<Value>(&b).ok()).filter(Value::is_object).map(Arc::new);
+        cache.insert(p.to_path_buf(), (stamp, v.clone()));
+        v
     }
     // The roadmap files, newest first.
     fn course_files(&self) -> Result<Vec<std::path::PathBuf>> {

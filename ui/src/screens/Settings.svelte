@@ -63,6 +63,12 @@
     try { await api('POST', 'api/chatgpt/logout'); } catch (e) { recheckError = message(e); }
     rechecking = false; await recheck(); found = undefined;
   }
+  let runError = $state('');
+  async function setUnsandboxed(on: boolean) {
+    runError = '';
+    try { await api('PUT', 'api/unsandboxed', { on }); if (config) config.unsandboxed = on; appState.config.unsandboxed = on; }
+    catch (e) { runError = message(e); }
+  }
   let effortError = $state('');
   async function setEffort(effort: string) {
     effortError = '';
@@ -95,6 +101,7 @@
       <form id="settings" onsubmit={e => { e.preventDefault(); void saveSettings(); }}><p class="small">Any OpenAI-compatible service works. Its key stays on this computer.</p><p class="small quick-label">Quick fill</p><div class="examples">{#each fills as [k, n]}<button type="button" onclick={() => { config!.base = bases[k]; if (k === 'codex') config!.model = 'default'; void fetchModels(); }}>{n}</button>{/each}</div><label for="base">Base URL</label><input type="text" id="base" required bind:value={config.base} onchange={() => void fetchModels()} placeholder="Your service’s API base URL, or codex for ChatGPT" /><label for="model">Model name</label><input id="model" list="service-models" onfocus={() => void loadModels()} required bind:value={config.model} placeholder="With ChatGPT, default means its first model" /><datalist id="service-models">{#each models.items as m}<option value={m.id}>{modelName(m.id)}</option>{/each}</datalist>{#if models.loading && !models.error}<Skeleton kind="models" />{/if}{#if models.error}<p class="small">{models.error}</p>{/if}<label for="small">Small model (optional)</label><input id="small" bind:value={config.small} placeholder="Leave empty to use the model above" /><p class="small field-note">A cheaper, faster model for quizzes, video picks, marking and placement questions. Roadmaps and the tutor keep the main model.</p><label for="key">API key</label><input id="key" type="password" autocomplete="off" bind:value={key} onchange={() => { if (key.trim()) void fetchModels(); }} placeholder={config.key_set ? 'Saved. Leave empty to keep it.' : 'Not needed for ChatGPT or a local Ollama model'} /><p class="save row"><button class="btn" disabled={busy}><BusyLabel {busy} idle="Save settings" label="Saving…" /></button><span id="saved" role="status">{saved}</span></p>{#if saveError}<p class="err" role="alert">The settings were not saved. {saveError}</p>{/if}</form>
     </details>
   </div></section>
+  {#if config.os && config.os !== 'linux'}<section class="settings-layout" id="exercises"><div><h2>Exercises</h2><p>On Linux, code exercises run in a sandbox. This computer has none.</p></div><div><label class="check-row"><input type="checkbox" id="unsandboxed" checked={!!config.unsandboxed} onchange={e => void setUnsandboxed(e.currentTarget.checked)} /> Run exercises on this computer</label><p class="small">Your code and the lesson’s tests then run like any program you start yourself, with only a time limit. Read an exercise’s tests before you run them.</p>{#if runError}<p class="err" role="alert">{runError}</p>{/if}</div></section>{/if}
   <section class="settings-layout" id="video-prefs"><div><h2>Videos</h2><p>Default preferences for video picks.</p></div><VideoPrefs initial={config.videos} /></section>
   <section class="settings-layout"><div><h2>Usage</h2><p>What this app has sent to and received from your AI service.</p></div><Usage usage={config.usage} /></section></div>{/if}
 </div>

@@ -586,12 +586,115 @@ pub(crate) fn install_lang(lang: &str) -> Result<Value> {
     )
 }
 
+impl App {
+    /// Linux runs exercises in a sandbox. Windows and macOS have none here, so the learner must allow plain runs in Settings first.
+    pub(crate) fn may_run(&self) -> Result<()> {
+        if cfg!(target_os = "linux") || truth(&self.config()["unsandboxed"]) {
+            return Ok(());
+        }
+        Err(Error { status: 403, message: "On this computer exercises run without a sandbox. Turn on “Run exercises on this computer” in Settings to use them.".into() })
+    }
+}
+
+// The program a step names, with the Windows spellings: `python` when only that exists, and `.exe` on what the compilers write.
 #[cfg(not(target_os = "linux"))]
-pub(crate) fn run_code(_lang: &str, _code: &str, _tests: Option<&str>) -> Result<Value> {
-    Err(Error { status: 501, message: "Running exercises in a sandbox works only on Linux for now.".into() })
+fn local_program(prog: &str) -> Option<String> {
+    let prog = if prog == "python3" && !on_path("python3") && on_path("python") { "python" } else { prog };
+    on_path(prog).then(|| prog.to_string())
+}
+
+// Windows and macOS: no sandbox, only the time and output caps, in a temporary folder that is deleted afterwards.
+// shortcut: no memory, process or disk limits and no network block here (Linux has them); add a Job object (Windows) or sandbox-exec (macOS) if learners run untrusted code.
+#[cfg(not(target_os = "linux"))]
+pub(crate) fn run_code(lang: &str, code: &str, tests: Option<&str>) -> Result<Value> {
+    let ([name, _, prog, main, test, run, check], secs) = language(lang)?;
+    let Some(found) = local_program(prog) else {
+        return Ok(json!({"ok":false,"missing":lang,"output":format!("{name} is not installed on this computer yet. Install it to run this exercise.")}));
+    };
+    static ONE: std::sync::Mutex<()> = std::sync::Mutex::new(());
+    let _one = ONE.lock().unwrap_or_else(|e| e.into_inner());
+    let work = tempfile::tempdir()?;
+    fs::write(work.path().join(main), code)?;
+    if let Some(t) = tests {
+        fs::write(work.path().join(test), t)?;
+    }
+    let exe = if cfg!(windows) { "prog.exe" } else { "prog" };
+    let start = Instant::now();
+    let mut output = String::new();
+    // Each step runs directly, never through a shell, so a timeout kills the learner's program itself.
+    for step in if tests.is_some() { check } else { run }.split(" && ") {
+        let mut words = step.split_whitespace().map(|w| match w {
+            "prog" => exe.to_string(),
+            "./prog" => work.path().join(exe).to_string_lossy().into_owned(),
+            w if w == prog => found.clone(),
+            w => w.to_string(),
+        });
+        let Some(program) = words.next() else { continue };
+        let left = secs.saturating_sub(start.elapsed().as_secs()).max(1);
+        let (status, out, err, timeout) = process(Command::new(program).args(words).current_dir(work.path()), left)?;
+        output.push_str(&out);
+        output.push_str(&err);
+        if timeout {
+            return Ok(json!({"ok":false,"output":format!("{}\nStopped: ran longer than {secs} seconds. Look for a loop that never ends.", tail(&output, 20000))}));
+        }
+        if status != 0 {
+            return Ok(json!({"ok":false,"output":tail(&output, 20000)}));
+        }
+    }
+    Ok(json!({"ok":true,"output":tail(&output, 20000)}))
+}
+
+// Homebrew formula names of the exercise languages.
+#[cfg(not(target_os = "linux"))]
+fn brew_name(lang: &str) -> &'static str {
+    match lang {
+        "javascript" => "node",
+        "cpp" | "c" => "gcc",
+        "java" => "openjdk",
+        "r" => "r",
+        _ => LANGS.iter().find(|(l, _, _)| *l == lang).map_or("", |(l, _, _)| *l),
+    }
 }
 
 #[cfg(not(target_os = "linux"))]
-pub(crate) fn install_lang(_lang: &str) -> Result<Value> {
-    Err(Error { status: 501, message: "Installing exercise runtimes works only on Linux for now.".into() })
+pub(crate) fn install_lang(lang: &str) -> Result<Value> {
+    let ([name, _, prog, ..], _) = language(lang)?;
+    if local_program(prog).is_some() {
+        return Ok(json!({"ok":true,"output":format!("{name} is already installed.")}));
+    }
+    if cfg!(target_os = "macos") && on_path("brew") {
+        let pkg = brew_name(lang);
+        let (status, out, err, timeout) = process(Command::new("brew").args(["install", pkg]), 1800)?;
+        let ok = !timeout && status == 0 && local_program(prog).is_some();
+        return Ok(json!({"ok":ok,"output":if ok {format!("{name} is installed.")} else {format!("Install failed. Try in Terminal: brew install {pkg}\n{}", tail(&(out + &err), 2000))}}));
+    }
+    Err(Error::bad(format!("Install {name} from its website, make sure “{prog}” is on PATH, then restart Roadmap.")))
+}
+
+/// Installs a tool the roadmap's "Before you start" list names, through the system's package manager.
+pub(crate) fn install_tool(cmd: &str) -> Result<Value> {
+    if !matches(r"^[A-Za-z0-9_+-][A-Za-z0-9_.+-]{0,39}$", cmd) {
+        return Err(Error::bad("That is not a program name."));
+    }
+    if on_path(cmd) {
+        return Ok(json!({"ok":true,"output":format!("{cmd} is already installed.")}));
+    }
+    // DNF finds the package that provides the program file, so the AI's command name never becomes a package name.
+    let (program, args, again): (&str, Vec<String>, String) = if cfg!(target_os = "linux") {
+        ("pkexec", vec!["dnf".into(), "install".into(), "-y".into(), format!("/usr/bin/{cmd}")], format!("sudo dnf install /usr/bin/{cmd}"))
+    } else if cfg!(target_os = "macos") && on_path("brew") {
+        ("brew", vec!["install".into(), cmd.into()], format!("brew install {cmd}"))
+    } else {
+        return Err(Error::bad(format!("Install {cmd} from its website, then press Check again.")));
+    };
+    let (status, out, err, timeout) = process(Command::new(program).args(&args), 1800)
+        .map_err(|_| Error::bad(format!("Can't install from inside the app on this system. Run: {again}")))?;
+    if timeout {
+        return Err(Error::bad(format!("The install took too long and was stopped. Run: {again}")));
+    }
+    if cfg!(target_os = "linux") && [126, 127].contains(&status) {
+        return Err(Error::bad(format!("Nothing was installed, because the password dialog was cancelled. You can also run: {again}")));
+    }
+    let ok = on_path(cmd);
+    Ok(json!({"ok":ok,"output":if ok {format!("{cmd} is installed.")} else {format!("Install failed. Try: {again}\n{}", tail(&(out + &err), 2000))}}))
 }

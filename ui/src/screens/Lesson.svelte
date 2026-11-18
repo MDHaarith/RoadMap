@@ -9,6 +9,7 @@
   import Formatted from '../components/Formatted.svelte';
   import Videos from '../components/Videos.svelte';
   import ProjectFiles from '../components/ProjectFiles.svelte';
+  import WorkCheck from '../components/WorkCheck.svelte';
   import Practice from '../components/Practice.svelte';
   import Tutor from '../components/Tutor.svelte';
   import Chart from '../components/Chart.svelte';
@@ -91,7 +92,7 @@
       {:else if step === 'graphs'}{#each l.charts || [] as chart}<Chart {chart} />{/each}
       {:else if step === 'lookup'}{#each l.lookups || [] as x, j}<div class="lookup"><a href={`https://duckduckgo.com/?q=${enc(x)}`}><Icon name="Look it up yourself" /> {x}</a><button class="btn secondary sm" aria-label={`Copy search phrase ${j + 1}`} onclick={e => copy(x, e.currentTarget)}><Icon name="copy" /> Copy</button></div>{/each}
       {:else if step === 'read'}<ProjectFiles {c} {l} />
-      {:else if step === 'do'}{#if l.warn}<div class="note warn"><strong><Icon name="Safety" /> Before you begin</strong><p><Formatted text={l.warn} /></p></div>{/if}<ol class="content-list">{#each l.tasks || [] as x}<li><div class="concept-copy"><Formatted text={x} /></div></li>{/each}</ol>
+      {:else if step === 'do'}{#if l.warn}<div class="note warn"><strong><Icon name="Safety" /> Before you begin</strong><p><Formatted text={l.warn} /></p></div>{/if}<ol class="content-list">{#each l.tasks || [] as x}<li><div class="concept-copy"><Formatted text={x} /></div></li>{/each}</ol>{#if c.folder || c.work}{#key l.id}<WorkCheck {c} {l} />{/key}{/if}
       {:else if step === 'practice'}<Practice {c} {l} />
       {:else if step === 'done'}<div class="checks finish-checks">{#each l.done || [] as x, j}<label><input class="sr" type="checkbox" checked={!!c.state.checks[l.id + '#' + j]} onchange={e => { if (e.currentTarget.checked) c.state.checks[l.id + '#' + j] = true; else delete c.state.checks[l.id + '#' + j]; achievement = ''; save(c); }} /><span class="finish-check" class:complete-mark={!!c.state.checks[l.id + '#' + j]} aria-hidden="true">{#if c.state.checks[l.id + '#' + j]}<Icon name="check" />{/if}</span><span><Formatted text={x} /></span></label>{/each}</div><div class="finish"><div id="fstate" role="status" class={achievement ? 'celebrate' : 'small'}>{#if achievement}<span class="completion-route" aria-hidden="true"><span class="completion-stop complete-mark"><Icon name="check" /></span><i class="completion-traveller"></i><span class="completion-next"></span></span><strong>{achievement}</strong><p>{nextL ? 'Next lesson: ' + nextL.title : 'You have reached the end of this roadmap.'}</p>{:else}{c.state.done[l.id] ? 'Lesson complete.' : checked(c, l).every(Boolean) ? 'All checks are ticked. You can complete the lesson.' : ok ? 'You passed the quiz. You can complete the lesson.' : 'Tick every check, or score at least 80% on the quiz, to complete the lesson.'}{/if}</div></div>{/if}
     </div>

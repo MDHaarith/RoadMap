@@ -4,7 +4,7 @@ import { loadModels } from './models.svelte';
 import { watchThinking } from './thinking';
 import { openUrl } from '@tauri-apps/plugin-opener';
 import { lessons, checked, passed } from './progress';
-import type { Course, Lesson, LibraryCourse, Settings, ReviewData, Message, Session, RunState } from './types';
+import type { Course, Lesson, LibraryCourse, Settings, ReviewData, Message, Session, RunState, Activity } from './types';
 
 export const appState = $state({
   course: null as Course | null,
@@ -12,6 +12,8 @@ export const appState = $state({
   screen: 'loading', error: '', routeVersion: 0,
   openVideo: undefined as string | undefined, library: [] as LibraryCourse[], config: {} as Settings,
   review: { count: 0, questions: [] } as ReviewData,
+  // Today's steps toward the daily goal and the streak, for the home page.
+  activity: null as Activity | null,
   toast: '', ideasOpen: false, ideas: null as string[] | null,
   busyKey: '', adapting: false,
   // True while the ChatGPT sign-in page is open in the browser; see signInChatGpt.
@@ -124,11 +126,11 @@ export async function saveFirst() {
 }
 export async function loadLibrary() {
   const version = appState.routeVersion;
-  const [list, cfg, review] = await Promise.all([
-    api<LibraryCourse[]>('GET', 'api/courses'), api<Settings>('GET', 'api/settings'), api<ReviewData>('GET', 'api/review'),
+  const [list, cfg, review, activity] = await Promise.all([
+    api<LibraryCourse[]>('GET', 'api/courses'), api<Settings>('GET', 'api/settings'), api<ReviewData>('GET', 'api/review'), api<Activity>('GET', 'api/activity'),
   ]);
   if (version !== appState.routeVersion) return;
-  appState.library = list; appState.config = cfg; appState.review = review; appState.screen = 'library';
+  appState.library = list; appState.config = cfg; appState.review = review; appState.activity = activity; appState.screen = 'library';
   // ChatGPT model names come from the server, so load them early: the tutor then shows "GPT-5.6 Terra", not the raw id.
   if (cfg.base === 'codex') void loadModels();
 }
@@ -154,7 +156,7 @@ export async function route() {
       return;
     }
     appState.course = null;
-    if (a === 'settings' || a === 'review' || a === 'mistakes' || a === 'search' || a === 'import') appState.screen = a;
+    if (a === 'settings' || a === 'review' || a === 'mistakes' || a === 'search' || a === 'import' || a === 'progress') appState.screen = a;
     else await loadLibrary();
   } catch (error) {
     if (version !== appState.routeVersion) return;

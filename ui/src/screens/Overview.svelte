@@ -4,7 +4,7 @@
   import { appState, save, toast, message, adaptNow, expandPhase, flushSave, saveFirst } from '../lib/state.svelte';
   import { lessons, nextLesson, status, locked, stageOpen, stageLessons } from '../lib/progress';
   import { enc, href } from '../lib/format';
-  import type { Course, PlanPreview } from '../lib/types';
+  import type { Course, PlanPreview, OfflineStatus } from '../lib/types';
   import PlanOptions from '../components/PlanOptions.svelte';
   import VideoPrefs from '../components/VideoPrefs.svelte';
   import LessonActions from '../components/LessonActions.svelte';
@@ -23,7 +23,27 @@
   let bulk = $state<{ stop: boolean; text: string; error: string } | null>(null);
   let preview = $state<PlanPreview>(), revising = $state(false), prefsOpen = $state(false), originalAsk = $state(''), reviseError = $state('');
   let alive = true;
+  // "Before you start" tools: the one being installed, and why the last install failed.
+  let installing = $state(''), installError = $state('');
+  async function install(cmd: string) {
+    installing = cmd; installError = '';
+    try {
+      const r = await api<{ ok: boolean; output: string }>('POST', 'api/courses/' + enc(c.id) + '/setup', { install: cmd });
+      if (r.ok && found) found[cmd] = true; else installError = r.output;
+    } catch (error) { installError = message(error); } finally { installing = ''; }
+  }
+  let offline = $state<OfflineStatus>();
+  const loadOffline = () => api<OfflineStatus>('GET', 'api/courses/' + enc(c.id) + '/offline').then(r => { if (alive) offline = r; }, () => {});
+  async function toggleOffline() {
+    const on = !c.offline;
+    if (!on && !(await confirmAsk({ message: 'Delete the videos saved for offline use? Lessons, notes and practice stay.', action: 'Delete videos' }))) return;
+    try { offline = await api<OfflineStatus>('POST', 'api/courses/' + enc(c.id) + '/offline', { on }); c.offline = on; if (!on) c.saved_videos = []; }
+    catch (error) { toast(message(error)); }
+  }
+  const mb = (b: number) => b >= 1e9 ? (b / 1e9).toFixed(1) + ' GB' : Math.round(b / 1e6) + ' MB';
   onMount(() => {
+    void loadOffline();
+    const offlineTimer = setInterval(() => { if (c.offline && document.visibilityState === 'visible') void loadOffline(); }, 3000);
     let timer: ReturnType<typeof setTimeout>;
     async function watchVideoSearch(attempt = 0) {
       if (!alive || attempt >= 12 || !lessons(c).some(l => !l.videos && !l.stub)) return;
@@ -39,7 +59,7 @@
     }
     void watchVideoSearch();
     if (c.needs?.some(x => x.command)) api<{ found: Record<string, boolean> }>('POST', 'api/courses/' + enc(c.id) + '/setup').then(r => { if (alive) found = r.found; }).catch(() => { found = false; });
-    return () => { alive = false; clearTimeout(timer); if (bulk) bulk.stop = true; };
+    return () => { alive = false; clearTimeout(timer); clearInterval(offlineTimer); if (bulk) bulk.stop = true; };
   });
   async function writeEveryLesson() {
     const phases = c.phases.map((p, i) => ({ i, id: p.lessons.find(l => l.stub)?.id })).filter(p => p.id);
@@ -122,6 +142,7 @@
         <button id="adapt" disabled={appState.adapting} onclick={() => act(() => adaptNow(true))}>{appState.adapting ? 'Reading your results…' : 'Adjust to my progress'}<small>Add practice or drop lessons, based on your quiz and exercise results</small></button>
         <button id="revise-open" aria-expanded={reviseOpen} aria-controls="revise" onclick={() => act(async () => { reviseOpen = !reviseOpen; await tick(); if (reviseOpen) document.getElementById('ask')?.focus(); })}>Change my roadmap<small>Take the lessons you have not started somewhere else</small></button>
         {#if ls.some(l => l.stub) && !bulk?.text}<button id="write-all" onclick={writeEveryLesson}>Write every lesson now<small>Writes the remaining phases now. Uses many AI tokens.</small></button>{/if}
+        <button id="offline" onclick={() => act(toggleOffline)}>{c.offline ? 'Remove offline videos' : 'Save videos for offline'}<small>{c.offline ? 'Deletes the saved copies. Videos then play from YouTube again.' : 'Downloads each lesson’s main video (up to 480p), so lessons work without internet.'}</small></button>
         {#if !c.folder}<button id="work" onclick={() => act(work)}>{c.work ? 'Disconnect folder: ' + c.work.split(/[\\/]/).pop() : 'Connect my project folder'}<small>The tutor can then read the text files in that folder. Parts of them are sent to your AI service.</small></button>{/if}
         <hr />
         <button id="export" onclick={() => act(() => exportCourse('export'))}>Export<small>Save this roadmap with your progress and notes to a file</small></button>
@@ -144,9 +165,10 @@
   {#if bulk?.text || bulk?.error}<div class="row bulk-row">{#if bulk?.text}{#key bulk.text}<Waiting skeleton="plan" inline title={`${bulk.text}. Each phase takes about a minute.`} />{/key}<button class="btn secondary sm" id="stop-writing" disabled={bulk.stop} onclick={() => { if (bulk) bulk.stop = true; }}><BusyLabel busy={bulk.stop} idle="Stop" label="Stopping after this phase…" /></button>{/if}{#if bulk?.error}<p class="err">{bulk.error}</p>{/if}</div>{/if}
   {#if prefsOpen}<section class="note" id="video-prefs" aria-labelledby="video-prefs-title"><h2 id="video-prefs-title" tabindex="-1">Video preferences for this roadmap</h2><VideoPrefs initial={c.prefs} course={c} /><button type="button" class="link revise-cancel" onclick={() => { prefsOpen = false; menuEl?.querySelector('summary')?.focus(); }}>Close</button></section>{/if}
   <form id="revise" class="note" hidden={!reviseOpen} onsubmit={e => { e.preventDefault(); void revise(); }}><strong>Change my roadmap</strong><p>Say what should change in the lessons you have not started. Your progress stays.</p><div class="own"><input id="ask" required maxlength="600" aria-label="What should change in the lessons you have not started?" placeholder="For example: show me how this is used in industry, with real applications" bind:value={ask} /><button class="btn" disabled={revising}><BusyLabel busy={revising} idle="Preview changes" label="Preparing options…" /> <Icon name="arrow" /></button></div>{#if revising}<Waiting skeleton="plans" title="Preparing roadmap options" hint="this can take about a minute" />{/if}{#if reviseError}<LoadError what="The options could not be prepared." error={reviseError} retry={() => void revise()} />{/if}{#if preview}<PlanOptions {preview} ask={originalAsk} cancel={() => preview = undefined} applied={() => { preview = undefined; reviseOpen = false; ask = ''; }} />{/if}<button type="button" class="link revise-cancel" hidden={!!preview} onclick={() => { reviseOpen = false; reviseError = ''; menuEl?.querySelector('summary')?.focus(); }}>Cancel</button></form>
+  {#if c.offline && offline}<p class="offline-status" role="status"><Icon name="Watch" /> {offline.running ? 'Saving videos for offline' : 'Videos saved for offline'}: {offline.saved} of {offline.total} · {mb(offline.bytes)}{#if offline.failed && !offline.running}{' · '}{offline.failed} could not be saved. {offline.error}{/if}</p>{/if}
   <div id="video-status">{#if pending}<p class="video-status"><Icon name="Watch" /> Videos may still be arriving for {pending} of {ls.length} lessons. Open any lesson to search again if needed.</p>{/if}</div>
   {#if c.changes?.length}{@const x = c.changes[c.changes.length - 1]}<div class="note change"><strong>Roadmap updated</strong><p>{x.note}</p>{#if x.added.length}<p class="small">Added: {x.added.join(', ')}</p>{/if}{#if x.dropped.length}<p class="small">Removed: {x.dropped.join(', ')}</p>{/if}{#if x.changed?.length}<p class="small">Rewritten: {x.changed.join(', ')}</p>{/if}</div>{/if}
-  {#if c.needs?.length}<details class="needs" open={!n}><summary>Before you start: {c.needs.length} thing{c.needs.length === 1 ? '' : 's'} to have ready</summary><ul id="needs">{#each c.needs as x, i}<li><label><input type="checkbox" checked={!!c.state.have?.[i]} onchange={e => { if (e.currentTarget.checked) (c.state.have ||= {})[i] = true; else delete c.state.have?.[i]; save(c); }} /><span><b>{x.name}</b>{#if x.why}<small>{x.why}</small>{/if}</span></label>{#if x.kind === 'tool' && x.command && found !== false}{#if !found}<span class="sk tag-line" role="status"><span class="sr">Checking</span></span>{:else}<span class="tag" class:ok={found[x.command]}>{found[x.command] ? 'Installed' : 'Not found on this computer'}</span>{/if}{/if}</li>{/each}</ul></details>{/if}
+  {#if c.needs?.length}<details class="needs" open={!n}><summary>Before you start: {c.needs.length} thing{c.needs.length === 1 ? '' : 's'} to have ready</summary><ul id="needs">{#each c.needs as x, i}<li><label><input type="checkbox" checked={!!c.state.have?.[i]} onchange={e => { if (e.currentTarget.checked) (c.state.have ||= {})[i] = true; else delete c.state.have?.[i]; save(c); }} /><span><b>{x.name}</b>{#if x.why}<small>{x.why}</small>{/if}</span></label>{#if x.kind === 'tool' && x.command && found !== false}{#if !found}<span class="sk tag-line" role="status"><span class="sr">Checking</span></span>{:else}<span class="tag" class:ok={found[x.command]}>{found[x.command] ? 'Installed' : 'Not found on this computer'}</span>{#if !found[x.command] && appState.config.os !== 'windows'}<button type="button" class="btn secondary sm install" disabled={!!installing} onclick={() => void install(x.command!)}><BusyLabel busy={installing === x.command} idle="Install" label="Installing…" /></button>{/if}{/if}{/if}</li>{/each}</ul>{#if installError}<p class="err" role="alert">{installError}</p>{/if}</details>{/if}
   <section class="route-board" aria-labelledby="lessons-heading"><div class="route-heading"><h2 id="lessons-heading">Lessons</h2><span class="small">{c.phases.length} phases</span></div>
     {#each c.phases as p, pi}
       {#if c.stages && p.stage !== undefined && c.phases[pi - 1]?.stage !== p.stage}{@const st = c.stages[p.stage]}{@const sl = stageLessons(c, p.stage)}<button type="button" class="stage-head" aria-expanded={stageOpen(c, p.stage)} onclick={() => toggleStage(p.stage!)}><span><span class="stage-label">Stage {p.stage + 1}</span><strong>{st.title}</strong>{#if st.blurb}<span class="blurb">{st.blurb}</span>{/if}</span><span class="stage-count">{doneIn(sl)} / {sl.length} lessons <Icon name="chevron" /></span></button>{/if}

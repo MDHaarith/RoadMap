@@ -1119,3 +1119,13 @@ button:active:not(:disabled), .btn:active { transform: scale(.97); }
 .import-meta { display: flex; align-items: center; flex-wrap: wrap; gap: var(--s2) var(--s4); margin-top: var(--s3); }
 .import-meta .small { color: var(--muted); overflow: hidden; text-overflow: ellipsis; white-space: nowrap; max-width: 100%; }
 #mistakes-roadmap { width: 300px; max-width: 100%; }
+.check-row { display: flex; align-items: center; gap: var(--s3); font-weight: 500; cursor: pointer; }
+.needs .install { margin-left: var(--s2); }
+.offline-status { display: flex; flex-wrap: wrap; align-items: center; gap: var(--s3); font-size: var(--t-sm); color: var(--muted); margin: 0 0 var(--s3); }
+.offline-banner { margin: 0; padding: 6px var(--s4); font-size: var(--t-sm); background: var(--hover); color: var(--ink-2); text-align: center; }
+.cards-note { margin-top: var(--s2); }
+.work-check { margin-top: var(--s4); }
+.work-check ul { list-style: none; padding: 0; margin: var(--s3) 0; display: grid; gap: var(--s3); }
+.work-check li { display: grid; grid-template-columns: 22px 1fr; gap: var(--s2); }
+.work-check li p { margin: 2px 0 0; color: var(--ink-2); font-size: var(--t-sm); }
+.card-back { margin-top: var(--s3); padding: var(--s3) var(--s4); border-left: 3px solid var(--accent); background: var(--hover); border-radius: var(--r-sm); }

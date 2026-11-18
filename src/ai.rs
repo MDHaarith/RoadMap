@@ -262,6 +262,75 @@ impl App {
         let answer = self.ask_as(true, &messages(NOTES_PROMPT, user), &mut None, json!({}))?;
         Ok(json!({"notes":string(&answer["content"])}))
     }
+    /// Review cards from the lesson's saved notes. They replace the lesson's earlier cards and are first due tomorrow.
+    pub(crate) fn make_cards(&self, cid: &str, b: &Value) -> Result<Value> {
+        let c = self.load(cid)?;
+        let l = lesson(&c, &b["lesson"])?;
+        let lid = string(&l["id"]);
+        let notes = cap(string(&c["state"]["notes"][&lid]).trim(), 20000);
+        if notes.chars().count() < 40 {
+            return Err(Error::bad("Write a few lines of notes first. Cards are made from your own notes."));
+        }
+        let user = format!("Lesson: {}\nGoal: {}\nConcepts: {}\nLearner notes:\n{}", text(&l["title"]), text(&l["goal"]), joined(&l["concepts"]), notes);
+        let d = parse(&self.llm(messages(CARDS_PROMPT, user), "cards", obj(json!({"cards":arr(obj(json!({"front":s(),"back":s()})))})))?, "review cards")?;
+        let mut cards: Vec<Value> = vec![];
+        for x in list(&d["cards"]) {
+            let (front, back) = (cap(string(&x["front"]).trim(), 300), cap(string(&x["back"]).trim(), 600));
+            if !front.is_empty() && !back.is_empty() && !cards.iter().any(|k| k["front"] == front.as_str()) && cards.len() < 10 {
+                cards.push(json!({"front":front,"back":back}));
+            }
+        }
+        if cards.is_empty() {
+            return Err(Error::bad("The AI made no cards from these notes. Try again."));
+        }
+        let _guard = self.guard();
+        let mut c = self.load(cid)?;
+        lesson_mut(&mut c, &lid)?["cards"] = json!(cards);
+        if !c["state"]["review"].is_object() {
+            c["state"]["review"] = json!({});
+        }
+        let r = c["state"]["review"].as_object_mut().unwrap();
+        r.retain(|k, _| k.strip_prefix(&format!("{lid}#c")).is_none_or(|n| n.parse::<usize>().is_err()));
+        for k in 0..cards.len() {
+            r.insert(format!("{lid}#c{k}"), json!({"step":-1,"due":self.today()+1}));
+        }
+        self.save(&c)?;
+        Ok(json!({"cards":cards}))
+    }
+    /// Reads the learner's project folder and says, task by task, whether it shows this lesson's work done. Advisory only: it ticks nothing.
+    pub(crate) fn check_work(&self, cid: &str, b: &Value) -> Result<Value> {
+        let c = self.load(cid)?;
+        let l = lesson(&c, &b["lesson"])?;
+        let root = root_of(&c);
+        if root.is_empty() {
+            return Err(Error::bad("Connect your project folder first (roadmap page, More)."));
+        }
+        let (root, files, _) = self.read_project(&root)?;
+        let changes = self.project_changes(&root)?;
+        let mut shown = self.lesson_files(&c, l);
+        let mut room = 12000usize.saturating_sub(shown.iter().map(|s| s.chars().count()).sum());
+        // The changed files themselves, newest work first, within what the app may read.
+        for line in changes.lines().skip(1).take_while(|l| !l.trim().is_empty()) {
+            let Some(path) = line.split_whitespace().last() else { continue };
+            if room == 0 { break }
+            if let Some(body) = self.project_file(&root, &json!(path)) {
+                shown.push(format!("--- {path} ---\n{}", cap(&body, room)));
+                room = room.saturating_sub(body.chars().count());
+            }
+        }
+        let user = format!(
+            "Lesson: {}\nGoal: {}\nTasks:\n{}\nDone when:\n{}\n\n{}\n\nFiles in the project:\n{}\n\nFile contents:\n{}",
+            text(&l["title"]), text(&l["goal"]),
+            list(&l["tasks"]).iter().map(|t| format!("- {}", text(t))).collect::<Vec<_>>().join("\n"),
+            list(&l["done"]).iter().map(|t| format!("- {}", text(t))).collect::<Vec<_>>().join("\n"),
+            changes, files.iter().take(200).cloned().collect::<Vec<_>>().join("\n"), shown.join("\n\n"),
+        );
+        let d = parse(&self.llm(messages(CHECK_PROMPT, user), "check",
+            obj(json!({"verdict":{"type":"string","enum":["done","partly","not_yet"]},"summary":s(),"items":arr(obj(json!({"task":s(),"met":{"type":"boolean"},"note":s()}))),"next":s()})))?, "a work check")?;
+        Ok(json!({"verdict":if ["done","partly","not_yet"].iter().any(|v| d["verdict"]==*v) {d["verdict"].clone()} else {json!("partly")},
+            "summary":cap(&string(&d["summary"]),600),"next":cap(&string(&d["next"]),300),
+            "items":list(&d["items"]).iter().take(15).map(|i| json!({"task":cap(&string(&i["task"]),300),"met":i["met"]==true,"note":cap(&string(&i["note"]),500)})).collect::<Vec<_>>()}))
+    }
     pub(crate) fn fetch_transcripts(self: &Arc<Self>, videos: Vec<Value>) {
         let ids = self.queue_transcripts(videos);
         if ids.is_empty() {
@@ -346,7 +415,14 @@ impl App {
             req = req.set("Authorization", &auth);
         }
         let sent = body.to_string();
-        let r = match req.send_string(&sent) {
+        let mut tries = 0;
+        let r = loop {
+            match req.clone().send_string(&sent) {
+                Err(ureq::Error::Status(500.., _) | ureq::Error::Transport(_)) if tries < 2 && self.retry_wait(tries) => tries += 1,
+                r => break r,
+            }
+        };
+        let r = match r {
             Ok(r) => r,
             Err(ureq::Error::Status(code, r)) => {
                 if !extra.is_empty() && [400, 404, 422, 501].contains(&code) {
@@ -432,8 +508,13 @@ impl App {
             json!({"content":content,"tool_calls":if calls.is_empty(){Value::Null}else{json!(calls.into_values().collect::<Vec<_>>())}}),
         )
     }
+    /// Waits before another try of a failed AI request: 2 s, then 6 s. Always true, so it can guard a match arm.
+    pub(crate) fn retry_wait(&self, tries: u32) -> bool {
+        std::thread::sleep(Duration::from_secs(if cfg!(test) { 0 } else { 2 * 3u64.pow(tries) }));
+        true
+    }
     fn llm(&self, msgs: Vec<Value>, name: &str, schema: Value) -> Result<String> {
-        let small = ["practice", "videos", "mark", "placement"].contains(&name);
+        let small = ["practice", "videos", "mark", "placement", "cards"].contains(&name);
         let m=self.ask_as(small,&msgs,&mut None,json!({"response_format":{"type":"json_schema","json_schema":{"name":name,"strict":true,"schema":schema}}}))?;
         Ok(string(&m["content"]))
     }
@@ -1676,6 +1757,7 @@ impl App {
             }
             let ex = &l["practice"]["exercise"];
             language(&string(&ex["lang"]))?;
+            self.may_run()?;
             let out = run_code(
                 &string(&ex["lang"]),
                 &cap(&answer, 100000),

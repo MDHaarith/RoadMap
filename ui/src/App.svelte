@@ -24,6 +24,7 @@
   import Search from './screens/Search.svelte';
   import Mistakes from './screens/Mistakes.svelte';
   import Import from './screens/Import.svelte';
+  import Progress from './screens/Progress.svelte';
   function toastMotion(node: Element) {
     const styles = getComputedStyle(node);
     return {
@@ -44,6 +45,7 @@
     if (!a || !/^https?:/i.test(a.href) || a.origin === location.origin) return;
     e.preventDefault(); void openUrl(a.href).catch(error => toast(message(error)));
   }
+  let online = $state(navigator.onLine);
   $effect(() => { if (appState.screen === 'lesson' && appState.course && !appState.current) location.hash = href(appState.course.id); });
   // After a route change the clicked link is gone and focus falls to the page; start keyboard and screen-reader users at the new page title.
   $effect(() => {
@@ -56,11 +58,12 @@
     });
   });
 </script>
-<svelte:window onhashchange={() => void route()} />
+<svelte:window onhashchange={() => void route()} ononline={() => online = true} onoffline={() => online = false} />
 <svelte:document onclick={externalLink} onauxclick={e => { if (e.button === 1) externalLink(e); }} />
 <TopBar />
 {#if appState.toast}<p id="toast" class="err" role="alert" transition:toastMotion>{appState.toast}</p>{/if}
 <main>
+  {#if !online}<p class="offline-banner" role="status">You’re offline. Lessons, notes, practice and saved videos still work. The tutor and new lessons need the internet.</p>{/if}
   {#if !updates.dismissed && (updates.state === 'ready' || updates.state === 'download')}<aside class="update-notice"><UpdateStatus /><button class="btn ghost sm" aria-label="Dismiss update notice" onclick={() => updates.dismissed = true}>Dismiss</button></aside>{/if}
   {#if appState.saveError}<aside class="update-notice save-notice" role="alert"><span>Your progress is not saved yet. {appState.saveError} It stays here and is sent again with your next change.</span><button class="btn secondary sm" onclick={() => void flushSave()}>Try again</button></aside>{/if}
   {#key appState.routeVersion}
@@ -74,6 +77,7 @@
     {:else if appState.screen === 'search'}<Search />
     {:else if appState.screen === 'mistakes'}<Mistakes />
     {:else if appState.screen === 'import'}<Import />
+    {:else if appState.screen === 'progress'}<Progress />
     {:else if appState.screen === 'error'}{@const roadmap = location.hash.startsWith('#/c/')}<div class="wrap narrow screen-enter">{#if roadmap}<a class="back-map" href="#/"><Icon name="back" /> Your library</a>{/if}<div class="page-head"><h1>{roadmap ? 'Could not open this roadmap' : 'Could not open your library'}</h1></div><LoadError what={roadmap ? 'The roadmap could not load.' : 'Your roadmaps could not load.'} error={appState.error} retry={() => void route()} /></div>
     {:else}<div class="wrap narrow screen-enter"><a class="back-map" href="#/"><Icon name="back" /> Your library</a><div class="page-head"><h1>Your roadmap</h1></div><Waiting inline title="Opening your roadmap" /></div>{/if}
   {/key}
