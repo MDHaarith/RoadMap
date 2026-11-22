@@ -2,7 +2,7 @@
 use std::os::unix::fs::PermissionsExt;
 use super::*;
 use crate::exercise::{clean_practice, run_code};
-use crate::ai::min_cover;
+
 use std::{
     io::Write,
 
@@ -75,19 +75,21 @@ impl FakeAI {
                             && system.contains("[x] Dough holds together"),
                     "{system}"
                 );
-                let text = if system.contains("placement interview inside") {
+                let text = if system.contains("Design an editable course blueprint") {
+                    json!({"challenge":"Deliver the project","criteria":"Justify the result","milestones":"Produce an artifact and check it","diagnostic":"Explain your starting approach"}).to_string()
+                } else if system.contains("Audit the generated course") {
+                    json!({"checkpoints":[{"lesson":"1.1","preparation":"Gather inputs","task":"Deliver the project","criteria":"Justify the result"}]}).to_string()
+                } else if system.contains("Create one fresh independent") {
+                    json!({"task":"Apply the skill to a fresh example and explain the result."}).to_string()
+                } else if system.contains("Critique the submitted work") {
+                    json!({"evidence":"The attempt describes its method.","improvement":"Supply evidence for the result.","next":"Try the same method on a new case."}).to_string()
+                } else if system.contains("placement interview inside") {
                     assert!(
                         reject2.load(Ordering::Relaxed)
-                            || b["response_format"]["json_schema"]["schema"]["properties"]["done"]
+                            || b["response_format"]["json_schema"]["schema"]["properties"]["questions"]
                                 .is_object()
                     );
-                    if user.contains("Used an oven? My answer: Yes") {
-                        json!({"done":true,"q":"","options":[]})
-                    } else if user.contains("Baked before? My answer: No, never") {
-                        json!({"done":false,"q":"Used an oven?","options":["No, never","Yes"]})
-                    } else {
-                        json!({"done":false,"q":"Baked before?","options":["No, never","Yes",3]})
-                    }
+                    json!({"questions":[{"q":"Baked before?","options":["No, never","Yes",3]},{"q":"Used an oven?","options":["No, never","Yes"]},{"q":"","options":["x"]},{"q":"No options","options":[]}]})
                     .to_string()
                 } else if system.contains("You name the videos") {
                     assert!(user.contains("Lesson: Mix") && user.contains("0. Full lesson (Baker). Covers hydration."), "{user}");
@@ -95,11 +97,11 @@ impl FakeAI {
                 } else if system.contains("verify the videos") {
                     // The transcript check: the fixture has chapters and no captions.
                     assert!(user.contains("Concepts (numbered for covers): 0. "), "{user}");
-                    assert!(user.contains("--- Video 0: Full lesson | Baker | 15 min | 1200 views\nChapters: 0:00 Intro; 1:15 Mixing\nTranscript: none available"), "{user}");
+                    assert!(user.contains("--- Video 0: Full lesson | Baker | 900 seconds | 1200 views\nChapters: 0:00 Intro; 1:15 Mixing\nTranscript: none available"), "{user}");
                     if user.contains("Lesson: Nothing fits") {
                         json!({"picks":[]}).to_string()
                     } else {
-                        json!({"picks":[{"i":0,"why":"","start":75,"covers":[0,7]},{"i":0,"why":"twice","start":0,"covers":[0]},{"i":9,"why":"made up","start":0,"covers":[0]}]}).to_string()
+                        json!({"picks":[{"i":0,"why":"","segments":[{"start":75,"end":900,"title":"Mixing"}],"action":"Mix the dough.","covers":[0,7]},{"i":0,"why":"twice","start":0,"covers":[0]},{"i":9,"why":"made up","start":0,"covers":[0]}]}).to_string()
                     }
                 } else if system.contains("choose the videos") {
                     assert!(
@@ -308,6 +310,7 @@ fn python_spec_end_to_end() {
         yt_running: Default::default(),
         chatgpt: crate::chatgpt::ChatGpt::at("http://127.0.0.1:9", "http://127.0.0.1:9"),
         thoughts: Mutex::new(Default::default()),
+        drafts: Mutex::new(Default::default()),
         offline: Mutex::new(Default::default()),
         parsed: Mutex::new(Default::default()),
         pick: Box::new(move |k| {
@@ -416,36 +419,11 @@ fn python_spec_end_to_end() {
     .1;
     assert_eq!(
         first,
-        json!({"done":false,"q":"Baked before?","options":["No, never","Yes","3"]})
+        json!({"questions":[{"q":"Baked before?","options":["No, never","Yes","3"]},{"q":"Used an oven?","options":["No, never","Yes"]}]})
     );
-    assert!(
-        string(&ai.last()["messages"][1]["content"]).contains("You have not asked anything yet.")
-    );
-    let told = json!([{"q":"Baked before?","a":"No, never"},"junk"]);
-    assert_eq!(
-        call(
-            &base,
-            "POST",
-            "api/placement",
-            json!({"prompt":"bake bread","level":"Beginner","answers":told})
-        )
-        .1["q"],
-        "Used an oven?"
-    );
+    call(&base, "POST", "api/placement", json!({"prompt":"bake bread","level":"Beginner"}));
     assert!(string(&ai.last()["messages"][1]["content"]).contains("The level I picked: Beginner"));
-    assert_eq!(call(&base,"POST","api/placement",json!({"prompt":"bake bread","answers":[{"q":"Baked before?","a":"No, never"},"junk",{"q":"Used an oven?","a":"Yes"}]})).1,json!({"done":true}));
-    let n = ai.seen.lock().unwrap().len();
-    assert_eq!(
-        call(
-            &base,
-            "POST",
-            "api/placement",
-            json!({"prompt":"bake bread","answers":vec![json!({"q":"x","a":"y"});7]})
-        )
-        .1,
-        json!({"done":true})
-    );
-    assert_eq!(ai.seen.lock().unwrap().len(), n);
+    let told = json!([{"q":"Baked before?","a":"No, never"},"junk"]);
     let (status, c) = call(
         &base,
         "POST",
@@ -490,6 +468,8 @@ fn python_spec_end_to_end() {
     assert_eq!(list(&vids).len(), 1);
     assert_eq!(vids[0]["why"], "Covers hydration.");
     assert_eq!(vids[0]["start"], 75);
+    assert_eq!(vids[0]["segments"][0]["end"], 900);
+    assert_eq!(vids[0]["action"], "Mix the dough.");
     assert_eq!(vids[0]["covers"], json!(["hydration"]));
     assert_eq!(
         vids[0]["chapters"],
@@ -908,7 +888,11 @@ fn python_spec_end_to_end() {
         .tutor_tools(&c, lesson(&c, &json!("1.1")).unwrap())
         .iter()
         .any(|t| t["function"]["name"] == "read_project_file"));
-    let (status, ad) = call(&base, "POST", &format!("{course_path}/adapt"), json!({}));
+    let before = app.load(&cid).unwrap();
+    let (status, suggestion) = call(&base, "POST", &format!("{course_path}/adapt"), json!({}));
+    assert_eq!(status,200);
+    assert_eq!(before["phases"],app.load(&cid).unwrap()["phases"]);
+    let (status, ad) = call(&base, "POST", &format!("{course_path}/apply"), json!({"plan":suggestion["options"][0]["plan"]}));
     assert_eq!(status, 200, "{ad}");
     assert_eq!(
         ad["change"],
@@ -1569,6 +1553,9 @@ fn video_picks_are_never_padded() {
     assert_eq!(ls[1]["videos"][0]["why"], "Covers hydration.");
     assert_eq!(ls[2]["videos"], imported);
     let path = format!("api/courses/{cid}/videos");
+    let planned = app.route("POST", &path, &json!({"lesson":"1.2","plan":true})).unwrap();
+    assert_eq!(planned[0]["segments"][0]["start"], 75);
+    assert_eq!(planned, app.load(cid).unwrap()["phases"][0]["lessons"][1]["videos"]);
     let asked = ai.seen.lock().unwrap().len();
     assert_eq!(app.route("POST", &path, &json!({"lesson":"1.1"})).unwrap(), json!([]));
     assert_eq!(ai.seen.lock().unwrap().len(), asked, "searched again although nothing fits");
@@ -1599,17 +1586,16 @@ fn video_picks_are_never_padded() {
 }
 
 #[test]
-fn video_count_follows_coverage() {
-    let sets = |v: &[&[usize]]| v.iter().map(|c| c.iter().copied().collect::<HashSet<_>>()).collect::<Vec<_>>();
-    // One video that teaches everything is enough, even when it is ranked second.
-    assert_eq!(min_cover(&sets(&[&[0], &[0, 1, 2], &[1]])), [1]);
-    // Each video kept adds a concept; one that adds nothing new is left out.
-    assert_eq!(min_cover(&sets(&[&[0, 1], &[1], &[2], &[0, 2]])), [0, 2]);
-    // A tie goes to the higher-ranked video; videos that cover nothing are never shown.
-    assert_eq!(min_cover(&sets(&[&[], &[0], &[0]])), [1]);
-    assert!(min_cover(&sets(&[&[], &[]])).is_empty());
-    // At most six, however many concepts.
-    assert_eq!(min_cover(&sets(&(0..8).map(|i| vec![i]).collect::<Vec<_>>().iter().map(|v| v.as_slice()).collect::<Vec<_>>())).len(), 6);
+fn video_lesson_evidence_and_bounds() {
+    let mut lines = (0..360).map(|i| (i, "unrelated".to_owned())).collect::<Vec<_>>();
+    lines[307].1 = "cargo manifest".into();
+    let (sample, times) = crate::ai::lesson_passages(&lines, "cargo manifest");
+    assert!(sample.contains("cargo manifest") && times.contains(&307));
+    let mut parts = json!([{"start":3,"end":11,"title":"Setup"},{"start":20,"end":40,"title":"Run"}]);
+    assert_eq!(crate::ai::clean_segments(&parts,40).len(), 2);
+    assert!(crate::ai::clean_segments(&parts,39).is_empty());
+    parts[1]["start"] = json!(9);
+    assert!(crate::ai::clean_segments(&parts,40).is_empty());
 }
 
 #[test]
@@ -1868,8 +1854,8 @@ fn real_ai() {
         }
         v
     };
-    let q = step("1-placement", "POST", "api/placement", json!({"prompt":prompt,"answers":[]}));
-    let answers = json!([{"q":q["q"],"a":q["options"][0]}]);
+    let q = step("1-placement", "POST", "api/placement", json!({"prompt":prompt}));
+    let answers: Vec<Value> = list(&q["questions"]).iter().map(|x| json!({"q":x["q"],"a":x["options"][0]})).collect();
     let c = step(
         "2-course",
         "POST",
@@ -2040,11 +2026,11 @@ fn chatgpt_is_the_default_service_and_can_call_tutor_tools() {
     // "default" is the first model ChatGPT lists; the system prompt goes in "instructions" and the schema in "text".
     gpt.answer(sse(&[
         json!({"type":"response.reasoning_summary_text.delta","delta":"**Choosing a question**"}),
-        json!({"type":"response.output_text.delta","delta":"{\"done\":false,\"q\":\"Have you baked before?\","}),
-        json!({"type":"response.output_text.delta","delta":"\"options\":[\"No, never\",\"Yes\"]}"}),
+        json!({"type":"response.output_text.delta","delta":"{\"questions\":[{\"q\":\"Have you baked before?\","}),
+        json!({"type":"response.output_text.delta","delta":"\"options\":[\"No, never\",\"Yes\"]}]}"}),
     ]));
     let (code, q) = call(&app, "POST", "api/placement", json!({"prompt":"bake bread","answers":[],"thinking":"k9","effort":"high"}));
-    assert_eq!((code, q["q"].as_str()), (200, Some("Have you baked before?")), "{q}");
+    assert_eq!((code, q["questions"][0]["q"].as_str()), (200, Some("Have you baked before?")), "{q}");
     let b = gpt.body(0);
     assert_eq!((b["model"].as_str(), b["account"].as_str(), b["store"].as_bool()), (Some("m1"), Some("acct"), Some(false)));
     assert!(text(&b["instructions"]).contains("placement interview") && b["input"].to_string().contains("What I want: bake bread"), "{b}");
@@ -2075,7 +2061,7 @@ fn chatgpt_is_the_default_service_and_can_call_tutor_tools() {
     assert!(code == 400 && text(&e["error"]).contains("model gone"), "{e}");
     // An access token about to expire is refreshed first, and the new refresh token is kept.
     signed_in(&app, 1);
-    gpt.answer(sse_text("{\"done\":true,\"q\":\"\",\"options\":[]}"));
+    gpt.answer(sse_text("{\"questions\":[]}"));
     assert_eq!(call(&app, "POST", "api/placement", json!({"prompt":"bake bread","answers":[]})).0, 200);
     let saved: Value = serde_json::from_slice(&fs::read(app.conf.with_file_name("chatgpt.json")).unwrap()).unwrap();
     assert_eq!((saved["refresh_token"].as_str(), saved["email"].as_str()), (Some("r2"), Some("me@example.com")));
@@ -2404,4 +2390,58 @@ fn big_library_timing() {
     time("progress page", &|| { app.stats().unwrap(); });
     time("open one roadmap (mark_known)", &|| { app.mark_known(app.load("000000000000").unwrap()).unwrap(); });
     time("library stamp", &|| { app.library_stamp(); });
+}
+
+#[test]
+fn milestones_preserve_and_distinguish_evidence_across_subjects() {
+    let tmp = tempfile::tempdir().unwrap();
+    let app = isolated_app(tmp.path());
+    let ai = FakeAI::new();
+    app.write_config(&json!({"base":ai.base,"model":"m","key":"sk-test"})).unwrap();
+    for (cid,goal,work) in [
+        ("0123456789a1","Test a parser","My test checks an empty input."),
+        ("0123456789a2","Defend a claim in writing","My argument compares two explanations."),
+        ("0123456789a3","Deliver a speech","Here is an observer's written account of the delivery."),
+    ] {
+        let plan = app.route("POST","api/blueprint",&json!({"prompt":goal})).unwrap();
+        let mut c = json!({"id":cid,"title":goal,"blueprint":plan,"phases":[{"title":"Milestone","lessons":[{"id":"1.1","goal":goal,"title":goal,"done":["Justify the result"]}]}],"state":{"checks":{},"done":{},"notes":{}}});
+        app.audit_milestones(&mut c).unwrap();
+        app.save(&c).unwrap();
+        let act = |mode:&str, version:u64| app.route("POST",&format!("api/courses/{cid}/milestone"),&json!({"lesson":"1.1","mode":mode,"work":work,"version":version}));
+        assert!(act("independent",0).is_err());
+        assert_eq!(act("practice",0).unwrap()["attempts"][0]["work"],work);
+        assert!(act("practice",0).is_err());
+        act("practice",1).unwrap();
+        assert!(act("challenge",2).unwrap()["challenge"].is_string());
+        assert!(act("practice",3).is_err());
+        let record = act("independent",3).unwrap();
+        assert_eq!(record["attempts"][2]["mode"],"independent");
+        app.route("PUT",&format!("api/courses/{cid}/state"),&json!({"checks":{},"done":{},"notes":{},"portfolio":{}})).unwrap();
+        let saved = app.load(cid).unwrap();
+        assert_eq!(saved["state"]["portfolio"]["1.1"],record);
+        let file = app.export_course(&saved,false).unwrap();
+        let imported = app.import_course(file["path"].as_str().unwrap()).unwrap();
+        assert_eq!(imported["state"]["portfolio"]["1.1"]["attempts"],record["attempts"]);
+        assert_eq!(imported["blueprint"],saved["blueprint"]);
+        let template = app.export_course(&saved,true).unwrap();
+        assert!(app.import_course(template["path"].as_str().unwrap()).unwrap()["state"]["portfolio"].is_null());
+    }
+}
+
+#[test]
+fn tutor_remembers_earlier_help() {
+    let tmp = tempfile::tempdir().unwrap();
+    let app = isolated_app(tmp.path());
+    let cid = "0123456789ab";
+    let c = json!({"id":cid,"phases":[{"lessons":[{"id":"1.1","title":"Ownership"},{"id":"1.2","title":"Borrowing"},{"id":"1.3","title":"Lifetimes"}]}],
+        "state":{"quiz":{"1.1":{"score":2,"total":5}},"done":{}}});
+    app.save(&c).unwrap();
+    app.write_side(&app.chat_file(cid).unwrap(), &json!({
+        "1.1":[{"role":"user","content":"Quiz me"},{"role":"user","content":"Why does the value move into the function?"},{"role":"assistant","content":"..."}],
+        "1.3":[{"role":"user","content":"This is a later lesson and must not show up"}]})).unwrap();
+    let rows = app.past_help(&c, &list(&c["phases"][0]["lessons"])[2]).join("\n");
+    assert!(rows.contains("1.1 Ownership (quiz 2 of 5): Why does the value move"), "{rows}");
+    assert!(!rows.contains("Quiz me") && !rows.contains("later lesson"), "{rows}");
+    // Nothing earlier was asked: no memory row at all.
+    assert!(app.past_help(&c, &list(&c["phases"][0]["lessons"])[0]).is_empty());
 }

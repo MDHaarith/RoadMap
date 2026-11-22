@@ -3,23 +3,30 @@
   import { api } from '../lib/api';
   import { appState, toast, message, goCourse, aiProblem, defaultEffort } from '../lib/state.svelte';
   import EffortPicker from '../components/EffortPicker.svelte';
+  import BlueprintFields from '../components/BlueprintFields.svelte';
   import AiSetup from '../components/AiSetup.svelte';
   import { autogrow } from '../lib/autogrow';
-  import type { Course } from '../lib/types';
+  import type { Course, Blueprint } from '../lib/types';
   import Icon from '../components/Icon.svelte';
   import Waiting from '../components/Waiting.svelte';
   import Skeleton from '../components/Skeleton.svelte';
   import Elapsed from '../components/Elapsed.svelte';
   import BusyLabel from '../components/BusyLabel.svelte';
   import ModelPicker from '../components/ModelPicker.svelte';
-  import { watchThinking } from '../lib/thinking';
+  import Progress from '../components/Progress.svelte';
+  import { watchThinking, type Draft } from '../lib/thinking';
   let { empty = false }: { empty?: boolean } = $props();
   let kind = $state('build'), folder = $state(''), prompt = $state(''), level = $state('Complete beginner: has never studied or done this'), size = $state('');
   let effort = $state(defaultEffort());
+  let blueprint = $state<Blueprint>(), baseline = $state('');
   let picking = $state(false), building = $state(false), waiting = $state(false), designing = $state(false);
-  let error = $state(''), question = $state(''), options = $state<string[]>([]), own = $state('');
-  let answers = $state<{ q: string; a: string }[]>([]);
-  let answer: ((a: string | null) => void) | undefined;
+  let error = $state('');
+  // The whole placement check arrives at once; picked[i] is the answer to qs[i], extra is an optional note.
+  let qs = $state<{ q: string; options: string[] }[]>([]), picked = $state<string[]>([]), extra = $state('');
+  let answered = $derived(qs.filter((_, i) => picked[i]).length);
+  const answers = () => [...qs.flatMap((x, i) => picked[i] ? [{ q: x.q, a: picked[i] }] : []), ...(extra.trim() ? [{ q: 'Anything else the course should know?', a: extra.trim() }] : [])];
+  // Bumped by every question request and by Edit goal, so a stale reply from the AI is dropped.
+  let seq = 0, failed = $state<'' | 'ask' | 'blueprint'>(''), drafting = $state(false);
   let promptEl: HTMLTextAreaElement;
   let alive = true;
   // The first item is sent to the AI as the learner's level, so it carries the meaning, not only the label.
@@ -44,53 +51,84 @@
   ];
   let noService = $derived(!!aiProblem());
   let levelHint = $derived(levels.find(x => x[0] === level)?.[2] ?? ''), sized = $derived(sizes.find(x => x[0] === size) ?? sizes[1]);
-  onMount(() => { if (!empty) promptEl?.focus(); return () => { alive = false; answer?.(null); }; });
+  onMount(() => { if (!empty) promptEl?.focus(); return () => { alive = false; }; });
   async function pickFolder() {
     picking = true;
     try { const r = await api<{ folder: string }>('POST', 'api/pick-folder'); if (r.folder) folder = r.folder; }
     catch (error) { toast(message(error)); } finally { picking = false; }
   }
-  // What the model says it is thinking about during the current wait.
-  let thought = $state('');
+  // What the model says it is thinking about during the current wait, and the roadmap it has written so far.
+  let thought = $state(''), draft = $state<Draft>();
   async function thinkingOn<T>(run: (key: string) => Promise<T>) {
     thought = '';
-    const w = watchThinking(t => { if (alive) thought = t; });
+    const w = watchThinking(t => { if (alive) thought = t; }, d => { if (alive) draft = d; });
     try { return await run(w.key); } finally { w.stop(); thought = ''; }
   }
-  async function create() {
+  const what = () => ({ prompt, ...(kind === 'project' ? { folder } : {}) });
+  function create() {
     if (building) return;
     if (kind === 'project' && !folder) { toast('Choose a project folder first.'); document.getElementById('pick-folder')?.focus(); return; }
-    const version = appState.routeVersion, live = () => alive && version === appState.routeVersion;
-    const what = { prompt, ...(kind === 'project' ? { folder } : {}) };
-    building = true; answers = []; error = '';
+    building = true; qs = []; picked = []; extra = ''; error = '';
+    void ask();
+  }
+  // Asks for every placement question in one go; with none, the blueprint is drafted straight away.
+  async function ask() {
+    const mine = ++seq, version = appState.routeVersion, live = () => alive && mine === seq && version === appState.routeVersion;
+    waiting = true; error = ''; failed = '';
     try {
-      for (;;) {
-        waiting = true; question = '';
-        const r = await thinkingOn(w => api<{ done?: boolean; q?: string; options: string[] }>('POST', 'api/placement', { ...what, level, effort, thinking: w, answers: $state.snapshot(answers) }));
-        if (!live()) return;
-        if (r.done || !r.q) break;
-        waiting = false; question = r.q; options = r.options; own = '';
-        await tick(); document.getElementById('pa-q')?.focus({ preventScroll: true });
-        const a = await new Promise<string | null>(resolve => { answer = resolve; });
-        answer = undefined;
-        if (!live()) return;
-        if (a === null) break;
-        answers.push({ q: r.q, a });
+      const r = await thinkingOn(w => api<{ questions: { q: string; options: string[] }[] }>('POST', 'api/placement', { ...what(), level, effort, thinking: w }));
+      if (!live()) return;
+      if (!r.questions.length) return await toBlueprint();
+      qs = r.questions; picked = []; waiting = false;
+      await tick(); document.getElementById('pc-title')?.focus({ preventScroll: true });
+    } catch (err) { if (live()) { error = message(err); failed = 'ask'; waiting = false; } }
+  }
+  async function toBlueprint() {
+    const mine = ++seq, live = () => alive && mine === seq;
+    waiting = true; drafting = true; error = ''; failed = '';
+    try {
+      const plan = await thinkingOn(w => api<Blueprint>('POST', 'api/blueprint', { ...what(), level, size, effort, thinking: w, answers: answers() }));
+      if (live()) { blueprint = plan; baseline = ''; building = false; }
+    } catch (err) { if (live()) { error = message(err); failed = 'blueprint'; } }
+    finally { if (live()) { waiting = false; drafting = false; } }
+  }
+  const levelName = () => levels.find(x => x[0] === level)?.[1] ?? level;
+  // The stages (long roadmaps) or phases written so far; the last one is still being written.
+  let units = $derived(draft ? (draft.stages.length ? draft.stages.map(st => ({ title: st.title, blurb: st.blurb, chips: st.phases.map(p => p.title).filter(Boolean), lessons: st.phases.reduce((n, p) => n + p.lessons.length, 0) })) : draft.phases.map(p => ({ title: p.title, blurb: '', chips: p.lessons, lessons: p.lessons.length }))) : []);
+  let unitName = $derived(draft?.stages.length ? 'Stage' : 'Phase');
+  let lessonCount = $derived(units.reduce((n, u) => n + u.lessons, 0));
+  let log = $derived.by(() => {
+    const steps: { text: string; state: 'done' | 'now' | 'next' }[] = [{ text: 'Read your goal, answers and blueprint', state: 'done' }];
+    if (!draft?.title) steps.push({ text: 'Planning the stages, phases and lessons', state: 'now' });
+    else {
+      steps.push({ text: `Named it “${draft.title}”`, state: 'done' });
+      if (!units.length) steps.push({ text: 'Writing the summary', state: 'now' });
+      else {
+        steps.push({ text: 'Wrote the summary', state: 'done' });
+        units.forEach((u, i) => steps.push(i < units.length - 1 ? { text: `Wrote ${unitName} ${i + 1}: ${u.title}`, state: 'done' } : { text: `Writing ${unitName} ${i + 1}${u.title ? ': ' + u.title : ''}`, state: 'now' }));
       }
-      designing = true;
-      const c = await thinkingOn(w => api<Course>('POST', 'api/courses', { ...what, level, size, effort, thinking: w, answers: $state.snapshot(answers) }));
-      if (live()) goCourse(c);
-    } catch (err) { if (live()) error = message(err); }
-    finally { building = false; designing = false; waiting = false; }
+    }
+    steps.push({ text: 'Check milestones and open your roadmap', state: 'next' }, { text: 'Find videos for every lesson, in the background', state: 'next' });
+    return steps;
+  });
+  function editGoal() { seq++; building = false; waiting = false; drafting = false; error = ''; void tick().then(() => promptEl?.focus()); }
+  async function approve() {
+    if (!blueprint || building) return;
+    building = true; designing = true; error = ''; draft = undefined;
+    try {
+      const c = await thinkingOn(w => api<Course>('POST','api/courses',{prompt,folder:kind === 'project' ? folder : '',level,size,effort,thinking:w,answers:answers(),blueprint:$state.snapshot(blueprint),baseline}));
+      if (alive) goCourse(c);
+    } catch (err) { if (alive) error = message(err); }
+    finally { building = false; designing = false; }
   }
 </script>
 
-<div class="wrap narrow create screen-enter" class:designing>
-  {#if !empty}<a class="back-map" id="cancel-new" href="#/" onclick={() => appState.screen = 'library'}><Icon name="back" /> Your library</a>{:else if !building}<div class="create-empty-route"><Icon name="empty-route" /></div>{/if}
-  <div class="page-head create-head" hidden={designing}><h1>{building ? 'Setting up your roadmap' : empty ? 'What do you want to learn?' : 'New roadmap'}</h1></div>
+<div class="wrap narrow create screen-enter" class:designing class:placing={building && !designing}>
+  {#if !empty}<a class="back-map" id="cancel-new" href="#/" onclick={() => appState.screen = 'library'}><Icon name="back" /> Your library</a>{:else if !building && !blueprint}<div class="create-empty-route"><Icon name="empty-route" /></div>{/if}
+  <div class="page-head create-head" hidden={building || !!blueprint}><h1>{empty ? 'What do you want to learn?' : 'New roadmap'}</h1></div>
   <AiSetup why="Add one in Settings to build a roadmap." />
-  <form id="new" onsubmit={e => { e.preventDefault(); void create(); }}>
-    <div class="form-col" hidden={building}>
+  <form id="new" onsubmit={e => { e.preventDefault(); if (blueprint) void approve(); else void create(); }}>
+    <div class="form-col" hidden={building || !!blueprint}>
       <fieldset class="segmented kind-choice"><legend class="sr">What kind of roadmap?</legend><label><input type="radio" name="kind" value="build" bind:group={kind} />Learn or build something new</label><label><input type="radio" name="kind" value="project" bind:group={kind} />Understand a project I have</label></fieldset>
       <div id="project-fields" hidden={kind !== 'project'}>
         <div class="folder-row"><button class="btn secondary" type="button" id="pick-folder" disabled={picking} onclick={pickFolder}><BusyLabel busy={picking} idle={folder ? 'Choose another folder' : 'Choose the project folder'} label="Choosing folder…" /></button><p class="folder-path" id="folder-path" role="status">{folder || 'No folder selected.'}</p></div>
@@ -104,13 +142,115 @@
       <div class="create-pickers"><span class="create-model"><label class="small" for="create-model">AI model</label><ModelPicker id="create-model" /></span>{#if appState.config.base === 'codex'}<span class="create-model"><label class="small" for="create-effort">Thinking</label><EffortPicker id="create-effort" bind:value={effort} /></span>{/if}</div>
       <div class="create-go"><button class="btn big" id="build-roadmap" disabled={noService}>{error ? 'Try again' : 'Build my roadmap'} <Icon name="arrow" /></button>{#if error}<p class="create-error" role="alert"><strong>The roadmap could not be built.</strong> {error} If it keeps failing, check the AI service in <a href="#/settings">Settings</a>.</p>{:else}<span class="small">Next: a few quick questions about what you already know.</span>{/if}</div>
     </div>
+    {#if blueprint && !building}<section class="form-col" aria-label="Edit course blueprint">
+      <h2>Your course blueprint</h2>
+      <BlueprintFields plan={blueprint} />
+      <label for="baseline">Optional starting task</label><p>{blueprint.diagnostic}</p><textarea id="baseline" maxlength="2000" rows="3" bind:value={baseline} placeholder="Try it here or leave this blank."></textarea>
+      {#if error}<p role="alert" class="err">{error}</p>{/if}
+      <div class="row"><button class="btn">Approve and build course</button><button class="btn secondary" type="button" onclick={() => { blueprint = undefined; error = ''; }}>Change goal</button></div>
+    </section>{/if}
     <div id="building" hidden={!building} class={designing ? 'designing' : 'placement'}>
-      {#if designing}<div class="overview creating" aria-busy="true"><div class="overview-side" role="status"><h1>Writing your roadmap</h1>{#if prompt.trim()}<p class="create-goal"><span>Your goal</span> {prompt}</p>{/if}<p class="creating-time"><span aria-hidden="true"><Elapsed /></span> · this usually takes {sized[4]}</p>{#if thought}{#key thought}<p class="thought">{thought}</p>{/key}{/if}<ol class="build-steps"><li>Plan the stages, phases and lessons for your goal.</li><li>Then find videos for every lesson, in the background.</li></ol><p class="muted small">Keep this page open. Your roadmap opens here when it is ready.</p></div><div class="overview-main"><Skeleton kind="lessons" /></div></div>
-      {:else}{#if prompt.trim()}<p class="create-goal"><span>Your goal</span> {prompt}</p>{/if}<h2>What can you already do?</h2><p class="muted">{waiting ? 'A few questions, one at a time. Each one depends on your last answer.' : 'Pick the honest answer or type your own. “No” is useful: it puts that topic into your roadmap.'}</p>
-        {#if answers.length}<ol class="told stagger">{#each answers as x}<li><span>{x.q}</span><b>{x.a}</b></li>{/each}</ol>{/if}
-        {#if waiting}<Waiting skeleton="question" title={answers.length ? 'Reading your answer' : 'Preparing the first question'} hint="this usually takes 10 to 20 seconds" {thought} />
-        {:else}<div class="asking"><h3 class="question" id="pa-q" tabindex="-1">{question}</h3><div class="options stagger">{#each options as o, i}<button class="option" type="button" onclick={() => answer?.(o)}><span class="letter">{String.fromCharCode(65 + i)}</span><span>{o}</span></button>{/each}</div><div class="own"><input id="pa-own" aria-label="Your own answer" placeholder="Or answer in your own words" maxlength="300" bind:value={own} onkeydown={e => { if (e.key === 'Enter') { e.preventDefault(); if (own.trim()) answer?.(own.trim()); } }} /><button class="btn secondary" type="button" id="pa-send" onclick={() => { if (own.trim()) answer?.(own.trim()); }}>Send</button></div></div><button class="link" type="button" id="unplaced" onclick={() => answer?.(null)}>Skip the questions and build now</button>{/if}
-      {/if}
+      {#if designing}<div class="mk">
+        <div class="mk-main">
+          <p class="mk-status" role="status"><span class="spin" aria-hidden="true"></span><span>{thought || (draft?.title ? `Writing ${unitName.toLowerCase()} ${Math.max(units.length, 1)}` : 'Planning your roadmap')}</span></p>
+          <p class="small mk-time"><span aria-hidden="true"><Elapsed /></span> · this usually takes {sized[4]}{lessonCount ? ` · ${lessonCount} lesson${lessonCount === 1 ? '' : 's'} so far` : ''}</p>
+          <p class="kicker mk-kicker">Your roadmap</p>
+          {#if draft?.title}<h1 class="mk-title arrive">{draft.title}</h1>{:else}<span class="sk sk-line" style="width:60%;height:22px;margin-top:6px"></span>{/if}
+          {#if draft?.summary}<p class="mk-sum">{draft.summary}</p>{:else}<span class="sk sk-line" style="width:85%;margin-top:12px"></span><span class="sk sk-line" style="width:70%;margin-top:8px"></span>{/if}
+          <ol class="spine">
+            {#each units as u, i}<li class="st arrive" data-state={i < units.length - 1 ? 'done' : 'writing'}><span class="dot" aria-hidden="true">{#if i < units.length - 1}<Icon name="check" />{:else}{i + 1}{/if}</span><div><h3>{u.title || `${unitName} ${i + 1}`}</h3>{#if u.blurb}<p>{u.blurb}</p>{/if}{#if u.chips.length}<div class="chips">{#each u.chips as x}<span>{x}</span>{/each}</div>{/if}</div><span class="meta">{u.lessons} lesson{u.lessons === 1 ? '' : 's'}</span></li>{/each}
+            {#if !units.length}{#each [0, 1, 2] as i}<li class="st" data-state="todo"><span class="dot" aria-hidden="true">{i + 1}</span><div><span class="sk sk-line" style="width:45%;height:13px"></span><span class="sk sk-line" style="width:75%;margin-top:8px"></span></div><span></span></li>{/each}{/if}
+          </ol>
+          <p class="muted small">Keep this page open. Your roadmap opens here when it is ready.</p>
+        </div>
+        <aside class="mk-log" aria-label="What the AI is doing"><p class="kicker">What the AI is doing</p><ol>{#each log as x}<li class={x.state}><i aria-hidden="true">{#if x.state === 'done'}<Icon name="check" />{:else if x.state === 'now'}<span class="spin"></span>{/if}</i><span>{x.text}</span></li>{/each}</ol></aside>
+      </div>
+      {:else}<div class="pc">
+        <aside class="pc-goal"><p class="kicker">Your goal</p><p class="pc-quote">{prompt.trim() || (kind === 'project' ? 'Understand this project so I can change it.' : '')}</p>{#if kind === 'project' && folder}<p class="small pc-folder">{folder}</p>{/if}<dl><dt>Starting</dt><dd>{levelName()}</dd><dt>Length</dt><dd>{sized[2]}</dd></dl><button class="link" type="button" id="edit-goal" onclick={editGoal}>Edit goal</button></aside>
+        <div class="pc-form">
+          <div class="pc-head"><p class="kicker">Before we build</p><h1 id="pc-title" tabindex="-1">What can you already do?</h1><p class="small">{qs.length ? `${qs.length} quick questions.` : 'A few quick questions.'} Your answers set where the course starts.</p></div>
+          {#if waiting}<div class="q"><span class="n">{drafting ? '✓' : 1}</span><div class="pc-wait"><Waiting skeleton="question" inline title={drafting ? 'Drafting your course blueprint' : 'Preparing your questions'} hint="this usually takes 10 to 20 seconds" {thought} /></div></div>
+          {:else if failed}<div class="q"><span class="n">!</span><div class="err pc-err" role="alert"><p>{failed === 'blueprint' ? 'The blueprint could not be drafted.' : 'The questions could not be prepared.'} {error}</p><button class="btn secondary sm" type="button" onclick={() => failed === 'blueprint' ? toBlueprint() : ask()}>Try again</button></div></div>
+          {:else}{#each qs as x, i}<fieldset class="q" class:answered={!!picked[i]}><legend><span class="n">{i + 1}</span><span class="qt">{x.q}</span></legend><div class="opts">{#each x.options as o}<label class="opt"><input type="radio" name={`pq-${i}`} value={o} bind:group={picked[i]} />{o}</label>{/each}</div></fieldset>{/each}
+          {#if qs.length}<label class="pc-extra"><span>Anything else the course should know? <span class="small">Optional</span></span><input id="pa-own" maxlength="300" placeholder="For example: what you already have or have tried" bind:value={extra} onkeydown={e => { if (e.key === 'Enter') e.preventDefault(); }} /></label>{/if}{/if}
+          <div class="pc-foot"><span class="pc-meter"><Progress n={answered} total={qs.length || 4} wide={false} unit="questions answered" /><span class="small">{answered} of {qs.length || '…'} answered</span></span><button class="btn secondary" type="button" id="pa-back" disabled={waiting} onclick={editGoal}>Back</button><button class="btn" type="button" id="unplaced" disabled={waiting} onclick={() => void toBlueprint()}>{qs.length && answered === qs.length ? 'Continue to blueprint' : 'Skip to blueprint'} <Icon name="arrow" /></button></div>
+        </div>
+      </div>{/if}
     </div>
   </form>
 </div>
+<style>
+  .wrap.narrow.create.placing { max-width: 1100px; }
+  /* Placement check: the goal stays on the left; each question number lines up with its options. */
+  .pc { display: grid; grid-template-columns: 280px minmax(0, 1fr); gap: 36px; margin-top: var(--s4); }
+  /* The goal card runs the full height of the questions, as in the sample. */
+  .pc-goal { display: grid; gap: var(--s4); align-content: start; padding: var(--s6); border-radius: var(--r-lg); background: var(--bg-subtle); }
+  .pc-goal .kicker { margin: 0; }
+  .pc-quote { margin: 0; font: 600 var(--t-xl)/1.45 var(--display); }
+  .pc-folder { margin: 0; word-break: break-all; }
+  .pc-goal dl { display: grid; grid-template-columns: auto 1fr; gap: var(--s2) var(--s5); margin: 0; font-size: var(--t-sm); }
+  .pc-goal dt { color: var(--muted); }
+  .pc-goal dd { margin: 0; font-weight: 550; }
+  .pc-goal .link { justify-self: start; }
+  .pc-head h1 { margin: 2px 0 var(--s1); font-size: 24px; }
+  .pc-head .kicker { margin: 0; }
+  .q { display: grid; grid-template-columns: 22px minmax(0, 1fr); column-gap: var(--s5); row-gap: var(--s4); padding: var(--s6) 0; border-bottom: 1px solid var(--line); }
+  .q legend { display: contents; }
+  .n { grid-column: 1; width: 22px; height: 22px; border-radius: 50%; background: var(--ink); color: var(--on-accent); font-size: var(--t-xs); font-weight: 600; display: grid; place-items: center; }
+  .q.answered .n { background: var(--accent); }
+  .qt { grid-column: 2; align-self: center; font-weight: 600; font-size: var(--t-lg); line-height: 1.4; }
+  .opts, .pc-wait, .pc-err { grid-column: 2; }
+  .opts { display: flex; flex-wrap: wrap; gap: var(--s3); }
+  .opt { display: inline-flex; align-items: center; gap: var(--s3); min-height: 32px; padding: var(--s2) var(--s5) var(--s2) var(--s4); border: 1px solid var(--line-strong); border-radius: var(--r-btn-sm); background: var(--surface); color: var(--ink-2); font-size: var(--t-md); font-weight: 400; cursor: pointer; transition: border-color var(--motion-fast), background-color var(--motion-fast); }
+  .opt input { flex: none; width: 14px; height: 14px; margin: 0; accent-color: var(--accent); }
+  .opt:hover { border-color: var(--accent); }
+  .opt:has(:checked) { border-color: var(--accent); background: var(--accent-soft); color: var(--accent-ink); font-weight: 550; }
+  .opt:has(:focus-visible) { outline: 2px solid var(--accent); outline-offset: 2px; }
+  .pc-extra { display: grid; gap: var(--s2); padding: var(--s6) 0; border-bottom: 1px solid var(--line); font-weight: 600; font-size: var(--t-md); }
+  .pc-extra .small { font-weight: 400; }
+  .pc-err { display: grid; gap: var(--s3); justify-items: start; }
+  .pc-err p { margin: 0; }
+  .pc-foot { display: flex; flex-wrap: wrap; align-items: center; gap: var(--s5); padding-top: var(--s6); }
+  .pc-meter { display: flex; align-items: center; gap: var(--s4); flex: 1; }
+  .pc-meter :global(.bar) { width: 120px; }
+
+  /* Roadmap making: the screen fills in as the AI writes the title, summary and each stage. */
+  .mk { display: grid; grid-template-columns: minmax(0, 1fr) 300px; gap: 36px; align-items: start; }
+  .mk-status { display: inline-flex; align-items: center; gap: var(--s3); margin: 0; min-height: 26px; padding: 2px var(--s4) 2px var(--s3); border: 1px solid var(--line); border-radius: 999px; font-size: var(--t-sm); font-weight: 550; color: var(--ink-2); max-width: 100%; }
+  .mk-status span:last-child { overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+  .mk-time { margin: var(--s3) 0 0; }
+  .mk-kicker { margin: var(--s6) 0 0; }
+  .mk-title { margin: 2px 0 0; font-size: 26px; }
+  .mk-sum { margin: var(--s2) 0 0; max-width: 72ch; color: var(--ink-2); font-size: var(--t-lg); }
+  .sk-line { height: 10px; }
+  .spine { position: relative; list-style: none; padding: 0; margin: 22px 0 var(--s6); }
+  .spine::before { content: ""; position: absolute; left: 11px; top: 14px; bottom: 30px; border-left: 2px solid var(--line); }
+  .st { position: relative; display: grid; grid-template-columns: 24px minmax(0, 1fr) auto; gap: 14px; padding: 4px 0 20px; }
+  .st .dot { position: relative; z-index: 1; width: 24px; height: 24px; border-radius: 50%; display: grid; place-items: center; font-size: var(--t-xs); font-weight: 600; background: var(--bg); border: 2px solid var(--line-strong); color: var(--muted); }
+  .st .dot :global(.icon) { width: 12px; height: 12px; }
+  .st[data-state="done"] .dot { background: var(--ink); border-color: var(--ink); color: var(--on-accent); }
+  .st[data-state="writing"] .dot { border-color: var(--accent); color: var(--accent-ink); }
+  .st h3 { margin: 2px 0 0; font: 650 var(--t-xl)/1.3 var(--display); letter-spacing: -.01em; }
+  .st p { margin: 3px 0 0; font-size: var(--t-sm); color: var(--muted); max-width: 66ch; }
+  .st .meta { font-size: var(--t-sm); color: var(--muted); white-space: nowrap; padding-top: 3px; }
+  .chips { display: flex; flex-wrap: wrap; gap: var(--s2); margin-top: var(--s3); }
+  .chips span { font-size: var(--t-sm); padding: 2px var(--s3); border-radius: var(--r); background: var(--surface-2); color: var(--ink-2); }
+  .mk-log { padding: 14px var(--s6); border: 1px solid var(--line); border-radius: var(--r-lg); position: sticky; top: 0; }
+  .mk-log .kicker { margin: 0; }
+  .mk-log ol { list-style: none; padding: 0; margin: var(--s4) 0 0; display: grid; gap: 9px; }
+  .mk-log li { display: grid; grid-template-columns: 16px minmax(0, 1fr); gap: 9px; font-size: var(--t-sm); color: var(--ink-2); }
+  .mk-log i { width: 16px; height: 16px; margin-top: 1px; border-radius: 50%; display: grid; place-items: center; color: var(--on-accent); }
+  .mk-log i :global(.icon) { width: 10px; height: 10px; }
+  .mk-log .done i { background: var(--success); }
+  .mk-log .now { color: var(--ink); font-weight: 550; }
+  .mk-log .next { color: var(--muted); }
+  .mk-log .next i { border: 1.5px solid var(--line-strong); }
+  .spin { display: inline-block; flex: none; width: 14px; height: 14px; border-radius: 50%; border: 2px solid var(--line); border-top-color: var(--accent); animation: spin 1.1s linear infinite; }
+  .mk-log .spin { width: 16px; height: 16px; }
+  .arrive { animation: arrive var(--motion-slow) var(--motion-ease) both; }
+  @keyframes spin { to { rotate: 1turn; } }
+  @media (prefers-reduced-motion: reduce) { .spin { animation-duration: 6s; } .arrive { animation: none; } }
+  /* Forced colors paint every border one color, which hides the turning arc. */
+  @media (forced-colors: active) { .spin { forced-color-adjust: none; border-color: GrayText; border-top-color: CanvasText; } }
+  @media (max-width: 900px) { .pc, .mk { grid-template-columns: minmax(0, 1fr); } .pc-goal, .mk-log { position: static; } }
+</style>

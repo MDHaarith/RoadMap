@@ -145,8 +145,9 @@ pub(crate) const LANGS: &[(&str, [&str; 7], u64)] = &[
             "rustc",
             "main.rs",
             "test.rs",
-            "rustc -o prog main.rs && ./prog",
-            "rustc -o prog test.rs && ./prog",
+            // Without --edition rustc compiles as Rust 2015, which rejects async fn and lacks the 2021 prelude.
+            "rustc --edition 2021 -o prog main.rs && ./prog",
+            "rustc --edition 2021 -o prog test.rs && ./prog",
         ],
         60,
     ),

@@ -28,6 +28,27 @@ export function nextLesson(c: Course) {
   const ls = lessons(c), last = ls.find(l => l.id === c.state.last);
   return last && !c.state.done[last.id] ? last : ls.find(l => !c.state.done[l.id]) || ls[0];
 }
+/** One summary of the course for the "Where you are" panel: what is being learned, what was shown, what is shaky, and why the next step. */
+export function whereAmI(c: Course) {
+  const ls = lessons(c), next = nextLesson(c), at = ls.indexOf(next);
+  if (!next) return null;
+  const shown = ls.flatMap(l => {
+    const a = c.state.portfolio?.[l.id]?.attempts.filter(x => x.mode === 'independent').pop();
+    return a ? [{ l, text: a.evidence }] : passed(c, l) ? [{ l, text: `Quiz ${c.state.quiz[l.id].score} of ${c.state.quiz[l.id].total}` }] : [];
+  });
+  const shaky = ls.flatMap(l => {
+    const q = c.state.quiz[l.id], t = c.state.tests?.[l.id];
+    if (q && q.total && q.score / q.total < .6) return [{ l, text: `Quiz ${q.score} of ${q.total}` }];
+    if (t && !t.ok && t.runs >= 3) return [{ l, text: `Exercise tests still failing after ${t.runs} runs` }];
+    return [];
+  });
+  // A shaky earlier lesson comes before new material: the next lessons build on it.
+  const before = shaky.filter(s => ls.indexOf(s.l) < at);
+  const milestone = ls.slice(Math.max(0, at)).find(l => l.checkpoint && !c.state.portfolio?.[l.id]?.attempts.some(a => a.mode === 'independent'));
+  const why = before.length ? { l: before[0].l, text: `Go over ${before[0].l.title} first (${before[0].text.toLowerCase()}): later lessons build on it.` }
+    : { l: next, text: `${next.title} is your next unfinished lesson${milestone ? `; it leads to the milestone in ${milestone === next ? 'this lesson' : milestone.title}` : ''}.` };
+  return { next, milestone, shown, shaky, why };
+}
 export function stageOpen(c: Course, n: number) {
   const next = lessons(c).find(l => !c.state.done[l.id]);
   return c.state.stageOpen?.[n] ?? (next ? stageLessons(c, n).includes(next) : n === (c.stages?.length || 0) - 1);

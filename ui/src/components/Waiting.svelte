@@ -8,7 +8,7 @@
   let initial = $derived(appState.screen === 'loading');
   let shape = $derived(initial ? (/^#\/c\/[^/]+\/exam\//.test(location.hash) ? 'question' : /^#\/c\/[^/]+\/[^/]+/.test(location.hash) ? 'lesson' : location.hash.startsWith('#/c/') ? 'overview' : 'home') : skeleton);
 </script>
-<div class="waiting" class:inline class:initial aria-busy="true">
+<div class="waiting" class:inline class:initial>
   {#if !initial}<div class="waiting-copy" role="status"><strong>{title}</strong><p><span aria-hidden="true"><Elapsed /></span>{hint ? ' · ' + hint : ''}</p>{#if thought}{#key thought}<p class="thought">{thought}</p>{/key}{/if}{@render children?.()}</div>{/if}
   <Skeleton kind={shape} />
 </div>

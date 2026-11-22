@@ -97,6 +97,8 @@ pub struct App {
     pub(crate) chatgpt: chatgpt::ChatGpt,
     // The latest thinking summary of each request that is still running, by the key the page sent; see `thinking`.
     pub(crate) thoughts: Mutex<HashMap<String, String>>,
+    // The answer text streamed so far while a request builds a roadmap, by the same key; `api/thinking` shows it as an outline.
+    pub(crate) drafts: Mutex<HashMap<String, String>>,
     // Offline video saving per roadmap: {"running", "stop", "failed", "error"}; see `offline.rs`.
     pub(crate) offline: Mutex<HashMap<String, Value>>,
     // Parsed roadmap files with the modified time and size they were read at; see `parsed` in storage.rs.
@@ -137,6 +139,7 @@ impl App {
             yt_running: Default::default(),
             chatgpt: Default::default(),
             thoughts: Mutex::new(HashMap::new()),
+            drafts: Mutex::new(HashMap::new()),
             offline: Mutex::new(HashMap::new()),
             parsed: Mutex::new(HashMap::new()),
             pick: Box::new(pick),

@@ -2,9 +2,11 @@
   import { onMount, tick } from 'svelte';
   import { api } from '../lib/api';
   import { appState, save, toast, message, adaptNow, expandPhase, flushSave, saveFirst } from '../lib/state.svelte';
-  import { lessons, nextLesson, status, locked, stageOpen, stageLessons } from '../lib/progress';
+  import { lessons, nextLesson, status, locked, stageLessons, whereAmI } from '../lib/progress';
   import { enc, href } from '../lib/format';
-  import type { Course, PlanPreview, OfflineStatus } from '../lib/types';
+  import type { Course, Blueprint, PlanPreview, OfflineStatus, Activity, Mistake } from '../lib/types';
+  import Ring from '../components/Ring.svelte';
+  import BlueprintFields from '../components/BlueprintFields.svelte';
   import PlanOptions from '../components/PlanOptions.svelte';
   import VideoPrefs from '../components/VideoPrefs.svelte';
   import LessonActions from '../components/LessonActions.svelte';
@@ -17,11 +19,26 @@
   import { confirmAsk } from '../components/Confirm.svelte';
   let { c }: { c: Course } = $props();
   let ls = $derived(lessons(c)), n = $derived(ls.filter(l => c.state.done[l.id]).length), next = $derived(nextLesson(c));
+  let where = $derived(whereAmI(c));
   let complete = $derived(ls.length > 0 && n === ls.length), pending = $derived(ls.filter(l => !l.videos && !l.stub).length);
   let found = $state<Record<string, boolean> | false | undefined>(undefined);
   let reviseOpen = $state(false), ask = $state(''), menuOpen = $state(false), menuEl = $state<HTMLDetailsElement>();
   let bulk = $state<{ stop: boolean; text: string; error: string } | null>(null);
   let preview = $state<PlanPreview>(), revising = $state(false), prefsOpen = $state(false), originalAsk = $state(''), reviseError = $state('');
+  let draft = $state<Blueprint>(), planning = $state(false), planError = $state('');
+  async function retrofit(approve = false) {
+    planning = true; planError = '';
+    const path = 'api/courses/' + enc(c.id) + '/blueprint';
+    try {
+      if (approve && draft) {
+        await saveFirst();
+        const result = await api<Course>('POST', path, {blueprint: $state.snapshot(draft)});
+        c.blueprint = result.blueprint;
+        c.phases = result.phases;
+        draft = undefined;
+      } else { draft = await api<Blueprint>('POST', path); }
+    } catch(e) { planError = message(e); } finally { planning = false; }
+  }
   let alive = true;
   // "Before you start" tools: the one being installed, and why the last install failed.
   let installing = $state(''), installError = $state('');
@@ -58,6 +75,8 @@
       }, 3500);
     }
     void watchVideoSearch();
+    if (!activity) api<Activity>('GET', 'api/activity').then(a => { if (alive) activity = a; }).catch(() => {});
+    api<{ items: Mistake[] }>('GET', 'api/mistakes').then(r => { if (alive) mistakes = r.items.filter(m => m.course === c.id && !m.fixed); }).catch(() => { if (alive) mistakes = []; });
     if (c.needs?.some(x => x.command)) api<{ found: Record<string, boolean> }>('POST', 'api/courses/' + enc(c.id) + '/setup').then(r => { if (alive) found = r.found; }).catch(() => { found = false; });
     return () => { alive = false; clearTimeout(timer); clearInterval(offlineTimer); if (bulk) bulk.stop = true; };
   });
@@ -90,9 +109,33 @@
     try { c.work = (await api<{ work?: string }>('PUT', 'api/courses/' + enc(c.id) + '/work', c.work ? { clear: true } : {})).work; }
     catch (error) { toast(message(error)); }
   }
-  let showIndex = $derived((c.stages?.length ?? c.phases.length) > 1);
   let nextPhase = $derived(c.phases.findIndex(p => p.lessons.includes(next)));
-  let nextStage = $derived(c.phases[nextPhase]?.stage);
+  // Phases without a stage of their own belong to the stage before them.
+  let stageOf = $derived(c.phases.reduce<number[]>((a, p, i) => { a.push(p.stage ?? a[i - 1] ?? 0); return a; }, []));
+  let nextStage = $derived(stageOf[nextPhase] ?? 0);
+  // The stage on screen: the learner's pick, else the stage of the next lesson.
+  let picked = $state<number>();
+  let cur = $derived(c.stages?.length ? Math.min(picked ?? nextStage, c.stages.length - 1) : 0);
+  let tabbed = $derived((c.stages?.length ?? 0) > 1);
+  let tabsEl = $state<HTMLElement>();
+  // Stage tabs: arrow keys, Home and End move and select at once (selection follows focus).
+  function stageKeys(e: KeyboardEvent) {
+    const n = c.stages!.length, k = ({ ArrowRight: cur + 1, ArrowLeft: cur - 1 + n, Home: 0, End: n - 1 } as Record<string, number>)[e.key];
+    if (k === undefined) return;
+    e.preventDefault(); picked = k % n;
+    void tick().then(() => tabsEl?.querySelector<HTMLElement>('[aria-selected="true"]')?.focus());
+  }
+  // Keep the selected tab in view when the row scrolls; `container` limits the scroll to the row.
+  $effect(() => { void cur; tabsEl?.querySelector('[aria-selected="true"]')?.scrollIntoView({ block: 'nearest', inline: 'nearest', container: 'nearest' } as ScrollIntoViewOptions); });
+  let shown = $derived(c.phases.map((p, i) => ({ p, i })).filter(x => !c.stages?.length || stageOf[x.i] === cur));
+  let stageLs = $derived(shown.flatMap(x => x.p.lessons));
+  let stageDone = $derived(stageLs.filter(l => c.state.done[l.id]).length);
+  let here = $derived(stageLs.includes(next) && !c.state.done[next.id] ? next : stageLs.find(l => !c.state.done[l.id]));
+  let herePhase = $derived(here ? c.phases.findIndex(p => p.lessons.includes(here!)) : -1);
+  let milestone = $derived(stageLs.find(l => l.checkpoint && !c.state.portfolio?.[l.id]?.attempts.some(a => a.mode === 'independent')) ?? stageLs.find(l => l.checkpoint));
+  let activity = $state<Activity | null>(appState.activity), mistakes = $state<Mistake[]>();
+  let stageMistakes = $derived((mistakes ?? []).filter(m => stageLs.some(l => l.id === m.lesson)));
+  const stageDoneAll = (i: number) => { const sl = stageLessons(c, i); return sl.length > 0 && sl.every(l => c.state.done[l.id]); };
   const doneIn = (ls: Course['phases'][number]['lessons']) => ls.filter(l => c.state.done[l.id]).length;
   function rowState(l: Course['phases'][number]['lessons'][number]) {
     if (c.state.done[l.id]) return 'done';
@@ -121,24 +164,16 @@
     else return;
     e.preventDefault();
   }
-  function toggleStage(s: number) { (c.state.stageOpen ||= {})[s] = !stageOpen(c, s); save(c); }
-  async function jump(i: number) {
-    const stage = c.phases[i].stage;
-    if (c.stages && stage !== undefined && !stageOpen(c, stage)) { (c.state.stageOpen ||= {})[stage] = true; save(c); await tick(); }
-    // The first phase of a stage starts under its stage heading, so show the heading too.
-    const el = document.getElementById('phase-' + (i + 1));
-    (c.stages && stage !== undefined && c.phases[i - 1]?.stage !== stage ? el?.previousElementSibling : el)?.scrollIntoView({ block: 'start' });
-  }
 </script>
 
 <svelte:window onkeydown={menuKeys} onclick={e => { if (menuOpen && !menuEl?.contains(e.target as Node)) menuOpen = false; }} />
-<div class="overview">
-
-  <aside class="overview-side">
-  <div class="overview-head"><a class="back-map" href="#/"><Icon name="back" /> Your library</a>
-    <div class="head-row page-head"><h1>{c.title}</h1>
+<div class="overview stage-view">
+  <div class="overview-main sv-main">
+    <div class="course-head">
+      <a class="back-map" href="#/"><Icon name="back" /> Your library</a>
+      <h1>{c.title}</h1>
       <details class="menu" bind:this={menuEl} bind:open={menuOpen}><summary class="btn secondary sm" aria-label="More roadmap actions"><Icon name="more" /> More</summary><div class="menu-list popover-enter">
-        <button aria-expanded={prefsOpen} aria-controls="video-prefs" onclick={() => act(async () => { prefsOpen = !prefsOpen; await tick(); document.querySelector<HTMLElement>(prefsOpen ? '#video-prefs h2' : '.overview-head summary')?.focus(); })}>Video preferences for this roadmap</button>
+        <button aria-expanded={prefsOpen} aria-controls="video-prefs" onclick={() => act(async () => { prefsOpen = !prefsOpen; await tick(); document.querySelector<HTMLElement>(prefsOpen ? '#video-prefs h2' : '.course-head summary')?.focus(); })}>Video preferences for this roadmap</button>
         <button id="adapt" disabled={appState.adapting} onclick={() => act(() => adaptNow(true))}>{appState.adapting ? 'Reading your results…' : 'Adjust to my progress'}<small>Add practice or drop lessons, based on your quiz and exercise results</small></button>
         <button id="revise-open" aria-expanded={reviseOpen} aria-controls="revise" onclick={() => act(async () => { reviseOpen = !reviseOpen; await tick(); if (reviseOpen) document.getElementById('ask')?.focus(); })}>Change my roadmap<small>Take the lessons you have not started somewhere else</small></button>
         {#if ls.some(l => l.stub) && !bulk?.text}<button id="write-all" onclick={writeEveryLesson}>Write every lesson now<small>Writes the remaining phases now. Uses many AI tokens.</small></button>{/if}
@@ -152,29 +187,55 @@
         <button id="roadmap-mistakes" onclick={() => act(() => { location.hash = '#/mistakes/' + enc(c.id); })}>Mistakes notebook<small>The questions you missed in this roadmap</small></button>
         <button id="delete-roadmap" class="danger" disabled={deleting} onclick={() => act(deleteRoadmap)}>Delete roadmap<small>Removes it with all its progress and notes</small></button>
       </div></details>
+      <p class="goal">{c.summary}</p>
     </div>
-    <p class="goal">{c.summary}</p>
     <div class="progress-line"><Progress {n} total={ls.length} wide={false} /><span>{n} of {ls.length} lessons complete · {ls.length ? Math.round(n / ls.length * 100) : 0}%</span></div>
-    {#if complete}<div class="celebrate"><strong>Roadmap complete.</strong><p>Every lesson is complete.</p><a class="btn" class:secondary={reviseOpen} href={href(c.id, ls[0].id)}>Open the first lesson <Icon name="arrow" /></a></div>
-    {:else if next}<section class="next-card" aria-labelledby="next-title"><div><div class="kicker">{n ? 'Up next' : 'Start here'} · Phase {nextPhase + 1}</div><h2 id="next-title">{next.title}</h2><p>Lesson {ls.indexOf(next) + 1} of {ls.length}{next.stub ? ' · The AI writes this phase when you open it' : ''}</p></div><a class="btn big" class:secondary={reviseOpen} href={href(c.id, next.id)}>{n ? 'Continue learning' : 'Start the first lesson'} <Icon name="arrow" /></a></section>{/if}
-  </div>
-  {#if showIndex}<div><p class="side-title">{c.stages ? 'Stages' : 'Phases'}</p><nav class="phase-index" aria-label={`Jump to ${c.stages ? 'stage' : 'phase'}`}>{#each c.phases as p, i}{#if !c.stages || (p.stage !== undefined && c.phases[i - 1]?.stage !== p.stage)}{@const group = c.stages && p.stage !== undefined ? stageLessons(c, p.stage) : p.lessons}{@const isCurrent = !complete && (c.stages && p.stage !== undefined ? p.stage === nextStage : i === nextPhase)}<a href={`#phase-${i + 1}`} class:current={isCurrent} class:done={doneIn(group) === group.length} aria-current={isCurrent ? 'location' : undefined} onclick={e => { e.preventDefault(); void jump(i); }}><span class="dot" aria-hidden="true"></span><span>{c.stages && p.stage !== undefined ? c.stages[p.stage].title : `${i + 1} · ${p.title}`}</span><span class="count">{doneIn(group)}/{group.length}</span></a>{/if}{/each}</nav></div>{/if}
-  </aside>
-  <div class="overview-main">
-  {#if appState.adapting}<Waiting skeleton="plan" inline title="Reading your results and updating the roadmap. This can take a minute." />{/if}
+    {#if tabbed}<div class="stage-nav" role="tablist" aria-label="Stages" tabindex="-1" bind:this={tabsEl} onkeydown={stageKeys}>{#each c.stages! as st, i}<button type="button" role="tab" id={`stage-tab-${i}`} aria-selected={i === cur} tabindex={i === cur ? 0 : -1} title={`Stage ${i + 1}: ${st.title} · ${stageDoneAll(i) ? 'Complete' : i === nextStage ? 'In progress' : 'Not started'}`} onclick={() => picked = i}><i class:on={i === nextStage && !complete} class:done={stageDoneAll(i)} aria-hidden="true"></i><span>Stage {i + 1}{c.stages!.length <= 4 || i === cur ? ` · ${st.title}` : ''}</span></button>{/each}</div>{/if}
+  {#if appState.adapting}<Waiting skeleton="plan" inline title="Preparing a recommendation from your results. This can take a minute." />{/if}
   {#if bulk?.text || bulk?.error}<div class="row bulk-row">{#if bulk?.text}{#key bulk.text}<Waiting skeleton="plan" inline title={`${bulk.text}. Each phase takes about a minute.`} />{/key}<button class="btn secondary sm" id="stop-writing" disabled={bulk.stop} onclick={() => { if (bulk) bulk.stop = true; }}><BusyLabel busy={bulk.stop} idle="Stop" label="Stopping after this phase…" /></button>{/if}{#if bulk?.error}<p class="err">{bulk.error}</p>{/if}</div>{/if}
+  {#if appState.suggestion?.cid === c.id}<PlanOptions preview={appState.suggestion.preview} cancel={() => appState.suggestion = null} />{/if}
   {#if prefsOpen}<section class="note" id="video-prefs" aria-labelledby="video-prefs-title"><h2 id="video-prefs-title" tabindex="-1">Video preferences for this roadmap</h2><VideoPrefs initial={c.prefs} course={c} /><button type="button" class="link revise-cancel" onclick={() => { prefsOpen = false; menuEl?.querySelector('summary')?.focus(); }}>Close</button></section>{/if}
   <form id="revise" class="note" hidden={!reviseOpen} onsubmit={e => { e.preventDefault(); void revise(); }}><strong>Change my roadmap</strong><p>Say what should change in the lessons you have not started. Your progress stays.</p><div class="own"><input id="ask" required maxlength="600" aria-label="What should change in the lessons you have not started?" placeholder="For example: show me how this is used in industry, with real applications" bind:value={ask} /><button class="btn" disabled={revising}><BusyLabel busy={revising} idle="Preview changes" label="Preparing options…" /> <Icon name="arrow" /></button></div>{#if revising}<Waiting skeleton="plans" title="Preparing roadmap options" hint="this can take about a minute" />{/if}{#if reviseError}<LoadError what="The options could not be prepared." error={reviseError} retry={() => void revise()} />{/if}{#if preview}<PlanOptions {preview} ask={originalAsk} cancel={() => preview = undefined} applied={() => { preview = undefined; reviseOpen = false; ask = ''; }} />{/if}<button type="button" class="link revise-cancel" hidden={!!preview} onclick={() => { reviseOpen = false; reviseError = ''; menuEl?.querySelector('summary')?.focus(); }}>Cancel</button></form>
+
+  <div role={tabbed ? 'tabpanel' : undefined} aria-labelledby={tabbed ? `stage-tab-${cur}` : undefined}>
+    {#if c.stages?.length}{@const st = c.stages[cur]}<div class="sg-head"><p class="kicker">Stage {cur + 1} of {c.stages.length} · {stageDone} of {stageLs.length} lessons</p><h2>{st.title}</h2>{#if st.blurb}<p>{st.blurb}</p>{/if}</div>{/if}
+    {#if complete}<div class="celebrate"><strong>Roadmap complete.</strong><p>Every lesson is complete.</p><a class="btn" class:secondary={reviseOpen} href={href(c.id, ls[0].id)}>Open the first lesson <Icon name="arrow" /></a></div>
+    {:else if here}{@const blocked = locked(c, here)}<section class="next-card" aria-labelledby="next-title"><div class="grow"><div class="kicker">{here === next ? (n ? 'Where you are' : 'Start here') : 'First lesson in this stage'} · Lesson {herePhase + 1}.{c.phases[herePhase].lessons.indexOf(here) + 1}</div><h2 id="next-title">{here.title}</h2><p>{blocked ? `Opens after Stage ${cur} and its exam.` : here.stub ? 'The AI writes this phase when you open it.' : here.goal}</p></div>{#if blocked}<span class="btn secondary" aria-disabled="true"><Icon name="lock" /> Locked</span>{:else}<a class="btn" class:secondary={reviseOpen} href={href(c.id, here.id)}>{here === next && n ? 'Continue' : 'Open lesson'} <Icon name="arrow" /></a>{/if}</section>
+    {:else}<div class="celebrate"><strong>Stage complete.</strong><p>Every lesson in this stage is complete.{c.stages?.length ? ' Take the stage exam to prove it.' : ''}</p></div>{/if}
+  {#if c.needs?.length}<details class="needs" open={!n}><summary>Before you start: {c.needs.length} thing{c.needs.length === 1 ? '' : 's'} to have ready</summary><ul id="needs">{#each c.needs as x, i}<li><label><input type="checkbox" checked={!!c.state.have?.[i]} onchange={e => { if (e.currentTarget.checked) (c.state.have ||= {})[i] = true; else delete c.state.have?.[i]; save(c); }} /><span><b>{x.name}</b>{#if x.why}<small>{x.why}</small>{/if}</span></label>{#if x.kind === 'tool' && x.command && found !== false}{#if !found}<span class="sk tag-line" role="status"><span class="sr">Checking</span></span>{:else}<span class="tag" class:ok={found[x.command]}>{found[x.command] ? 'Installed' : 'Not found on this computer'}</span>{#if !found[x.command] && appState.config.os !== 'windows'}<button type="button" class="btn secondary sm install" disabled={!!installing} onclick={() => void install(x.command!)}><BusyLabel busy={installing === x.command} idle="Install" label="Installing…" /></button>{/if}{/if}{/if}</li>{/each}</ul>{#if installError}<p class="err" role="alert">{installError}</p>{/if}</details>{/if}
+
+    <section class="route-board" aria-labelledby="lessons-heading"><h2 class="sr" id="lessons-heading">Lessons</h2>
+      {#each shown as { p, i: pi } (pi)}<details class="route-phase" id={`phase-${pi + 1}`} open={!p.lessons.every(l => c.state.done[l.id]) || shown.length === 1}><summary class="phase-flag"><Icon name="chevron" /><h3><span>Phase {pi + 1}</span>{p.title}</h3><b class="small">{doneIn(p.lessons)} / {p.lessons.length}{p.lessons.every(l => c.state.done[l.id]) ? ' · Complete' : ''}</b></summary>{#if p.blurb}<p class="phase-blurb">{p.blurb}</p>{/if}<div class="lesson-list route stagger">{#each p.lessons as l, li}{@const st = rowState(l)}<div class={`lesson-action-row route-item ${st}`}><a class={`lesson-row ${st}`} href={href(c.id, l.id)} aria-current={st === 'next' ? 'step' : undefined}><span class="state route-stop" aria-hidden="true">{#if st === 'done'}<Icon name="check" />{:else if st === 'locked'}<Icon name="lock" />{/if}</span><span class="num">{pi + 1}.{li + 1}</span><span class="stop-title">{l.title}{#if l.added} <span class="tag accent">Added for you</span>{/if}</span><span class="stop-meta">{META[st]}</span></a><LessonActions {c} {l} compact /></div>{/each}</div></details>{/each}
+    </section>
+  </div>
+  {#if c.blueprint}<details class="note"><summary>Course blueprint and final challenge</summary><h3>{c.blueprint.challenge}</h3><p style="white-space:pre-line">{c.blueprint.criteria}</p><h3>Milestones</h3><p style="white-space:pre-line">{c.blueprint.milestones}</p></details>
+  {:else}<details class="note"><summary>Design milestones for this course</summary>
+    {#if draft}<form class="form-col" onsubmit={e => { e.preventDefault(); void retrofit(true); }}>
+      <BlueprintFields plan={draft} /><div class="row"><button class="btn" disabled={planning}>Approve milestones</button><button type="button" class="link" disabled={planning} onclick={() => draft = undefined}>Cancel</button></div></form>
+    {:else}<button class="btn secondary" disabled={planning} onclick={() => retrofit()}>Draft a blueprint from my lessons</button>{/if}
+    {#if planning}<p role="status">Reviewing your course…</p>{/if}{#if planError}<p role="alert" class="err">{planError}</p>{/if}
+  </details>{/if}
+  {#if where && !complete && n > 0}<section class="note where" aria-labelledby="where-title"><h2 id="where-title">Where you are</h2>
+    <p><strong>Learning now</strong> <a href={href(c.id, where.next.id)}>{where.next.title}</a>: {where.next.goal}</p>
+    <p><strong>Recommended next</strong> <a href={href(c.id, where.why.l.id)}>{where.why.text}</a></p>
+    {#if where.milestone}<p><strong>Next milestone</strong> <a href={href(c.id, where.milestone.id) + '/studio'}>{where.milestone.checkpoint?.task}</a></p>{/if}
+    {#if where.shown.length}<p><strong>You have shown</strong></p><ul>{#each where.shown.slice(-5) as s}<li><a href={href(c.id, s.l.id)}>{s.l.title}</a>: {s.text}</li>{/each}</ul>{/if}
+    {#if where.shaky.length}<p><strong>Still shaky</strong></p><ul>{#each where.shaky as s}<li><a href={href(c.id, s.l.id)}>{s.l.title}</a>: {s.text}</li>{/each}</ul>{/if}
+  </section>{/if}
+  {#if ls.some(l => l.checkpoint || c.state.portfolio?.[l.id])}<details class="note"><summary>Milestones and evidence</summary>
+    {#each ls.filter(l => l.checkpoint || c.state.portfolio?.[l.id]) as l}
+      {@const attempts = c.state.portfolio?.[l.id]?.attempts || []}{@const last = attempts[attempts.length-1]}
+      <article><h3><a href={href(c.id,l.id)+'/studio'}>{l.title}</a></h3><p>{l.checkpoint?.task || l.goal}</p>
+      {#if last}<p><strong>{last.mode === 'independent' ? 'Independent attempt' : 'Guided practice'}</strong> {last.evidence}</p><p>{last.improvement} {last.next}</p>{:else}<p class="small">No assessed attempt yet.</p>{/if}</article>
+    {/each}</details>{/if}
   {#if c.offline && offline}<p class="offline-status" role="status"><Icon name="Watch" /> {offline.running ? 'Saving videos for offline' : 'Videos saved for offline'}: {offline.saved} of {offline.total} · {mb(offline.bytes)}{#if offline.failed && !offline.running}{' · '}{offline.failed} could not be saved. {offline.error}{/if}</p>{/if}
   <div id="video-status">{#if pending}<p class="video-status"><Icon name="Watch" /> Videos may still be arriving for {pending} of {ls.length} lessons. Open any lesson to search again if needed.</p>{/if}</div>
-  {#if c.changes?.length}{@const x = c.changes[c.changes.length - 1]}<div class="note change"><strong>Roadmap updated</strong><p>{x.note}</p>{#if x.added.length}<p class="small">Added: {x.added.join(', ')}</p>{/if}{#if x.dropped.length}<p class="small">Removed: {x.dropped.join(', ')}</p>{/if}{#if x.changed?.length}<p class="small">Rewritten: {x.changed.join(', ')}</p>{/if}</div>{/if}
-  {#if c.needs?.length}<details class="needs" open={!n}><summary>Before you start: {c.needs.length} thing{c.needs.length === 1 ? '' : 's'} to have ready</summary><ul id="needs">{#each c.needs as x, i}<li><label><input type="checkbox" checked={!!c.state.have?.[i]} onchange={e => { if (e.currentTarget.checked) (c.state.have ||= {})[i] = true; else delete c.state.have?.[i]; save(c); }} /><span><b>{x.name}</b>{#if x.why}<small>{x.why}</small>{/if}</span></label>{#if x.kind === 'tool' && x.command && found !== false}{#if !found}<span class="sk tag-line" role="status"><span class="sr">Checking</span></span>{:else}<span class="tag" class:ok={found[x.command]}>{found[x.command] ? 'Installed' : 'Not found on this computer'}</span>{#if !found[x.command] && appState.config.os !== 'windows'}<button type="button" class="btn secondary sm install" disabled={!!installing} onclick={() => void install(x.command!)}><BusyLabel busy={installing === x.command} idle="Install" label="Installing…" /></button>{/if}{/if}{/if}</li>{/each}</ul>{#if installError}<p class="err" role="alert">{installError}</p>{/if}</details>{/if}
-  <section class="route-board" aria-labelledby="lessons-heading"><div class="route-heading"><h2 id="lessons-heading">Lessons</h2><span class="small">{c.phases.length} phases</span></div>
-    {#each c.phases as p, pi}
-      {#if c.stages && p.stage !== undefined && c.phases[pi - 1]?.stage !== p.stage}{@const st = c.stages[p.stage]}{@const sl = stageLessons(c, p.stage)}<button type="button" class="stage-head" aria-expanded={stageOpen(c, p.stage)} onclick={() => toggleStage(p.stage!)}><span><span class="stage-label">Stage {p.stage + 1}</span><strong>{st.title}</strong>{#if st.blurb}<span class="blurb">{st.blurb}</span>{/if}</span><span class="stage-count">{doneIn(sl)} / {sl.length} lessons <Icon name="chevron" /></span></button>{/if}
-      <section class="route-phase" hidden={!!c.stages && p.stage !== undefined && !stageOpen(c, p.stage)} id={`phase-${pi + 1}`}><div class="phase-flag"><h3><span>Phase {pi + 1}</span>{p.title}</h3><b class="small">{doneIn(p.lessons)} / {p.lessons.length}{p.lessons.every(l => c.state.done[l.id]) ? ' · Complete' : ''}</b></div>{#if p.blurb}<p class="phase-blurb">{p.blurb}</p>{/if}<div class="lesson-list route stagger">{#each p.lessons as l, li}{@const st = rowState(l)}<div class={`lesson-action-row route-item ${st}`}><a class={`lesson-row ${st}`} href={href(c.id, l.id)} aria-current={st === 'next' ? 'step' : undefined}><span class="state route-stop" aria-hidden="true">{#if st === 'done'}<Icon name="check" />{:else if st === 'locked'}<Icon name="lock" />{/if}</span><span class="num">{pi + 1}.{li + 1}</span><span class="stop-title">{l.title}{#if l.added} <span class="tag accent">Added for you</span>{/if}</span><span class="stop-meta">{META[st]}</span></a><LessonActions {c} {l} compact /></div>{/each}</div></section>
-      {#if c.stages && p.stage !== undefined && c.phases[pi + 1]?.stage !== p.stage && stageOpen(c, p.stage)}<ExamRow {c} stage={p.stage} />{/if}
-    {/each}
-  </section>
+  {#if c.changes?.length}<details class="note change"><summary>Roadmap change history</summary>{#each c.changes.slice().reverse() as x}<p>{x.note}</p>{#if x.added.length}<p class="small">Added: {x.added.join(', ')}</p>{/if}{#if x.dropped.length}<p class="small">Removed: {x.dropped.join(', ')}</p>{/if}{#if x.changed?.length}<p class="small">Rewritten: {x.changed.join(', ')}</p>{/if}{/each}</details>{/if}
   </div>
+  <aside class="sv-side" aria-label="This stage at a glance">
+    {#if activity}<section class="side-card goal-card"><div class="grow"><p class="kicker">Daily goal</p><strong>{activity.done} / {activity.goal}</strong><span class="small">steps today{activity.streak ? ` · ${activity.streak}-day streak` : ''}</span></div><Ring value={activity.done} max={activity.goal} label="Daily goal" /></section>{/if}
+    <section class="side-card"><p class="kicker">{c.stages?.length ? 'Stage milestone' : 'Milestone'}</p>{#if milestone}<a class="ms-title" href={href(c.id, milestone.id) + '/studio'}>{milestone.checkpoint?.task}</a><p class="small">In {milestone.title}</p>{:else}<p class="small">{c.blueprint ? 'No milestone in this stage.' : 'No milestones yet. Design them below the lessons.'}</p>{/if}<div class="ms-row"><Progress n={stageDone} total={stageLs.length} /><span class="small">{stageDone} of {stageLs.length}</span></div></section>
+    {#if c.stages?.length}<section class="side-card exam-card"><p class="kicker">Stage exam</p><ExamRow {c} stage={cur} /></section>{/if}
+    <section class="side-card"><div class="side-card-head"><p class="kicker">Mistakes notebook</p><a class="small" href={'#/mistakes/' + enc(c.id)}>Open</a></div>{#if mistakes === undefined}<span class="sk" style="height:10px;width:70%"></span>{:else if stageMistakes.length}<ul class="mist">{#each stageMistakes.slice(0, 4) as m}<li><a href={href(m.course, m.lesson)}>{m.kind === 'code' ? 'Coding exercise: ' + (m.title || m.lesson_title) : m.q}</a><span class="tag">{m.kind === 'code' ? 'Tests' : 'Missed ' + m.n + '×'}</span></li>{/each}</ul>{#if stageMistakes.length > 4}<p class="small">and {stageMistakes.length - 4} more</p>{/if}{:else}<p class="small">No open mistakes in this {c.stages?.length ? 'stage' : 'roadmap'}.</p>{/if}</section>
+  </aside>
 </div>

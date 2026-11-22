@@ -4,7 +4,7 @@ import { loadModels } from './models.svelte';
 import { watchThinking } from './thinking';
 import { openUrl } from '@tauri-apps/plugin-opener';
 import { lessons, checked, passed } from './progress';
-import type { Course, Lesson, LibraryCourse, Settings, ReviewData, Message, Session, RunState, Activity } from './types';
+import type { Course, Lesson, LibraryCourse, Settings, ReviewData, Message, Session, RunState, Activity, PlanPreview } from './types';
 
 export const appState = $state({
   course: null as Course | null,
@@ -15,7 +15,7 @@ export const appState = $state({
   // Today's steps toward the daily goal and the streak, for the home page.
   activity: null as Activity | null,
   toast: '', ideasOpen: false, ideas: null as string[] | null,
-  busyKey: '', adapting: false,
+  busyKey: '', adapting: false, suggestion: null as { cid: string; preview: PlanPreview } | null,
   // True while the ChatGPT sign-in page is open in the browser; see signInChatGpt.
   signingIn: false,
   // What the tutor is doing while a reply is on its way, for example "Reading the video transcript". Empty when idle.
@@ -69,6 +69,7 @@ export function normalize(c: Course) {
 const unsaved = new Set<Course>();
 function send(c: Course) {
   const state = $state.snapshot(c.state);
+  delete state.portfolio;
   return saving = saving.then(async () => {
     try { await api('PUT', 'api/courses/' + enc(c.id) + '/state', state); unsaved.delete(c); }
     catch (error) { unsaved.add(c); appState.saveError = message(error); }
@@ -197,15 +198,12 @@ export async function adaptNow(loud: boolean) {
   appState.adapting = true;
   try {
     await saveFirst();
-    const r = await api<{ course: Course; change: { added: string[]; dropped: string[]; changed?: string[]; note: string } }>('POST', 'api/courses/' + enc(c.id) + '/adapt');
-    const changed = r.change.added.length || r.change.dropped.length || r.change.changed?.length;
-    fillState(Object.assign(c, r.course));
-    const id = appState.current?.id;
-    if (id && appState.course === c) {
-      appState.current = lessons(c).find(l => l.id === id) || null;
-      if (!appState.current) location.hash = href(c.id);
+    const preview = await api<PlanPreview>('POST', 'api/courses/' + enc(c.id) + '/adapt');
+    if (appState.course === c) {
+      appState.suggestion = {cid:c.id, preview};
+      if (loud) location.hash = href(c.id);
+      if (!loud && preview.options.length) toast('A suggested adjustment is ready on your roadmap.');
     }
-    if (loud || changed) toast((changed ? 'Roadmap updated. ' : '') + (r.change.note || 'No changes needed.'));
     return true;
   } catch (error) { if (loud) toast(message(error)); return false; }
   finally { appState.adapting = false; }
@@ -280,7 +278,7 @@ export async function loadPractice(fresh = false) {
     if (fresh) {
       delete c.state.quiz[l.id];
       if (appState.course === c) save(c);
-      else await api('PUT', 'api/courses/' + enc(c.id) + '/state', $state.snapshot(c.state));
+      else { const state = $state.snapshot(c.state); delete state.portfolio; await api('PUT', 'api/courses/' + enc(c.id) + '/state', state); }
     }
   } catch (error) { appState.practiceErrors[key] = message(error); }
   finally { delete appState.practiceBusy[key]; }

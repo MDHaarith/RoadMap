@@ -319,6 +319,7 @@ impl App {
                 "response.output_text.delta" => {
                     let t = string(&d["delta"]);
                     content.push_str(&t);
+                    self.draft(&t);
                     if let Some(out) = on_text.as_mut() {
                         out(&t)?;
                     } else if let Some(title) = t.contains('"').then(|| last_title(&content)).flatten() {

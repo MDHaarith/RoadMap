@@ -417,7 +417,8 @@ impl App {
                     continue;
                 }
                 let mut x = clean_lesson(l, &lid, &[]);
-                x["videos"]=json!(list(&l["videos"]).iter().filter(|v|v.is_object()&&matches(r"^[\p{L}\p{N}_-]{11}$",&text(&v["id"]))).take(4).map(|v|json!({"id":v["id"],"title":cap(&string(&v["title"]),200),"channel":cap(&string(&v["channel"]),100),"duration":v["duration"].as_i64().or_else(||v["duration"].as_bool().map(i64::from)).unwrap_or(0),"why":cap(&string(&v["why"]),300),"start":v["start"].as_i64().unwrap_or(0).max(0),"covers":strs(&v["covers"],8).iter().map(|k|cap(k,120)).collect::<Vec<_>>(),"chapters":list(&v["chapters"]).iter().filter(|m|m.is_object()&&(m["t"].is_i64()||m["t"].is_boolean())).take(40).map(|m|json!({"t":m["t"],"title":cap(&string(&m["title"]),120)})).collect::<Vec<_>>()})).collect::<Vec<_>>());
+                if let Some(check) = l.get("checkpoint") { x["checkpoint"] = crate::ai::clean_checkpoint(check)?; }
+                x["videos"]=json!(list(&l["videos"]).iter().filter(|v|v.is_object()&&matches(r"^[\p{L}\p{N}_-]{11}$",&text(&v["id"]))).take(8).map(|v|json!({"id":v["id"],"reference":v["reference"].as_bool().unwrap_or(false),"segments":crate::ai::clean_segments(&v["segments"],v["duration"].as_i64().unwrap_or(0)),"action":cap(&string(&v["action"]),300),"title":cap(&string(&v["title"]),200),"channel":cap(&string(&v["channel"]),100),"duration":v["duration"].as_i64().or_else(||v["duration"].as_bool().map(i64::from)).unwrap_or(0),"why":cap(&string(&v["why"]),300),"start":v["start"].as_i64().unwrap_or(0).max(0),"covers":strs(&v["covers"],8).iter().map(|k|cap(k,120)).collect::<Vec<_>>(),"chapters":list(&v["chapters"]).iter().filter(|m|m.is_object()&&(m["t"].is_i64()||m["t"].is_boolean())).take(40).map(|m|json!({"t":m["t"],"title":cap(&string(&m["title"]),120)})).collect::<Vec<_>>()})).collect::<Vec<_>>());
                 if l["practice"].is_object() {
                     x["practice"] = clean_practice(&l["practice"], 200);
                     // Keeps the start of the newest question set when the whole bank came through.
@@ -487,6 +488,9 @@ impl App {
                 state[k] = keep;
             }
         }
+        for (id,record) in old["portfolio"].as_object().into_iter().flatten() {
+            if ids.contains(id) { state["portfolio"][id] = crate::ai::clean_portfolio(record)?; }
+        }
         // Stage exam results are keyed by stage, not by lesson.
         let mut exams = json!({});
         for (k, v) in old["exams"].as_object().into_iter().flatten() {
@@ -507,6 +511,10 @@ impl App {
             phases[0]["lessons"][0]["id"].clone()
         };
         let mut c = json!({"id":random_hex(6)?,"prompt":cap(&string(&d["prompt"]),2000),"level":cap(&string(&d["level"]),3000),"folder":null,"title":cap(&if truth(&d["title"]){text(&d["title"])}else{"Imported roadmap".into()},200),"summary":cap(&string(&d["summary"]),600),"phases":phases,"state":state});
+        if let Some(plan) = d.get("blueprint") { c["blueprint"] = crate::ai::clean_blueprint(plan)?; }
+        if let Some(history) = d["changes"].as_array() {
+            c["changes"] = json!(history.iter().map(|x| json!({"day":x["day"].as_i64(),"note":cap(&string(&x["note"]),600),"added":strs(&x["added"],300),"changed":strs(&x["changed"],300),"dropped":strs(&x["dropped"],300)})).collect::<Vec<_>>());
+        }
         if !stages.is_empty() {
             c["stages"] = json!(stages);
         }
