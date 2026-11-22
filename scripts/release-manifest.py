@@ -9,7 +9,7 @@ for extension, platform in [('exe', 'windows-x86_64-nsis'), ('AppImage', 'linux-
     signature = signatures[0]
     name = signature.name[:-4]
     assert signature.with_name(name).is_file(), name
-    platforms[platform] = {'signature': signature.read_text().strip(), 'url': f'https://github.com/MDHaarith/RoadMap/releases/download/v{version}/{name}'}
+    platforms[platform] = {'signature': signature.read_text().strip(), 'url': f'https://github.com/MDHaarith/RoadMap-releases/releases/download/v{version}/{name}'}
 # Unbundled/development copies can discover the release and offer its web page.
 platforms['linux-x86_64'] = platforms['linux-x86_64-appimage']
 platforms['windows-x86_64'] = platforms['windows-x86_64-nsis']
