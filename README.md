@@ -62,8 +62,11 @@ Set the same version in `Cargo.toml`, `tauri.conf.json`, `roadmap-app.spec`, `ui
 and the root package entries in `ui/package-lock.json`. The UI version matches
 for release validation; the running version comes from Tauri. Run `cargo check`
 to update the root package version in `Cargo.lock`, then `make release-check`.
-Commit the changes, run `git tag vX.Y.Z`, and `git push origin vX.Y.Z`.
-For a manual Actions run, select that tag, not a branch.
+Commit the changes and merge them into `master` through a pull request. When CI
+passes on `master`, the release workflow builds signed installers and publishes
+`vX.Y.Z` to `MDHaarith/RoadMap-releases`. A version that is already released is
+skipped, so bump the version for each release. A manual Actions run on `master`
+does the same.
 
 Configure these repository Actions secrets once:
 
