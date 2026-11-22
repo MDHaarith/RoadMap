@@ -1,6 +1,6 @@
 [package]
 name = "roadmap-app"
-version = "0.2.2"
+version = "1.0.0"
 edition = "2021"
 default-run = "roadmap-app"
 rust-version = "1.92"
