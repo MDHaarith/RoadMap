@@ -189,8 +189,8 @@ input[type=checkbox]:checked::after { content: ''; width: 9px; height: 5px; bord
 
 /* Menu built on <details>: summary is the trigger, .menu-list the popover. */
 .menu { position: relative; }
-.menu > summary { list-style: none; }
-.menu > summary::-webkit-details-marker { display: none; }
+.menu-list, .search-pop { transform-origin: top right; }
+.switch-menu, .select-list { transform-origin: top left; }
 .menu-list { position: absolute; right: 0; top: calc(100% + 6px); z-index: 20; min-width: 260px; background: var(--surface); border: 1px solid var(--line); border-radius: var(--r); box-shadow: var(--overlay-shadow); padding: 6px; display: grid; }
 .menu-list button, .select-list [role=option], .switch-menu a { display: flex; flex-direction: column; align-items: flex-start; gap: 2px; min-height: 30px; text-align: left; border: 0; background: none; padding: var(--s2) var(--s3); border-radius: var(--r-sm); font-size: var(--t-sm); font-weight: 500; color: var(--ink); }
 .select-list { position: fixed; right: auto; min-width: 0; z-index: 100; overflow-y: auto; overscroll-behavior: contain; display: block; }
@@ -449,8 +449,8 @@ mark { background: #fff1a8; color: inherit; border-radius: 3px; padding: 0 1px; 
 .lesson-action-row.next { background: var(--accent-soft); }
 .lesson-action-row > .lesson-row { flex: 1; min-width: 0; }
 .lesson-action-row > .menu { z-index: 2; }
-.lesson-action-row > .menu[open] { z-index: 8; }
-.lesson-action-row > .menu > summary { background: transparent; border-color: transparent; }
+.lesson-action-row > .menu.open { z-index: 8; }
+.lesson-action-row > .menu > .menu-trigger { background: transparent; border-color: transparent; }
 .lesson-row { display: flex; align-items: center; gap: var(--s3); padding: 8px var(--s4); color: var(--ink); min-height: 42px; }
 .lesson-row:hover { text-decoration: none; }
 .lesson-row .state { color: var(--muted); }
@@ -555,7 +555,9 @@ main:has(.lesson-layout .support:not([hidden])) { padding-right: calc(var(--side
 .chat-log { position: relative; flex: 1; min-height: 0; display: flex; }
 .log { flex: 1; min-width: 0; min-height: 0; overflow-y: auto; display: flex; flex-direction: column; gap: var(--s3); padding: 2px 4px var(--s2) 2px; font-size: var(--t-sm); overflow-anchor: none; }
 .log > * { flex: none; }
-.tutor-toolbar { display: flex; justify-content: flex-end; margin: -4px 0 var(--s2); }
+/* One row: milestone studio on the left, New chat on the right. */
+.tutor-toolbar { display: flex; align-items: center; gap: var(--s2); margin: 0 0 var(--s2); }
+.tutor-toolbar > :first-child { flex: 1; min-width: 0; }
 .tutor-starters { margin-top: var(--s5); }
 .tutor-starters > button { width: 100%; display: flex; flex-direction: column; align-items: flex-start; gap: 2px; padding: var(--s3) 2px; border: 0; border-bottom: 1px solid var(--line); background: none; text-align: left; }
 .tutor-starters strong { font-size: var(--t-sm); font-weight: 550; }
@@ -1022,8 +1024,8 @@ button:active:not(:disabled), .btn:active { transform: scale(.97); }
 .screen-enter, main > :not(.lesson-layout), .lesson-article, .side-pane:not([hidden]), .message-enter, .msg, .route-phase:not([hidden]), #revise:not([hidden]), .feedback, .score { animation: arrive var(--motion-enter) var(--motion-ease) backwards; }
 .lesson-content, .step-forward { animation: step-forward var(--motion-enter) var(--motion-ease) backwards; }
 .step-back { animation: step-back var(--motion-enter) var(--motion-ease) backwards; }
-.popover-enter, .menu[open] .menu-list { transform-origin: top right; animation: unfold var(--motion-fast) var(--motion-ease) backwards; }
-.switch-menu:not([hidden]) { transform-origin: top left; animation: unfold var(--motion-fast) var(--motion-ease) backwards; }
+/* Dropdown menus animate with the drop transition (lib/motion.ts). Opened sections ease their content in; closing is instant because WebKitGTK cannot keep <details> content painted while it closes. */
+details[open] > :not(summary) { animation: arrive var(--motion-enter) var(--motion-ease) backwards; }
 #completed:not([hidden]), .celebrate { animation: unfold var(--motion-enter) var(--motion-ease) backwards; }
 #toast:not([hidden]) { animation: toast-arrive var(--motion-enter) var(--motion-ease) backwards; }
 .bar i { transform-origin: left; transition: transform var(--motion-slow) var(--motion-ease); animation: fill-progress var(--motion-slow) var(--motion-ease) backwards; }

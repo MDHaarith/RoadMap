@@ -1,6 +1,7 @@
 <script lang="ts">
   import type { Course, Lesson, Portfolio } from '../lib/types';
   import { api } from '../lib/api';
+  import Select from './Select.svelte';
   import { adaptNow, message } from '../lib/state.svelte';
   let { c, l }: {c: Course; l: Lesson} = $props();
   let record = $derived(c.state.portfolio?.[l.id]);
@@ -30,7 +31,7 @@
   {#if latest && !work && !record?.challenge}<button class="link" onclick={() => work = latest?.work || ''}>Revise my last submission</button>{/if}
   <label for="studio-work">{record?.challenge ? 'Your independent response' : 'Your work or revision'}</label>
   <textarea id="studio-work" rows="5" maxlength="8000" bind:value={work} placeholder="Paste your work, results, or observations here."></textarea>
-  {#if !record?.challenge}<label for="studio-style">Feedback style</label><select id="studio-style" bind:value={style}><option>Coach me</option><option>Give me a hint</option><option>Show a worked example</option></select>{/if}
+  {#if !record?.challenge}<label for="studio-style">Feedback style</label><Select id="studio-style" value={style} onchange={v => style = v} options={['Coach me', 'Give me a hint', 'Show a worked example'].map(v => ({ value: v, label: v }))} />{/if}
   {#if record?.challenge}<label><input type="checkbox" bind:checked={unaided} /> I completed this attempt without coaching.</label>{/if}
   <div class="row"><button class="btn" disabled={busy || !work.trim() || (!!record?.challenge && !unaided)} onclick={() => submit(record?.challenge ? 'independent' : 'practice')}>{record?.challenge ? 'Assess my attempt' : 'Review my work'}</button>
     {#if !record?.challenge}<button class="btn secondary" disabled={busy || !!work.trim()} onclick={() => submit('challenge')}>Try a fresh task independently</button>{/if}</div>

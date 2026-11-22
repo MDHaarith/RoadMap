@@ -71,8 +71,7 @@
 <aside class="support" aria-label="Learning tools">
   <div class="side-tabs" role="tablist">{#each [['tutor', 'Tutor', 'Tutor'], ['notes', 'My notes', 'Notes']] as [k, icon, name]}<button type="button" role="tab" id={`tab-${k}`} aria-controls={`pane-${k}`} aria-selected={tab === k} onclick={() => tab = k as typeof tab}><Icon name={icon} />{name}</button>{/each}</div>
   <div class="side-pane" id="pane-tutor" role="tabpanel" aria-labelledby="tab-tutor" hidden={tab !== 'tutor'}>
-  {#if msgs.length && !appState.busyKey}<div class="tutor-toolbar"><button type="button" class="btn ghost sm" disabled={clearing} onclick={newChat}>New chat</button></div>{/if}
-  <button class="btn secondary sm" onclick={studio}>Work through a milestone with me</button>
+  <div class="tutor-toolbar"><button class="btn secondary sm" onclick={studio}>Work through a milestone with me</button>{#if msgs.length && !appState.busyKey}<button type="button" class="btn ghost sm" disabled={clearing} onclick={newChat}>New chat</button>{/if}</div>
   <AiSetup compact why="The tutor answers through an AI service. Add one in Settings." />
   <!-- svelte-ignore a11y_click_events_have_key_events, a11y_no_noninteractive_element_interactions — Delegates clicks from the formatter’s keyboard-accessible seek buttons. -->
   <div class="chat-log">

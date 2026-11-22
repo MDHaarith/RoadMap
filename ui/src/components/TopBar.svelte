@@ -5,11 +5,12 @@
   import { api } from '../lib/api';
   import { appState, openIdeas, dispose, toast, message } from '../lib/state.svelte';
   import { lessons } from '../lib/progress';
+  import { drop } from '../lib/motion';
   import { enc, href, marks, SEARCH_GROUPS } from '../lib/format';
   import type { LibraryCourse, ReviewData, SearchHit } from '../lib/types';
   let c = $derived(appState.course), ls = $derived(c ? lessons(c) : []), n = $derived(c ? ls.filter(l => c.state.done[l.id]).length : 0);
   let query = $state(''), menuOpen = $state(false), menuLoading = $state(false), menuError = $state(''), others = $state<LibraryCourse[]>([]);
-  let maximized = $state(false), switcher: HTMLDivElement, menu: HTMLDivElement;
+  let maximized = $state(false), switcher: HTMLDivElement, menu = $state<HTMLDivElement>();
   let win: ReturnType<typeof getCurrentWindow> | undefined;
   onMount(() => {
     let cleanup: (() => void) | undefined, alive = true;
@@ -64,7 +65,7 @@
     if (searchBox?.contains(document.activeElement)) return searchKeys(e);
     if (e.key === 'Escape' && appState.ideasOpen) return;
     if (!menuOpen) return;
-    const items = [...menu.querySelectorAll<HTMLAnchorElement>('[role=menuitem]')];
+    const items = [...(menu?.querySelectorAll<HTMLAnchorElement>('[role=menuitem]') ?? [])];
     if (e.key === 'Escape') { e.preventDefault(); closeSwitcher(true); }
     else if (e.key === 'Tab') closeSwitcher(true);
     else if (['ArrowDown', 'ArrowUp', 'Home', 'End'].includes(e.key)) {
@@ -79,10 +80,10 @@
   <a class="brand" href="#/" aria-label="Roadmap library"><svg viewBox="0 0 34 40" fill="none" stroke="currentColor" stroke-width="4" aria-hidden="true"><path d="M8 33V24c0-8 18-2 18-11V7" /><circle cx="8" cy="33" r="4" fill="currentColor" /><path d="M22 7h8V1h-8z" fill="currentColor" /></svg>Roadmap</a>
   {#if c}<span class="crumb-sep" aria-hidden="true">/</span>{/if}
   <a id="ctitle" hidden={!c} href={c ? href(c.id) : '#/'}>{c?.title}</a>
-  <div class="switcher" id="switcher" hidden={!c} bind:this={switcher}><button class="switch-toggle" id="switch-toggle" aria-haspopup="menu" aria-expanded={menuOpen} aria-controls="switch-menu" onclick={toggleSwitcher} onkeydown={e => { if (e.key === 'ArrowDown' && !menuOpen) { e.preventDefault(); void toggleSwitcher(); } }}><span>Switch</span><svg class="icon" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" aria-hidden="true"><path d="m6 9 6 6 6-6" /></svg></button><div class="switch-menu popover-enter stagger" id="switch-menu" role="menu" aria-label="Other active roadmaps" hidden={!menuOpen} bind:this={menu}>{#if menuLoading}<Skeleton kind="rows" />{:else if menuError}<p>{menuError} <button type="button" class="link" onclick={() => { menuOpen = false; void toggleSwitcher(); }}>Try again</button></p>{:else if !others.length}<p>No other active roadmaps.</p>{:else}{#each others as x}<a role="menuitem" tabindex="-1" href={href(x.id, x.next!.id)}><b>{x.title}</b><span>Next: {x.next!.title}</span></a>{/each}{/if}</div></div>
+  <div class="switcher" id="switcher" hidden={!c} bind:this={switcher}><button class="switch-toggle" id="switch-toggle" aria-haspopup="menu" aria-expanded={menuOpen} aria-controls="switch-menu" onclick={toggleSwitcher} onkeydown={e => { if (e.key === 'ArrowDown' && !menuOpen) { e.preventDefault(); void toggleSwitcher(); } }}><span>Switch</span><svg class="icon" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" aria-hidden="true"><path d="m6 9 6 6 6-6" /></svg></button>{#if menuOpen}<div class="switch-menu stagger" id="switch-menu" role="menu" aria-label="Other active roadmaps" bind:this={menu} transition:drop>{#if menuLoading}<Skeleton kind="rows" />{:else if menuError}<p>{menuError} <button type="button" class="link" onclick={() => { menuOpen = false; void toggleSwitcher(); }}>Try again</button></p>{:else if !others.length}<p>No other active roadmaps.</p>{:else}{#each others as x}<a role="menuitem" tabindex="-1" href={href(x.id, x.next!.id)}><b>{x.title}</b><span>Next: {x.next!.title}</span></a>{/each}{/if}</div>{/if}</div>
   <span class="grow" data-tauri-drag-region></span><span class="meter" id="meter" hidden={!c} title="Lessons complete in this roadmap"><span class="bar"><i id="bar" style:width="100%" style:border-radius={`${999 / ((ls.length ? n / ls.length : 0) || 1)}px / 999px`} style:transform={`scaleX(${ls.length ? n / ls.length : 0})`}></i></span><span id="count">{n} / {ls.length}</span></span>
   <form id="search" class="top-search" role="search" bind:this={searchBox} onfocusout={e => { if (!searchBox.contains(e.relatedTarget as Node)) searchOpen = false; }} onsubmit={e => { e.preventDefault(); if (query.trim()) { searchOpen = false; location.hash = '#/search/' + enc(query.trim()); } }}><label class="sr" for="q">Search lessons, notes, tutor chats and ideas</label><svg class="icon" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" aria-hidden="true"><circle cx="10" cy="10" r="6" /><path d="m15 15 6 6" /></svg><input id="q" type="search" placeholder="Search" maxlength="100" autocomplete="off" aria-controls="search-pop" bind:value={query} oninput={liveSearch} onfocus={() => { if (query.trim()) { searchOpen = true; if (searched !== query.trim()) liveSearch(); } }} />
-    {#if searchOpen && query.trim()}<section class="search-pop popover-enter" id="search-pop" aria-label="Search results">
+    {#if searchOpen && query.trim()}<section class="search-pop" id="search-pop" aria-label="Search results" transition:drop>
       <p class="search-hint">Lessons, notes, tutor chats and ideas</p>
       {#if searched !== query.trim() && !hits.length}<span class="sk" style="display:block;height:10px;width:70%;margin:10px 8px"></span>
       {:else if !groups.length}<p class="search-none">Nothing matches “{query.trim()}”.</p>

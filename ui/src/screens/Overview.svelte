@@ -11,6 +11,7 @@
   import VideoPrefs from '../components/VideoPrefs.svelte';
   import LessonActions from '../components/LessonActions.svelte';
   import Icon from '../components/Icon.svelte';
+  import { drop } from '../lib/motion';
   import Progress from '../components/Progress.svelte';
   import ExamRow from '../components/ExamRow.svelte';
   import Waiting from '../components/Waiting.svelte';
@@ -22,7 +23,7 @@
   let where = $derived(whereAmI(c));
   let complete = $derived(ls.length > 0 && n === ls.length), pending = $derived(ls.filter(l => !l.videos && !l.stub).length);
   let found = $state<Record<string, boolean> | false | undefined>(undefined);
-  let reviseOpen = $state(false), ask = $state(''), menuOpen = $state(false), menuEl = $state<HTMLDetailsElement>();
+  let reviseOpen = $state(false), ask = $state(''), menuOpen = $state(false), menuEl = $state<HTMLDivElement>();
   let bulk = $state<{ stop: boolean; text: string; error: string } | null>(null);
   let preview = $state<PlanPreview>(), revising = $state(false), prefsOpen = $state(false), originalAsk = $state(''), reviseError = $state('');
   let draft = $state<Blueprint>(), planning = $state(false), planError = $state('');
@@ -158,7 +159,7 @@
   // Escape closes the innermost open thing (menu, plan preview, Change my roadmap, video preferences) and puts focus back where it was opened.
   function menuKeys(e: KeyboardEvent) {
     if (e.key !== 'Escape' || e.defaultPrevented) return;
-    const more = () => menuEl?.querySelector('summary')?.focus();
+    const more = () => menuEl?.querySelector<HTMLElement>('.menu-trigger')?.focus();
     if (menuOpen) { menuOpen = false; more(); }
     else if (preview && reviseOpen) { preview = undefined; document.getElementById('ask')?.focus(); }
     else if (reviseOpen) { reviseOpen = false; reviseError = ''; more(); }
@@ -174,8 +175,8 @@
     <div class="course-head">
       <a class="back-map" href="#/"><Icon name="back" /> Your library</a>
       <h1>{c.title}</h1>
-      <details class="menu" bind:this={menuEl} bind:open={menuOpen}><summary class="btn secondary sm" aria-label="More roadmap actions"><Icon name="more" /> More</summary><div class="menu-list popover-enter">
-        <button aria-expanded={prefsOpen} aria-controls="video-prefs" onclick={() => act(async () => { prefsOpen = !prefsOpen; await tick(); document.querySelector<HTMLElement>(prefsOpen ? '#video-prefs h2' : '.course-head summary')?.focus(); })}>Video preferences for this roadmap</button>
+      <div class="menu" class:open={menuOpen} bind:this={menuEl}><button type="button" class="btn secondary sm menu-trigger" aria-haspopup="true" aria-expanded={menuOpen} aria-label="More roadmap actions" onclick={() => menuOpen = !menuOpen}><Icon name="more" /> More</button>{#if menuOpen}<div class="menu-list stagger" transition:drop>
+        <button aria-expanded={prefsOpen} aria-controls="video-prefs" onclick={() => act(async () => { prefsOpen = !prefsOpen; await tick(); document.querySelector<HTMLElement>(prefsOpen ? '#video-prefs h2' : '.course-head .menu-trigger')?.focus(); })}>Video preferences for this roadmap</button>
         <button id="adapt" disabled={appState.adapting} onclick={() => act(() => adaptNow(true))}>{appState.adapting ? 'Reading your results…' : 'Adjust to my progress'}<small>Add practice or drop lessons, based on your quiz and exercise results</small></button>
         <button id="revise-open" aria-expanded={reviseOpen} aria-controls="revise" onclick={() => act(async () => { reviseOpen = !reviseOpen; await tick(); if (reviseOpen) document.getElementById('ask')?.focus(); })}>Change my roadmap<small>Take the lessons you have not started somewhere else</small></button>
         {#if ls.some(l => l.stub) && !bulk?.text}<button id="write-all" onclick={writeEveryLesson}>Write every lesson now<small>Writes the remaining phases now. Uses many AI tokens.</small></button>{/if}
@@ -188,7 +189,7 @@
         <hr />
         <button id="roadmap-mistakes" onclick={() => act(() => { location.hash = '#/mistakes/' + enc(c.id); })}>Mistakes notebook<small>The questions you missed in this roadmap</small></button>
         <button id="delete-roadmap" class="danger" disabled={deleting} onclick={() => act(deleteRoadmap)}>Delete roadmap<small>Removes it with all its progress and notes</small></button>
-      </div></details>
+      </div>{/if}</div>
       <p class="goal">{c.summary}</p>
     </div>
     <div class="progress-line"><Progress {n} total={ls.length} wide={false} /><span>{n} of {ls.length} lessons complete · {ls.length ? Math.round(n / ls.length * 100) : 0}%</span></div>
@@ -196,8 +197,8 @@
   {#if appState.adapting}<Waiting skeleton="plan" inline title="Preparing a recommendation from your results. This can take a minute." />{/if}
   {#if bulk?.text || bulk?.error}<div class="row bulk-row">{#if bulk?.text}{#key bulk.text}<Waiting skeleton="plan" inline title={`${bulk.text}. Each phase takes about a minute.`} />{/key}<button class="btn secondary sm" id="stop-writing" disabled={bulk.stop} onclick={() => { if (bulk) bulk.stop = true; }}><BusyLabel busy={bulk.stop} idle="Stop" label="Stopping after this phase…" /></button>{/if}{#if bulk?.error}<p class="err">{bulk.error}</p>{/if}</div>{/if}
   {#if appState.suggestion?.cid === c.id}<PlanOptions preview={appState.suggestion.preview} cancel={() => appState.suggestion = null} />{/if}
-  {#if prefsOpen}<section class="note" id="video-prefs" aria-labelledby="video-prefs-title"><h2 id="video-prefs-title" tabindex="-1">Video preferences for this roadmap</h2><VideoPrefs initial={c.prefs} course={c} /><button type="button" class="link revise-cancel" onclick={() => { prefsOpen = false; menuEl?.querySelector('summary')?.focus(); }}>Close</button></section>{/if}
-  <form id="revise" class="note" hidden={!reviseOpen} onsubmit={e => { e.preventDefault(); void revise(); }}><strong>Change my roadmap</strong><p>Say what should change in the lessons you have not started. Your progress stays.</p><div class="own"><input id="ask" required maxlength="600" aria-label="What should change in the lessons you have not started?" placeholder="For example: show me how this is used in industry, with real applications" bind:value={ask} /><button class="btn" disabled={revising}><BusyLabel busy={revising} idle="Preview changes" label="Preparing options…" /> <Icon name="arrow" /></button></div>{#if revising}<Waiting skeleton="plans" title="Preparing roadmap options" hint="this can take about a minute" />{/if}{#if reviseError}<LoadError what="The options could not be prepared." error={reviseError} retry={() => void revise()} />{/if}{#if preview}<PlanOptions {preview} ask={originalAsk} cancel={() => preview = undefined} applied={() => { preview = undefined; reviseOpen = false; ask = ''; }} />{/if}<button type="button" class="link revise-cancel" hidden={!!preview} onclick={() => { reviseOpen = false; reviseError = ''; menuEl?.querySelector('summary')?.focus(); }}>Cancel</button></form>
+  {#if prefsOpen}<section class="note" id="video-prefs" aria-labelledby="video-prefs-title"><h2 id="video-prefs-title" tabindex="-1">Video preferences for this roadmap</h2><VideoPrefs initial={c.prefs} course={c} /><button type="button" class="link revise-cancel" onclick={() => { prefsOpen = false; menuEl?.querySelector<HTMLElement>('.menu-trigger')?.focus(); }}>Close</button></section>{/if}
+  <form id="revise" class="note" hidden={!reviseOpen} onsubmit={e => { e.preventDefault(); void revise(); }}><strong>Change my roadmap</strong><p>Say what should change in the lessons you have not started. Your progress stays.</p><div class="own"><input id="ask" required maxlength="600" aria-label="What should change in the lessons you have not started?" placeholder="For example: show me how this is used in industry, with real applications" bind:value={ask} /><button class="btn" disabled={revising}><BusyLabel busy={revising} idle="Preview changes" label="Preparing options…" /> <Icon name="arrow" /></button></div>{#if revising}<Waiting skeleton="plans" title="Preparing roadmap options" hint="this can take about a minute" />{/if}{#if reviseError}<LoadError what="The options could not be prepared." error={reviseError} retry={() => void revise()} />{/if}{#if preview}<PlanOptions {preview} ask={originalAsk} cancel={() => preview = undefined} applied={() => { preview = undefined; reviseOpen = false; ask = ''; }} />{/if}<button type="button" class="link revise-cancel" hidden={!!preview} onclick={() => { reviseOpen = false; reviseError = ''; menuEl?.querySelector<HTMLElement>('.menu-trigger')?.focus(); }}>Cancel</button></form>
 
   <div role={tabbed ? 'tabpanel' : undefined} aria-labelledby={tabbed ? `stage-tab-${cur}` : undefined}>{#key cur}<div class={stageDir}>
     {#if c.stages?.length}{@const st = c.stages[cur]}<div class="sg-head"><p class="kicker">Stage {cur + 1} of {c.stages.length} · {stageDone} of {stageLs.length} lessons</p><h2>{st.title}</h2>{#if st.blurb}<p>{st.blurb}</p>{/if}</div>{/if}
