@@ -28,6 +28,7 @@ tiny_http = "0.12"
 sha2 = "0.10"
 base64 = "0.22"
 chrono = { version = "0.4", default-features = false, features = ["clock"] }
+tauri-plugin-notification = "2"
 
 # statvfs for the exercise sandbox's disk watch; already in the build through other crates.
 [target.'cfg(target_os = "linux")'.dependencies]
