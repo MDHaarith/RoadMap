@@ -10,4 +10,4 @@
   {:else if updates.state === 'install-error'}Could not install the update. Please check again and retry.{/if}
 </span>
 {#if updates.state === 'ready'}<button class="btn secondary sm" onclick={() => void installUpdate()}>Restart and update</button>
-{:else if updates.state === 'download'}<button class="btn secondary sm" onclick={() => void openUrl('https://github.com/MDHaarith/RoadMap-releases/releases/latest').catch(() => { updates.state = 'error'; })}>Download</button>{/if}
+{:else if updates.state === 'download'}<button class="btn secondary sm" onclick={() => void openUrl('https://github.com/MDHaarith/RoadMap/releases/latest').catch(() => { updates.state = 'error'; })}>Download</button>{/if}

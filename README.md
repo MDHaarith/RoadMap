@@ -69,8 +69,8 @@ Configure these repository Actions secrets once:
 
 - `TAURI_SIGNING_PRIVATE_KEY`: the signing private key content (never commit it).
 - `TAURI_SIGNING_PRIVATE_KEY_PASSWORD`: empty, since this key has no password.
-- `RELEASES_TOKEN`: a token with contents write access to the public
-  `MDHaarith/RoadMap-releases` repository.
+
+Releases are published to this repository's Releases page.
 
 The release workflow builds signed NSIS and Linux AppImage/deb/rpm installers.
 A final job waits for both builds, assembles a manifest with all four package
