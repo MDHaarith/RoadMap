@@ -203,8 +203,10 @@ impl App {
     // A page that sends "thinking" with a request can read what the model is thinking from GET api/thinking/<key> while it waits.
     pub fn route(self: &Arc<Self>, method: &str, path: &str, b: &Value) -> Result<Value> {
         if let Some(key) = path.strip_prefix("api/thinking/") {
-            let thoughts = self.thoughts.lock().unwrap_or_else(|e| e.into_inner());
-            return Ok(json!({"text":thoughts.get(key).cloned().unwrap_or_default()}));
+            let text = self.thoughts.lock().unwrap_or_else(|e| e.into_inner()).get(key).cloned().unwrap_or_default();
+            let draft = self.drafts.lock().unwrap_or_else(|e| e.into_inner()).get(key).cloned();
+            let draft = draft.as_deref().and_then(crate::ai::partial_json).map(|d| crate::ai::outline(&d));
+            return Ok(json!({"text":text,"draft":draft}));
         }
         if let Some(id) = path.strip_prefix("api/captions/") {
             return self.captions(id);
@@ -312,7 +314,7 @@ impl App {
                 });
             }
             ("POST", "api/review/answer") => return self.review_answer(b),
-            ("POST", "api/courses") | ("POST", "api/placement") => {
+            ("POST", "api/courses") | ("POST", "api/placement") | ("POST", "api/blueprint") => {
                 let prompt = cap(b.get("prompt").map(text).unwrap_or_default().trim(), 2000);
                 let folder = string(&b["folder"]).trim().to_string();
                 if prompt.is_empty() && folder.is_empty() {
@@ -320,19 +322,32 @@ impl App {
                 }
                 let mut level = vec![cap(&b.get("level").map(text).unwrap_or_default(), 100)];
                 if path == "api/placement" {
-                    return self.placement(&prompt, &level[0], &folder, &b["answers"]);
+                    return self.placement(&prompt, &level[0], &folder);
                 }
                 let answers = said(&b["answers"]);
                 if !answers.is_empty() {
                     level.push("Placement check:".into());
                     level.extend(answers);
                 }
-                let c = self.build_course(
-                    &prompt,
-                    &level.join("\n"),
-                    &folder,
-                    &string(&b["size"]),
-                )?;
+                if path == "api/blueprint" { return self.blueprint(&prompt,&level.join("\n"),&folder,&string(&b["size"])); }
+                let blueprint = b.get("blueprint").map(crate::ai::clean_blueprint).transpose()?;
+                let mut brief = prompt.clone();
+                if let Some(plan) = &blueprint {
+                    brief.push_str(&format!("\nApproved blueprint: {plan}"));
+                }
+                let baseline = cap(&string(&b["baseline"]),2000);
+                if !baseline.trim().is_empty() { level.push(format!("Optional starting task submission (self-reported): {baseline}")); }
+                let mut c = self.build_course(&brief,&level.join("\n"),&folder,&string(&b["size"]))?;
+                c["prompt"] = json!(prompt);
+                if let Some(plan) = blueprint {
+                    c["blueprint"] = plan;
+                    // The course took minutes to build: a failed audit must not throw it away, only leave it without checkpoints.
+                    let mut audited = c.clone();
+                    match self.audit_milestones(&mut audited) {
+                        Ok(()) => c = audited,
+                        Err(e) => eprintln!("milestone audit failed: {e}"),
+                    }
+                }
                 self.save(&c)?;
                 let cid = string(&c["id"]);
                 let first = lessons(&c).next().cloned().unwrap_or_default();
@@ -411,7 +426,7 @@ impl App {
             _ => {}
         }
         let re = regex(
-            r"^api/courses/([0-9a-f]{12})(/notes|/state|/videos|/video-names|/practice|/paused|/adapt|/revise|/expand|/export|/summary|/setup|/work|/edit|/apply|/prefs|/chat|/exam|/cards|/check|/offline)?$",
+            r"^api/courses/([0-9a-f]{12})(/blueprint|/milestone|/notes|/state|/videos|/video-names|/practice|/paused|/adapt|/revise|/expand|/export|/summary|/setup|/work|/edit|/apply|/prefs|/chat|/exam|/cards|/check|/offline)?$",
         );
         let m = re.captures(path).ok_or_else(Error::missing)?;
         let cid = &m[1];
@@ -469,6 +484,8 @@ impl App {
                 let mut c = self.load(cid)?;
                 let old = c["state"].clone();
                 let mut st = b.clone();
+                st.as_object_mut().unwrap().remove("portfolio");
+                if old["portfolio"].is_object() { st["portfolio"] = old["portfolio"].clone(); }
                 st["review"] = if truth(&old["review"]) {
                     old["review"].clone()
                 } else {
@@ -524,6 +541,28 @@ impl App {
                 Ok(json!({}))
             }
             ("POST", "/notes") => self.rewrite_notes(cid, b),
+            ("POST", "/blueprint") => {
+                let mut c = self.load(cid)?;
+                let outline = lessons(&c).map(|l| format!("{}: {}",text(&l["title"]),text(&l["goal"]))).collect::<Vec<_>>().join("\n");
+                let Some(plan) = b.get("blueprint") else {
+                    return self.blueprint(&format!("{}\nExisting course: {outline}",text(&c["prompt"])),&string(&c["level"]),"","");
+                };
+                if c.get("blueprint").is_some() { return Err(Error::bad("This course already has an approved blueprint.")); }
+                let plan = crate::ai::clean_blueprint(plan)?;
+                let original = c["phases"].clone();
+                c["blueprint"] = plan.clone();
+                self.audit_milestones(&mut c)?;
+                let _guard = self.guard();
+                let mut latest = self.load(cid)?;
+                if latest.get("blueprint").is_some() || latest["phases"] != original {
+                    return Err(Error::bad("The course changed during the audit. Retry with the updated lessons."));
+                }
+                latest["blueprint"] = plan;
+                latest["phases"] = c["phases"].take();
+                self.save(&latest)?;
+                Ok(latest)
+            }
+            ("POST", "/milestone") => self.milestone(cid,b),
             ("POST", "/adapt") => self.adapt(cid),
             ("POST", "/revise") => {
                 let ask = cap(b.get("ask").map(text).unwrap_or_default().trim(), 600);
@@ -626,6 +665,24 @@ impl App {
                 let c = self.load(cid)?;
                 let l = lesson(&c, &b["lesson"])?;
                 let old = list(&l["videos"]);
+                if truth(&b["plan"]) && !old.is_empty() {
+                    let mut planned = self.check_videos(&c, l, old.iter().take(8).cloned().collect(), &self.video_prefs(&c))?;
+                    if planned.is_empty() { return Err(Error::bad("The available evidence did not support a viewing plan for these videos.")); }
+                    for v in old {
+                        if !planned.iter().any(|p| p["id"] == v["id"]) {
+                            let mut reference = v.clone();
+                            reference["reference"] = json!(true);
+                            planned.push(reference);
+                        }
+                    }
+                    let _guard = self.guard();
+                    let mut latest = self.load(cid)?;
+                    let lesson = lesson_mut(&mut latest, &string(&l["id"]))?;
+                    if list(&lesson["videos"]) != old { return Err(Error::bad("The video list changed. Reopen the lesson and try again.")); }
+                    lesson["videos"] = json!(planned);
+                    self.save(&latest)?;
+                    return Ok(json!(planned));
+                }
                 if let Some(query) = b["query"].as_str() {
                     let query = cap(query.trim(), 200);
                     if query.is_empty() { return Err(Error::bad("Enter a video search query.")); }

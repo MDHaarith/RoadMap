@@ -11,6 +11,7 @@
   import ProjectFiles from '../components/ProjectFiles.svelte';
   import WorkCheck from '../components/WorkCheck.svelte';
   import Practice from '../components/Practice.svelte';
+  import Milestone from '../components/Milestone.svelte';
   import Tutor from '../components/Tutor.svelte';
   import Chart from '../components/Chart.svelte';
   import Waiting from '../components/Waiting.svelte';
@@ -33,6 +34,7 @@
     ...(l.files?.length ? [{ id: 'read', title: 'Read the code', short: 'Read code', what: 'Trace how the code works before you change it.', next: 'Read the code' }] : []),
     { id: 'do', title: 'Do it yourself', short: 'Do it', what: 'Try the steps yourself to put the ideas into use.', next: 'Try it yourself' },
     { id: 'practice', title: 'Practice', short: 'Practice', what: 'Answer questions or solve the exercise to check your understanding.', next: 'Practice' },
+    { id: 'studio', title: 'Milestone studio', short: 'Studio', what: 'Demonstrate the skill and get feedback.', next: 'Open milestone studio' },
     { id: 'done', title: 'Done when', short: 'Finish', what: 'Check what you can do before completing the lesson.', next: 'Finish the lesson' },
   ]);
   let si = $derived(steps.findIndex(s => s.id === step));
@@ -46,7 +48,7 @@
   function enter() {
     if (c.state.last !== l.id) { c.state.last = l.id; save(c); }
     appState.activeStep = 'watch';
-    visit('watch'); window.scrollTo(0, 0);
+    visit('watch'); if (location.hash.split('/')[4] === 'studio') void showStep('studio', false); window.scrollTo(0, 0);
   }
   async function writePhase() {
     writing = true; writeError = '';
@@ -94,6 +96,7 @@
       {:else if step === 'read'}<ProjectFiles {c} {l} />
       {:else if step === 'do'}{#if l.warn}<div class="note warn"><strong><Icon name="Safety" /> Before you begin</strong><p><Formatted text={l.warn} /></p></div>{/if}<ol class="content-list">{#each l.tasks || [] as x}<li><div class="concept-copy"><Formatted text={x} /></div></li>{/each}</ol>{#if c.folder || c.work}{#key l.id}<WorkCheck {c} {l} />{/key}{/if}
       {:else if step === 'practice'}<Practice {c} {l} />
+      {:else if step === 'studio'}{#key l.id}<Milestone {c} {l} />{/key}
       {:else if step === 'done'}<div class="checks finish-checks">{#each l.done || [] as x, j}<label><input class="sr" type="checkbox" checked={!!c.state.checks[l.id + '#' + j]} onchange={e => { if (e.currentTarget.checked) c.state.checks[l.id + '#' + j] = true; else delete c.state.checks[l.id + '#' + j]; achievement = ''; save(c); }} /><span class="finish-check" class:complete-mark={!!c.state.checks[l.id + '#' + j]} aria-hidden="true">{#if c.state.checks[l.id + '#' + j]}<Icon name="check" />{/if}</span><span><Formatted text={x} /></span></label>{/each}</div><div class="finish"><div id="fstate" role="status" class={achievement ? 'celebrate' : 'small'}>{#if achievement}<span class="completion-route" aria-hidden="true"><span class="completion-stop complete-mark"><Icon name="check" /></span><i class="completion-traveller"></i><span class="completion-next"></span></span><strong>{achievement}</strong><p>{nextL ? 'Next lesson: ' + nextL.title : 'You have reached the end of this roadmap.'}</p>{:else}{c.state.done[l.id] ? 'Lesson complete.' : checked(c, l).every(Boolean) ? 'All checks are ticked. You can complete the lesson.' : ok ? 'You passed the quiz. You can complete the lesson.' : 'Tick every check, or score at least 80% on the quiz, to complete the lesson.'}{/if}</div></div>{/if}
     </div>
     <div class="step-footer">{#if si}<button class="btn ghost" onclick={() => showStep(steps[si - 1].id)}><Icon name="back" /> Back</button>{/if}
@@ -102,5 +105,5 @@
       {:else if c.state.done[l.id]}<div class="row"><button id="finish" class="btn ghost" onclick={() => achievement = finishLesson()}>Undo completion</button><a class="btn" href={nextL ? href(c.id, nextL.id) : href(c.id)}>{nextL ? 'Next lesson' : 'Back to the roadmap'} <Icon name="arrow" /></a></div>
       {:else}<button id="finish" class="btn" disabled={!ok} onclick={() => achievement = finishLesson()}><Icon name="check" /> Mark lesson complete</button>{/if}</div></div>
     {/key}
-  </article><Tutor {c} {l} seek={seekVideo} />
+  </article><Tutor {c} {l} studio={() => showStep('studio')} seek={seekVideo} />
 </div>{/if}

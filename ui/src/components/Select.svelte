@@ -2,6 +2,7 @@
   import Skeleton from './Skeleton.svelte';
   import { tick } from 'svelte';
   import Icon from './Icon.svelte';
+  import { drop } from '../lib/motion';
   let { value, options, onchange, disabled = false, id, ariaLabel, title, onopen, loading = false, heading }: {
     value: string; options: { value: string; label: string; hint?: string; group?: string }[]; onchange: (value: string) => void;
     loading?: boolean; disabled?: boolean; id?: string; ariaLabel?: string; title?: string; onopen?: () => void; heading?: string;
@@ -71,7 +72,7 @@
   <svg class="icon" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" aria-hidden="true"><path d="m6 9 6 6 6-6" /></svg>
 </button>
 {#if open}
-  <div use:portal bind:this={list} id={`${uid}-list`} class="menu-list select-list popover-enter" class:above role="listbox" tabindex="-1" aria-label={ariaLabel} aria-labelledby={ariaLabel ? undefined : id} aria-busy={loading} aria-activedescendant={!loading && options[active] ? `${uid}-${active}` : undefined} onkeydown={keyboard} onfocusout={e => { if (open && !list?.contains(e.relatedTarget as Node)) close(false); }} style:left={`${left}px`} style:top={above ? 'auto' : `${edge}px`} style:bottom={above ? `${edge}px` : 'auto'} style:width={`${width}px`} style:max-height={`${height}px`}>
+  <div use:portal bind:this={list} id={`${uid}-list`} class="menu-list select-list stagger" class:above transition:drop role="listbox" tabindex="-1" aria-label={ariaLabel} aria-labelledby={ariaLabel ? undefined : id} aria-busy={loading} aria-activedescendant={!loading && options[active] ? `${uid}-${active}` : undefined} onkeydown={keyboard} onfocusout={e => { if (open && !list?.contains(e.relatedTarget as Node)) close(false); }} style:left={`${left}px`} style:top={above ? 'auto' : `${edge}px`} style:bottom={above ? `${edge}px` : 'auto'} style:width={`${width}px`} style:max-height={`${height}px`}>
     {#if heading}<p class="select-heading" aria-hidden="true">{heading}</p>{/if}
     {#if loading}<Skeleton kind="models" />{:else}{#each options as option, i}
       {#if option.group && option.group !== options[i - 1]?.group}<p class="select-group" aria-hidden="true">{option.group}</p>{/if}

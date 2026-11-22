@@ -1,0 +1,696 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>Roadmap · Sample UI</title>
+<link rel="preconnect" href="https://fonts.googleapis.com">
+<link rel="stylesheet" href="https://fonts.googleapis.com/css2?family=Fraunces:opsz,wght@9..144,500..700&family=Inter:wght@400;500;600&display=swap">
+<style>
+:root {
+  --bg: #fff; --bg-subtle: #f6f6f7; --surface-2: #f2f2f4; --hover: #f0f0f2;
+  --line: #e5e5e8; --line-strong: #d2d2d7; --field-line: #b9b9c0;
+  --ink: #18181b; --ink-2: #3f3f46; --muted: #595961;
+  --accent: #1a66c9; --accent-soft: #eef4fc; --accent-line: #b9d1f2;
+  --success: #1a7f45; --success-soft: #e9f6ee; --warn-soft: #fff4d6;
+  --paper: #f5f5f3;
+  --display: "Fraunces", Georgia, serif;
+  --font: "Inter", system-ui, sans-serif;
+  --mono: ui-monospace, "DejaVu Sans Mono", monospace;
+  color-scheme: light;
+  accent-color: var(--accent);
+}
+* { box-sizing: border-box; }
+[hidden] { display: none !important; }
+body { margin: 0; background: var(--paper); color: var(--ink); font: 400 13px/1.55 var(--font); -webkit-font-smoothing: antialiased; font-variant-numeric: tabular-nums; }
+h1, h2, h3, p, ol, ul, fieldset { margin: 0; }
+ol, ul { padding: 0; list-style: none; }
+button { font: inherit; color: inherit; }
+code { font-family: var(--mono); font-size: .9em; background: var(--surface-2); border-radius: 5px; padding: 1px 5px; }
+:focus-visible { outline: 2px solid var(--accent); outline-offset: 2px; }
+
+/* Page chrome for the samples (not part of the app) */
+.jump { position: sticky; top: 0; z-index: 20; display: flex; gap: 6px; align-items: center; padding: 10px 24px; background: #f5f5f3e6; backdrop-filter: blur(8px); border-bottom: 1px solid var(--line); overflow-x: auto; }
+.jump b { font: 650 16px/1 var(--display); margin-right: 10px; white-space: nowrap; }
+.jump a { flex: none; font-size: 12px; color: var(--ink-2); text-decoration: none; padding: 4px 9px; border: 1px solid var(--line); border-radius: 10px; background: #fff; }
+.jump a:hover { border-color: var(--line-strong); }
+main { max-width: 1240px; margin: 0 auto; padding: 24px 24px 80px; display: grid; gap: 56px; }
+.sample > header { margin-bottom: 14px; }
+.sample > header .kicker { color: var(--accent); }
+.sample > header h2 { font: 650 26px/1.2 var(--display); letter-spacing: -.02em; margin-top: 2px; }
+.sample > header p { color: var(--muted); max-width: 70ch; margin-top: 4px; }
+
+/* App window */
+.win { background: var(--bg); border: 1px solid var(--line); border-radius: 12px; box-shadow: 0 1px 2px #14141e0f, 0 24px 60px #14141e14; min-height: 560px; display: flex; flex-direction: column; }
+.top { height: 40px; display: flex; align-items: center; gap: 6px; padding: 0 10px; border-bottom: 1px solid var(--line); border-radius: 12px 12px 0 0; position: relative; z-index: 3; }
+.brand { display: inline-flex; align-items: center; gap: 6px; font-weight: 600; font-size: 12px; padding: 6px; }
+.brand svg { width: 14px; height: 16px; color: var(--accent); }
+.crumb { font-size: 12px; color: var(--muted); }
+.crumb b { color: var(--ink); font-weight: 500; }
+.grow { flex: 1; }
+.tb { display: inline-flex; align-items: center; gap: 5px; height: 28px; padding: 0 8px; border: 0; border-radius: 10px; background: none; font-size: 12px; font-weight: 500; color: var(--ink-2); cursor: pointer; }
+.tb:hover, .tb:is([aria-expanded="true"]) { background: var(--hover); color: var(--ink); }
+.tb svg { width: 14px; height: 14px; }
+.count { font-size: 10px; font-weight: 600; background: var(--accent); color: #fff; border-radius: 999px; padding: 0 6px; line-height: 16px; }
+.dots { display: flex; gap: 8px; margin-left: 8px; }
+.dots i { width: 10px; height: 10px; border-radius: 50%; background: var(--line-strong); }
+.body { flex: 1; display: flex; min-height: 0; }
+.pad { padding: 28px 36px 32px; }
+
+/* Shared */
+.kicker { font-size: 11px; font-weight: 600; letter-spacing: .06em; text-transform: uppercase; color: var(--muted); }
+.serif { font-family: var(--display); font-weight: 650; letter-spacing: -.02em; }
+.small { font-size: 12px; color: var(--muted); }
+.btn { display: inline-flex; align-items: center; justify-content: center; gap: 6px; min-height: 30px; padding: 0 14px; border-radius: 12px; border: 1px solid var(--accent); background: var(--accent); color: #fff; font-size: 13px; font-weight: 550; cursor: pointer; }
+.btn:disabled { background: var(--surface-2); border-color: var(--line); color: var(--muted); cursor: not-allowed; }
+.btn.ghost { background: #fff; color: var(--ink); border-color: var(--line-strong); }
+.link { border: 0; background: none; padding: 0; color: var(--accent); font-weight: 550; cursor: pointer; font-size: 12px; }
+.card { border: 1px solid var(--line); border-radius: 12px; background: #fff; }
+
+/* Search in the top bar */
+.search { position: relative; width: 260px; }
+.search input { width: 100%; height: 28px; border: 1px solid var(--line-strong); border-radius: 10px; padding: 0 10px 0 28px; font: inherit; font-size: 12px; background: #fff; }
+.search input:focus { outline: 2px solid var(--accent); outline-offset: -1px; border-color: transparent; }
+.search > svg { position: absolute; left: 9px; top: 7px; width: 14px; height: 14px; color: var(--muted); pointer-events: none; }
+.sr { position: absolute; top: 34px; left: 0; width: 380px; max-height: 420px; overflow: auto; padding: 6px; border: 1px solid var(--line); border-radius: 12px; background: #fff; box-shadow: 0 16px 40px #14141e1f; }
+.sr .hint { padding: 6px 8px 8px; color: var(--muted); font-size: 12px; border-bottom: 1px solid var(--line); margin-bottom: 4px; }
+.sr h4 { margin: 8px 8px 2px; font-size: 10.5px; font-weight: 600; letter-spacing: .06em; text-transform: uppercase; color: var(--muted); }
+.sr a { display: block; padding: 6px 8px; border-radius: 8px; color: var(--ink); text-decoration: none; }
+.sr a:hover, .sr a:focus-visible { background: var(--hover); }
+.sr a b { display: block; font-weight: 550; font-size: 12.5px; white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
+.sr a span { font-size: 11.5px; color: var(--muted); }
+.sr mark { background: #fff1a8; color: inherit; border-radius: 3px; padding: 0 1px; }
+.sr .none { padding: 14px 8px; color: var(--muted); }
+
+/* Ideas popover (Popover API, anchored to its button where supported) */
+.ideas-panel { width: 340px; padding: 0; border: 1px solid var(--line); border-radius: 12px; background: #fff; box-shadow: 0 16px 40px #14141e24; color: var(--ink); font: 400 13px/1.55 var(--font); }
+.ideas-panel .hd { display: flex; align-items: center; gap: 6px; padding: 10px 10px 8px 14px; }
+.ideas-panel .hd b { flex: 1; font-weight: 600; }
+.ideas-panel .mini { height: 26px; padding: 0 10px; border: 1px solid var(--line-strong); border-radius: 9px; background: #fff; font-size: 12px; font-weight: 500; cursor: pointer; }
+.ideas-panel .mini:hover { background: var(--hover); }
+.ideas-panel textarea { display: block; width: calc(100% - 24px); margin: 0 12px; min-height: 92px; resize: vertical; padding: 9px 10px; border: 1px solid var(--line-strong); border-radius: 10px; font: inherit; line-height: 1.5; }
+.ideas-panel textarea:focus { outline: 2px solid var(--accent); outline-offset: -1px; border-color: transparent; }
+.ideas-panel .saved { padding: 6px 14px 8px; font-size: 11.5px; color: var(--muted); min-height: 1.5em; }
+.ideas-panel ul { border-top: 1px solid var(--line); max-height: 180px; overflow: auto; }
+.ideas-panel li { display: flex; gap: 10px; padding: 8px 14px; border-bottom: 1px solid var(--line); font-size: 12.5px; }
+.ideas-panel li:last-child { border-bottom: 0; }
+.ideas-panel li span { flex: 1; }
+.ideas-panel li time { color: var(--muted); font-size: 11.5px; white-space: nowrap; }
+@supports (position-area: block-end) {
+  #ideas { inset: auto; margin: 6px 0 0; position-area: block-end span-inline-start; position-try-fallbacks: flip-block, flip-inline, flip-block flip-inline; }
+}
+
+/* 1 · Placement check */
+.pc { display: grid; grid-template-columns: 300px 1fr; gap: 40px; width: 100%; }
+.goal-card { padding: 16px; display: grid; gap: 12px; align-content: start; background: var(--bg-subtle); border-color: transparent; }
+.goal-card q { quotes: none; font: 600 15px/1.45 var(--display); }
+.goal-card dl { display: grid; grid-template-columns: auto 1fr; gap: 6px 12px; margin: 0; font-size: 12px; }
+.goal-card dt { color: var(--muted); }
+.goal-card dd { margin: 0; font-weight: 500; }
+.qs { display: grid; gap: 4px; }
+.q { border: 0; padding: 14px 0 16px; border-bottom: 1px solid var(--line); display: grid; grid-template-columns: 22px 1fr; column-gap: 12px; row-gap: 10px; min-width: 0; }
+.q legend { display: contents; }
+.q .n { grid-row: 1; width: 22px; height: 22px; border-radius: 50%; background: var(--ink); color: #fff; font-size: 11px; font-weight: 600; display: grid; place-items: center; }
+.q .qt { grid-row: 1; grid-column: 2; font-weight: 600; font-size: 13.5px; align-self: center; }
+.q:has(:checked) .n { background: var(--accent); }
+.opts { grid-column: 2; display: flex; flex-wrap: wrap; gap: 8px; }
+.opt { display: inline-flex; align-items: center; gap: 8px; min-height: 32px; padding: 0 12px 0 10px; border: 1px solid var(--line); border-radius: 10px; background: #fff; font-size: 12.5px; color: var(--ink-2); cursor: pointer; }
+.opt:hover { border-color: var(--line-strong); }
+.opt input { margin: 0; width: 14px; height: 14px; }
+.opt:has(:checked) { border-color: var(--accent); background: var(--accent-soft); color: var(--accent); font-weight: 550; }
+.opt:has(:focus-visible) { outline: 2px solid var(--accent); outline-offset: 2px; }
+.pc-foot { display: flex; align-items: center; gap: 12px; padding-top: 18px; }
+.pc-foot .meter { display: flex; align-items: center; gap: 10px; flex: 1; }
+
+/* Native <progress>, fully custom styled */
+progress.bar { appearance: none; border: 0 solid; overflow: clip; inline-size: 120px; block-size: 6px; border-radius: 999px; background: var(--surface-2); }
+progress.bar::-webkit-progress-bar { background: transparent; }
+progress.bar::-webkit-progress-value { background: var(--accent); border-radius: 999px; transition: inline-size .3s; }
+progress.bar::-moz-progress-bar { background: var(--accent); border-radius: 999px; }
+progress.bar.wide { inline-size: 100%; }
+
+/* Progress ring on <progress> */
+@property --value { syntax: '<number>'; inherits: true; initial-value: 0; }
+.ring-wrap { position: relative; display: grid; place-items: center; flex: none; }
+progress.ring { --size: 54px; --thickness: 6px; appearance: none; width: var(--size); height: var(--size); border-radius: 50%; background: conic-gradient(var(--accent) calc(var(--value) * 1%), var(--surface-2) 0); background-clip: border-area; background-origin: border-box; border: var(--thickness) solid transparent; transition: --value 0s; }
+@media (prefers-reduced-motion: no-preference) { progress.ring { transition-duration: .5s; } }
+@supports not (background-clip: border-area) { progress.ring { border: 0; mask-image: radial-gradient(transparent calc(50% - var(--thickness)), #000 calc(50% - var(--thickness) + .5px)); } }
+progress.ring::-webkit-progress-bar, progress.ring::-webkit-progress-value { display: none; background: none; }
+progress.ring::-moz-progress-bar { display: none; background: none; }
+@media (forced-colors: active) { progress.ring { forced-color-adjust: none; background: conic-gradient(CanvasText calc(var(--value) * 1%), Canvas 0); } }
+.ring-wrap span { position: absolute; font-size: 11px; font-weight: 600; }
+
+/* Spinner on indeterminate <progress> */
+progress.spin:indeterminate { --size: 16px; --thickness: 2px; appearance: none; width: var(--size); height: var(--size); border-radius: 50%; background: conic-gradient(from 90deg, var(--accent) 160deg, transparent 0) var(--line); background-clip: border-area; background-origin: border-box; border: var(--thickness) solid transparent; animation: spin 1.1s linear infinite; }
+@supports not (background-clip: border-area) { progress.spin:indeterminate { border: 0; mask-image: radial-gradient(farthest-side, transparent calc(100% - 2px), #000 calc(100% - 2px)); } }
+progress.spin::-webkit-progress-bar, progress.spin::-webkit-progress-value { display: none; background: none; }
+progress.spin::-moz-progress-bar { display: none; background: none; }
+@keyframes spin { to { rotate: 1turn; } }
+@media (prefers-reduced-motion: reduce) { progress.spin:indeterminate { animation-duration: 6s; } }
+
+/* 2 · Roadmap making */
+.mk { display: grid; grid-template-columns: 1fr 300px; gap: 36px; width: 100%; }
+.mk-status { display: inline-flex; align-items: center; gap: 8px; font-size: 12px; font-weight: 550; color: var(--ink-2); height: 26px; padding: 0 10px 0 8px; border: 1px solid var(--line); border-radius: 999px; background: #fff; }
+.mk-status.done { color: var(--success); background: var(--success-soft); border-color: transparent; }
+.mk-status .ok { display: none; width: 14px; height: 14px; border-radius: 50%; background: var(--success); color: #fff; font-size: 9px; place-items: center; }
+.mk-status.done .ok { display: grid; }
+.mk-status.done progress { display: none; }
+.mk h1 { font-size: 26px; line-height: 1.2; margin-top: 14px; }
+.mk .sum { color: var(--ink-2); max-width: 64ch; margin-top: 6px; }
+.spine { position: relative; margin-top: 22px; display: grid; gap: 0; }
+.spine::before { content: ""; position: absolute; left: 11px; top: 14px; bottom: 30px; border-left: 2px solid var(--line); }
+.st { position: relative; display: grid; grid-template-columns: 24px 1fr auto; gap: 14px; padding: 4px 0 20px; }
+.st .dot { width: 24px; height: 24px; border-radius: 50%; display: grid; place-items: center; font-size: 11px; font-weight: 600; background: #fff; border: 2px solid var(--line-strong); color: var(--muted); position: relative; z-index: 1; }
+.st[data-state="done"] .dot { background: var(--ink); border-color: var(--ink); color: #fff; }
+.st[data-state="writing"] .dot { border-color: var(--accent); color: var(--accent); }
+.st .meta { font-size: 11.5px; color: var(--muted); white-space: nowrap; padding-top: 2px; }
+.st h3 { font: 650 15px/1.3 var(--display); letter-spacing: -.01em; margin-top: 2px; }
+.st p { font-size: 12px; color: var(--muted); margin-top: 3px; max-width: 62ch; }
+.st .phs { display: flex; flex-wrap: wrap; gap: 6px; margin-top: 8px; }
+.st .phs span { font-size: 11.5px; padding: 2px 8px; border-radius: 8px; background: var(--surface-2); color: var(--ink-2); }
+.sk { display: block; height: 10px; border-radius: 6px; background: linear-gradient(90deg, var(--surface-2) 0 40%, #e9e9ec 50%, var(--surface-2) 60% 100%) 0 0 / 300% 100%; animation: shimmer 1.6s linear infinite; }
+@keyframes shimmer { to { background-position: -150% 0; } }
+@media (prefers-reduced-motion: reduce) { .sk { animation: none; } }
+.fade-in { animation: fadeIn .45s ease-out both; }
+@keyframes fadeIn { from { opacity: 0; translate: 0 6px; } }
+@media (prefers-reduced-motion: reduce) { .fade-in { animation: none; } }
+.log { padding: 14px 16px; align-self: start; }
+.log ol { display: grid; gap: 9px; margin-top: 10px; }
+.log li { display: grid; grid-template-columns: 16px 1fr; gap: 9px; font-size: 12px; color: var(--ink-2); }
+.log li i { width: 16px; height: 16px; border-radius: 50%; display: grid; place-items: center; font-style: normal; font-size: 9px; margin-top: 1px; }
+.log li.done i { background: var(--success); color: #fff; }
+.log li.now { color: var(--ink); font-weight: 550; }
+.log li.next { color: var(--muted); }
+.log li.next i { border: 1.5px solid var(--line-strong); }
+.mk-foot { display: flex; align-items: center; gap: 12px; margin: 4px 0 0 38px; }
+
+/* 3 · Stage screen */
+.course-head { display: grid; grid-template-columns: 1fr auto; column-gap: 16px; align-items: start; }
+.course-head .back { grid-column: 1 / -1; display: inline-flex; align-items: center; gap: 6px; width: max-content; font-size: 12px; color: var(--muted); text-decoration: none; margin-bottom: 6px; }
+.course-head .back:hover { color: var(--ink); }
+.course-head h1 { font-size: 28px; line-height: 1.15; }
+.course-head .more { display: inline-flex; align-items: center; gap: 6px; height: 30px; padding: 0 12px; border: 1px solid var(--line-strong); border-radius: 10px; background: #fff; font-size: 12.5px; font-weight: 550; cursor: pointer; margin-top: 2px; }
+.course-head .more:hover { background: var(--hover); }
+.course-head p { grid-column: 1; color: var(--ink-2); font-size: 13.5px; max-width: 78ch; margin-top: 8px; }
+.stage-nav { display: flex; gap: 2px; padding: 2px; margin-top: 18px; border: 1px solid var(--line); border-radius: 10px; background: var(--bg-subtle); width: max-content; max-width: 100%; }
+.stage-nav button { display: inline-flex; align-items: center; gap: 7px; height: 28px; padding: 0 11px; border: 0; border-radius: 8px; background: none; cursor: pointer; font-size: 12.5px; font-weight: 500; color: var(--ink-2); white-space: nowrap; }
+.stage-nav button i { width: 8px; height: 8px; border-radius: 50%; border: 1.5px solid var(--field-line); flex: none; }
+.stage-nav button i.on { border-color: var(--accent); background: var(--accent); }
+.stage-nav button span { max-width: 230px; overflow: hidden; text-overflow: ellipsis; }
+.stage-nav button[aria-current="page"] { background: #fff; color: var(--ink); font-weight: 600; box-shadow: 0 1px 2px #14141e1a, 0 0 0 1px var(--line); }
+.sg { display: grid; grid-template-columns: 1fr 290px; gap: 28px; margin-top: 20px; }
+.sg-head h1 { font-size: 24px; line-height: 1.2; margin-top: 2px; }
+.sg-head p { color: var(--ink-2); margin-top: 4px; max-width: 64ch; }
+.next { display: flex; align-items: center; gap: 14px; padding: 14px 16px; margin-top: 16px; border-radius: 12px; background: var(--accent-soft); border: 1px solid var(--accent-line); }
+.next .kicker { color: var(--accent); }
+.next b { display: block; font: 650 15px/1.3 var(--display); margin-top: 2px; }
+.next .small { margin-top: 1px; }
+.next .grow { min-width: 0; }
+.phase { margin-top: 14px; border-top: 1px solid var(--line); }
+.phase summary { display: flex; align-items: baseline; gap: 10px; padding: 12px 0 8px; cursor: pointer; list-style: none; }
+.phase summary::-webkit-details-marker { display: none; }
+.phase summary::before { content: "›"; color: var(--muted); font-size: 14px; display: inline-block; transition: rotate .2s; width: 10px; }
+.phase[open] summary::before { rotate: 90deg; }
+.phase summary .kicker { flex: none; }
+.phase summary b { flex: 1; font-weight: 600; font-size: 13px; }
+.lessons { position: relative; padding: 2px 0 10px 18px; }
+.lessons::before { content: ""; position: absolute; left: 27px; top: 14px; bottom: 22px; border-left: 2px solid var(--line); }
+.lesson { position: relative; display: grid; grid-template-columns: 20px 34px 1fr auto; align-items: center; gap: 8px; min-height: 34px; padding: 0 8px 0 0; border-radius: 8px; font-size: 12.5px; }
+.lesson:hover { background: var(--bg-subtle); }
+.lesson .c { width: 20px; height: 20px; border-radius: 50%; border: 2px solid var(--line-strong); background: #fff; position: relative; z-index: 1; display: grid; place-items: center; font-size: 9px; color: #fff; }
+.lesson[data-s="done"] .c { background: var(--success); border-color: var(--success); }
+.lesson[data-s="now"] .c { border-color: var(--accent); box-shadow: 0 0 0 3px var(--accent-soft); }
+.lesson .num { color: var(--muted); font-size: 11.5px; }
+.lesson[data-s="done"] .t { color: var(--muted); }
+.lesson[data-s="now"] .t { font-weight: 600; }
+.lesson .steps { font-size: 11px; color: var(--muted); }
+.side-col { display: grid; gap: 12px; align-content: start; }
+.side-col .card { padding: 14px 16px; }
+.goal-row { display: flex; align-items: center; gap: 14px; }
+.goal-row strong { display: block; font: 650 22px/1.1 var(--display); margin-top: 2px; }
+.ms-row { display: flex; justify-content: space-between; gap: 8px; font-size: 12px; margin-top: 8px; }
+.ms-row b { font-weight: 550; }
+.tag { font-size: 11px; font-weight: 550; padding: 1px 8px; border-radius: 8px; background: var(--surface-2); color: var(--muted); white-space: nowrap; }
+.tag.ok { background: var(--success-soft); color: var(--success); }
+.tag.blue { background: var(--accent-soft); color: var(--accent); }
+.mist li { display: flex; gap: 8px; font-size: 12px; padding: 6px 0; border-top: 1px solid var(--line); }
+.mist li:first-child { border-top: 0; }
+.mist li > span:first-child { flex: 1; }
+
+/* 4 · Lesson + notes sidebar */
+.lesson-main { flex: 1; min-width: 0; }
+.steps-row { display: flex; align-items: center; gap: 0; margin-top: 16px; }
+.steps-row span { display: inline-flex; align-items: center; gap: 6px; font-size: 12px; color: var(--muted); white-space: nowrap; }
+.steps-row span i { width: 18px; height: 18px; border-radius: 50%; display: grid; place-items: center; font-size: 10px; font-style: normal; font-weight: 600; background: var(--ink); color: #fff; }
+.steps-row span.on { color: var(--success); font-weight: 600; }
+.steps-row span.on i { background: var(--success); }
+.steps-row hr { flex: 1; border: 0; border-top: 1.5px solid var(--line-strong); margin: 0 10px; min-width: 20px; }
+.concepts { margin-top: 18px; display: grid; gap: 0; counter-reset: c; }
+.concepts li { display: flex; gap: 12px; align-items: baseline; padding: 9px 0; border-bottom: 1px solid var(--line); font-size: 13px; counter-increment: c; }
+.concepts li::before { content: counter(c); width: 20px; height: 20px; flex: none; border: 1px solid var(--line-strong); border-radius: 6px; display: grid; place-items: center; font-size: 10.5px; color: var(--muted); }
+.side { width: 340px; flex: none; border-left: 1px solid var(--line); display: flex; flex-direction: column; padding: 12px; gap: 12px; background: #fff; border-radius: 0 0 12px 0; }
+.tabs { display: grid; grid-template-columns: 1fr 1fr; padding: 2px; border: 1px solid var(--line-strong); border-radius: 11px; }
+.tabs button { position: relative; border: 0; background: none; min-height: 28px; border-radius: 9px; font-size: 12.5px; font-weight: 500; color: var(--ink-2); cursor: pointer; }
+.tabs button[aria-selected="true"] { background: var(--ink); color: #fff; }
+.tabs button[aria-selected="true"]::after { content: ""; position: absolute; inset: auto 30% 3px; border-bottom: 2px solid #fff; border-radius: 2px; opacity: .55; }
+.panel-wrap { flex: 1; display: flex; flex-direction: column; gap: 10px; min-height: 0; }
+.notes-box { flex: 1; min-height: 250px; border: 1px solid var(--line-strong); border-radius: 10px; padding: 10px 12px; font-size: 12.5px; line-height: 1.6; overflow: auto; }
+.notes-box:focus { outline: 2px solid var(--accent); outline-offset: -1px; border-color: transparent; }
+.notes-box ul { list-style: disc; padding-left: 16px; display: grid; gap: 6px; }
+.notes-box.raw { white-space: pre-wrap; color: var(--ink-2); }
+.notes-foot { display: grid; gap: 4px; font-size: 12px; color: var(--muted); }
+.notes-foot .row { display: flex; gap: 14px; }
+.chat { display: grid; gap: 12px; align-content: start; }
+.bubble-u { justify-self: end; max-width: 85%; background: var(--ink); color: #fff; border-radius: 12px 12px 4px 12px; padding: 8px 11px; font-size: 12.5px; }
+.bubble-a { font-size: 12.5px; color: var(--ink-2); }
+.composer { border: 1px solid var(--line-strong); border-radius: 10px; padding: 8px 10px; color: var(--muted); font-size: 12.5px; }
+
+/* 5/6 · inline previews of the popover and search, pinned open for the sample */
+.pin-stage { position: relative; flex: 1; padding: 28px 36px; }
+.pinned { position: absolute; z-index: 2; }
+.ghost-lesson { opacity: .45; pointer-events: none; }
+
+/* 7 · Progress */
+.stats { display: grid; grid-template-columns: repeat(4, 1fr); gap: 12px; margin-top: 16px; }
+.stat { padding: 14px 16px; display: flex; align-items: center; gap: 12px; }
+.stat .grow strong { display: block; font: 650 26px/1.1 var(--display); margin-top: 3px; }
+.pg { display: grid; grid-template-columns: 1fr 340px; gap: 32px; margin-top: 24px; }
+.rm { padding: 12px 0 14px; border-top: 1px solid var(--line); display: grid; gap: 8px; }
+.rm .row { display: flex; justify-content: space-between; align-items: baseline; gap: 12px; }
+.rm b { font: 650 14.5px/1.3 var(--display); }
+.map h3 { font-size: 12px; font-weight: 600; margin: 12px 0 6px; }
+.map h3:first-of-type { margin-top: 8px; }
+.tiles { display: flex; flex-wrap: wrap; gap: 5px; }
+.tile { width: 40px; height: 24px; border-radius: 6px; border: 1px solid var(--line-strong); font-size: 10.5px; font-weight: 600; display: grid; place-items: center; color: var(--muted); background: #fff; }
+.tile.done { background: var(--accent); border-color: var(--accent); color: #fff; }
+.tile.now { border-color: var(--accent); color: var(--accent); background: var(--accent-soft); }
+.stage-block { padding-bottom: 12px; border-bottom: 1px solid var(--line); margin-bottom: 4px; }
+.stage-block > .row { display: flex; justify-content: space-between; align-items: baseline; margin-top: 10px; }
+.stamp { display: inline-flex; align-items: center; gap: 6px; padding: 3px 10px; border-radius: 10px; font-size: 12px; font-weight: 600; background: var(--success-soft); color: var(--success); }
+
+@media (max-width: 1000px) {
+  .pc, .mk, .sg, .pg { grid-template-columns: 1fr; }
+  .stats { grid-template-columns: repeat(2, 1fr); }
+  .body:has(.side) { flex-direction: column; }
+  .side { width: auto; border-left: 0; border-top: 1px solid var(--line); }
+  .search { width: 160px; }
+  .stage-nav { width: 100%; overflow-x: auto; }
+}
+</style>
+</head>
+<body>
+<nav class="jump" aria-label="Samples">
+  <b>Roadmap · Sample UI</b>
+  <a href="#s1">1 Placement check</a><a href="#s2">2 Roadmap making</a><a href="#s3">3 Stage screen</a><a href="#s4">4 My notes</a><a href="#s5">5 Ideas</a><a href="#s6">6 Search</a><a href="#s7">7 Progress</a>
+</nav>
+
+<main>
+  <!-- 1 · Placement check -->
+  <section class="sample" id="s1">
+    <header><p class="kicker">Sample 1</p><h2>Placement check</h2><p>The goal and choices stay on the left. Every question number lines up with its options, and each picked answer turns blue. A counter and the Approve button share one footer.</p></header>
+    <div class="win">
+      <div data-top="new"></div>
+      <div class="body"><div class="pad pc">
+        <aside class="card goal-card">
+          <p class="kicker">Your goal</p>
+          <q>I want to learn C for IoT and linux.</q>
+          <dl><dt>Starting</dt><dd>Complete beginner</dd><dt>Length</dt><dd>3 months</dd></dl>
+          <button class="link" type="button" style="justify-self:start">Edit goal</button>
+        </aside>
+        <form class="qs" id="pc-form" onsubmit="return false">
+          <div><p class="kicker">Before we build</p><h1 class="serif" style="font-size:24px;line-height:1.2;margin-top:2px">What can you already do?</h1><p class="small" style="margin-top:4px">Four quick questions. Your answers set where the course starts.</p></div>
+          <fieldset class="q"><legend><span class="n">1</span><span class="qt">What would you most like to build first with C?</span></legend>
+            <div class="opts"><label class="opt"><input type="radio" name="q1">Linux tools</label><label class="opt"><input type="radio" name="q1">Device firmware</label><label class="opt"><input type="radio" name="q1" checked>Not sure yet: I'd like to try both</label></div></fieldset>
+          <fieldset class="q"><legend><span class="n">2</span><span class="qt">What have you done with programming languages other than C?</span></legend>
+            <div class="opts"><label class="opt"><input type="radio" name="q2">Nothing yet</label><label class="opt"><input type="radio" name="q2" checked>I've written small programs on my own</label><label class="opt"><input type="radio" name="q2">I code at work</label></div></fieldset>
+          <fieldset class="q"><legend><span class="n">3</span><span class="qt">What do you already have for hands-on practice?</span></legend>
+            <div class="opts"><label class="opt"><input type="radio" name="q3" checked>A Linux setup, but no board</label><label class="opt"><input type="radio" name="q3">A board like a Raspberry Pi Pico</label><label class="opt"><input type="radio" name="q3">Both</label></div></fieldset>
+          <fieldset class="q"><legend><span class="n">4</span><span class="qt">What have you done in the Linux terminal?</span></legend>
+            <div class="opts"><label class="opt"><input type="radio" name="q4">Never opened it</label><label class="opt"><input type="radio" name="q4">I've moved between folders and listed files</label><label class="opt"><input type="radio" name="q4">I write shell scripts</label></div></fieldset>
+          <div class="pc-foot">
+            <div class="meter"><progress class="bar" id="pc-bar" max="4" value="3" aria-labelledby="pc-count"></progress><span class="small" id="pc-count">3 of 4 answered</span></div>
+            <button class="btn ghost" type="button">Back</button>
+            <button class="btn" id="pc-go" type="submit" disabled>Approve and build course</button>
+          </div>
+        </form>
+      </div></div>
+    </div>
+  </section>
+
+  <!-- 2 · Roadmap making -->
+  <section class="sample" id="s2">
+    <header><p class="kicker">Sample 2</p><h2>Roadmap making</h2><p>While the agent writes, it sends short updates: the title first, then each stage, its phases and lesson counts. The screen fills in as each update arrives, and stages still being written show a shimmer.</p></header>
+    <div class="win">
+      <div data-top="new"></div>
+      <div class="body"><div class="pad mk">
+        <div>
+          <span class="mk-status" id="mk-status" role="status"><progress class="spin" aria-label="Writing"></progress><span class="ok" aria-hidden="true">✓</span><span id="mk-status-t">Reading your answers</span></span>
+          <p class="kicker" style="margin-top:16px">Your course blueprint</p>
+          <div id="mk-head"><span class="sk" style="width:60%;height:22px;margin-top:10px"></span><span class="sk" style="width:85%;margin-top:12px"></span><span class="sk" style="width:70%;margin-top:8px"></span></div>
+          <ol class="spine" id="mk-spine"></ol>
+          <div class="mk-foot" id="mk-foot" hidden><button class="btn" type="button">Open the first lesson</button><span class="small">Videos are found for every lesson in the background.</span></div>
+        </div>
+        <aside class="card log">
+          <div style="display:flex;justify-content:space-between;align-items:center"><p class="kicker">What the agent is doing</p><button class="link" type="button" id="mk-replay">Replay</button></div>
+          <ol id="mk-log"></ol>
+        </aside>
+      </div></div>
+    </div>
+  </section>
+
+  <!-- 3 · Stage screen -->
+  <section class="sample" id="s3">
+    <header><p class="kicker">Sample 3</p><h2>Stage screen</h2><p>Each stage gets its own page with Where you are, its phases and lessons, the daily goal, the stage's milestone project, its exam and its own mistakes. Switch stages at the top.</p></header>
+    <div class="win">
+      <div data-top="course"></div>
+      <div class="body"><div class="pad sg" style="width:100%;margin-top:0">
+        <div>
+        <div class="course-head">
+          <a class="back" href="#s7">← Your library</a>
+          <h1 class="serif">Build Linux Tools and IoT Firmware in C</h1>
+          <button class="more" type="button">··· More</button>
+          <p>Over 54 hands-on lessons, you’ll go from compiling your first C program to building a Linux telemetry collector and connecting it to microcontroller firmware in an emulator, with no board required. We skip general programming orientation and the folder navigation and file listing you already know, but start C from scratch.</p>
+        </div>
+        <nav class="stage-nav" id="stage-nav" aria-label="Stages"></nav>
+        <div id="stage-main" style="margin-top:22px"></div>
+        </div>
+        <div class="side-col" id="stage-side"></div>
+      </div></div>
+    </div>
+  </section>
+
+  <!-- 4 · My notes -->
+  <section class="sample" id="s4">
+    <header><p class="kicker">Sample 4</p><h2>My notes</h2><p>Notes sit next to the Tutor in the lesson sidebar and save as you type. Rewrite my notes tidies them, and Undo rewrite brings yours back.</p></header>
+    <div class="win">
+      <div data-top="course"></div>
+      <div class="body">
+        <div class="lesson-main pad">
+          <p class="small">Stage 1 / Compile and Run Small C Programs / 1.1</p>
+          <h1 class="serif" style="font-size:24px;line-height:1.2;margin-top:4px">Compile Your First C Program on Linux</h1>
+          <p style="color:var(--ink-2);margin-top:4px">Set up GCC, compile a tiny C program with warnings enabled, and run it to print a sample reading.</p>
+          <div class="steps-row"><span><i>1</i>Watch</span><hr><span><i>2</i>Learn</span><hr><span><i>3</i>Look up</span><hr><span><i>4</i>Do it</span><hr><span class="on"><i>5</i>Practice</span></div>
+          <ol class="concepts">
+            <li>The difference between a C source file and the executable GCC builds from it</li>
+            <li><span><code>main</code> as the starting point of a C program</span></li>
+            <li><span><code>&lt;stdio.h&gt;</code> and <code>printf</code> for printing a line of text</span></li>
+            <li><span>How <code>-Wall</code> and <code>-Wextra</code> help catch mistakes during compilation</span></li>
+            <li><span>Why <code>./sample</code> runs the executable in the current folder</span></li>
+          </ol>
+        </div>
+        <aside class="side">
+          <div class="tabs" role="tablist" aria-label="Lesson sidebar" id="side-tabs">
+            <button type="button" role="tab" id="tab-tutor" aria-selected="false" tabindex="-1">Tutor</button>
+            <button type="button" role="tab" id="tab-notes" aria-selected="true">My notes</button>
+          </div>
+          <div role="tabpanel" aria-labelledby="tab-tutor" class="panel-wrap" hidden>
+            <div class="chat">
+              <div class="bubble-u">Quiz me on this: ask me one question at a time about what we just discussed.</div>
+              <div class="bubble-a">Question 1: After GCC builds <code>sample</code> from <code>sample.c</code>, what's the difference between those two files?</div>
+            </div>
+            <div class="grow"></div>
+            <div class="composer">Ask about this lesson…</div>
+          </div>
+          <div role="tabpanel" aria-labelledby="tab-notes" class="panel-wrap">
+            <div class="notes-box raw" id="notes" contenteditable="true" role="textbox" aria-multiline="true" aria-label="My notes"></div>
+            <div class="notes-foot">
+              <span id="notes-saved">Your notes are saved with this lesson.</span>
+              <div class="row"><button class="link" type="button" id="notes-rewrite">Rewrite my notes</button><button class="link" type="button" id="notes-undo" hidden>Undo rewrite</button></div>
+            </div>
+          </div>
+        </aside>
+      </div>
+    </div>
+  </section>
+
+  <!-- 5 · Ideas -->
+  <section class="sample" id="s5">
+    <header><p class="kicker">Sample 5</p><h2>Ideas</h2><p>Ideas opens a small panel under its button from any screen. Pinned open below for the sample; the Ideas button in every top bar here opens the real one. New idea starts a blank one; older ideas stay listed with their dates.</p></header>
+    <div class="win">
+      <div data-top="course"></div>
+      <div class="body pin-stage">
+        <div class="ghost-lesson"><p class="small">Stage 1 / 1.1</p><h1 class="serif" style="font-size:24px;margin-top:4px">Compile Your First C Program on Linux</h1></div>
+        <div class="ideas-panel pinned" style="right:96px;top:6px" data-ideas-copy></div>
+      </div>
+    </div>
+  </section>
+
+  <!-- 6 · Search -->
+  <section class="sample" id="s6">
+    <header><p class="kicker">Sample 6</p><h2>Search</h2><p>One box searches lessons, notes, tutor chats and ideas. Results are grouped by type, with the matched words highlighted. The search box in any top bar on this page works too.</p></header>
+    <div class="win">
+      <div data-top="course" data-pin-search="sample"></div>
+      <div class="body pin-stage" style="min-height:470px">
+        <div class="ghost-lesson"><p class="small">Stage 1 / 1.1</p><h1 class="serif" style="font-size:24px;margin-top:4px">Compile Your First C Program on Linux</h1></div>
+      </div>
+    </div>
+  </section>
+
+  <!-- 7 · Progress -->
+  <section class="sample" id="s7">
+    <header><p class="kicker">Sample 7</p><h2>Progress</h2><p>Shows the daily goal, lessons done, streak and mistakes for every roadmap, with a lesson-tile map of the open roadmap grouped by stage.</p></header>
+    <div class="win">
+      <div data-top="library"></div>
+      <div class="body"><div class="pad" style="width:100%">
+        <p class="small">Your library</p>
+        <h1 class="serif" style="font-size:24px;line-height:1.2;margin-top:2px">Your progress</h1>
+        <div class="stats">
+          <div class="card stat"><div class="grow"><span class="kicker">Daily goal</span><strong>2 / 3</strong><span class="small">steps today</span></div><div class="ring-wrap"><progress class="ring" max="3" value="2" style="--value:66.7" aria-label="Daily goal" aria-valuetext="2 of 3 steps"></progress></div></div>
+          <div class="card stat"><div class="grow"><span class="kicker">Lessons</span><strong>4</strong><span class="small">lessons complete</span></div></div>
+          <div class="card stat"><div class="grow"><span class="kicker">Streak</span><strong>6 days</strong><span class="small">best 9 days</span></div></div>
+          <div class="card stat"><div class="grow"><span class="kicker">Mistakes notebook</span><strong>2</strong><span class="small">mistakes to fix</span></div></div>
+        </div>
+        <div class="pg">
+          <div>
+            <p class="kicker">Roadmaps</p>
+            <div class="rm" style="margin-top:8px"><div class="row"><b>Build Linux Tools and IoT Firmware in C</b><span class="small">4 of 55 lessons</span></div><progress class="bar wide" max="55" value="4" aria-label="Linux C course progress"></progress></div>
+            <div class="rm"><div class="row"><b>Rust from Zero, Through Your Own Projects</b><span class="small">Paused · 6 of 48</span></div><progress class="bar wide" max="48" value="6" aria-label="Rust course progress"></progress></div>
+            <p class="kicker" style="margin-top:18px">Lessons to practise again</p>
+            <ul class="mist" style="margin-top:6px">
+              <li><span>1.2 Check a Build and Its Exact Output</span><span class="tag">Quiz 60%</span></li>
+              <li><span>1.4 Classify Readings at a Threshold</span><span class="tag">Quiz 67%</span></li>
+            </ul>
+          </div>
+          <div class="map" id="pg-map"><p class="kicker">Build Linux Tools and IoT Firmware in C</p></div>
+        </div>
+      </div></div>
+    </div>
+  </section>
+</main>
+
+<!-- The real Ideas popover, shared by every Ideas button -->
+<div id="ideas" popover class="ideas-panel" aria-label="Ideas"></div>
+
+<template id="ideas-tpl">
+  <div class="hd"><b>Ideas</b><button class="mini" type="button" data-new>New idea</button><button class="mini" type="button" data-close>Close</button></div>
+  <textarea placeholder="Write an idea before it gets away…" aria-label="New idea"></textarea>
+  <p class="saved" aria-live="polite">Saved as you type.</p>
+  <ul data-list></ul>
+</template>
+
+<script>
+const ICON = {
+  brand: '<svg viewBox="0 0 14 16" aria-hidden="true"><path d="M3.2 13.6a1.9 1.9 0 1 0 0 .01M3.2 11.6V10c0-1.4 1-2.4 2.4-2.4h2c1.6 0 2.6-1 2.6-2.5V4" stroke="currentColor" stroke-width="2.2" fill="none" stroke-linecap="round"/><rect x="7.6" y=".6" width="5.4" height="4.2" rx="1.2" fill="currentColor"/></svg>',
+  search: '<svg viewBox="0 0 16 16" aria-hidden="true"><circle cx="7" cy="7" r="4.6" fill="none" stroke="currentColor" stroke-width="1.5"/><path d="m10.5 10.5 3.5 3.5" stroke="currentColor" stroke-width="1.5" stroke-linecap="round"/></svg>',
+  review: '<svg viewBox="0 0 16 16" aria-hidden="true"><path d="M13 8a5 5 0 1 1-1.6-3.7M13 2.5v2.8h-2.8" fill="none" stroke="currentColor" stroke-width="1.5" stroke-linecap="round" stroke-linejoin="round"/></svg>',
+  idea: '<svg viewBox="0 0 16 16" aria-hidden="true"><path d="M4 2.5h6l2.5 2.5v8.5H4z M10 2.5V5h2.5 M6 8.5h4 M6 11h3" fill="none" stroke="currentColor" stroke-width="1.4" stroke-linejoin="round"/></svg>',
+  gear: '<svg viewBox="0 0 16 16" aria-hidden="true"><circle cx="8" cy="8" r="2.2" fill="none" stroke="currentColor" stroke-width="1.4"/><path d="M8 1.8v1.6M8 12.6v1.6M1.8 8h1.6M12.6 8h1.6M3.6 3.6l1.1 1.1M11.3 11.3l1.1 1.1M3.6 12.4l1.1-1.1M11.3 4.7l1.1-1.1" stroke="currentColor" stroke-width="1.4" stroke-linecap="round"/></svg>'
+};
+const esc = s => s.replace(/[&<>"]/g, c => ({ "&": "&amp;", "<": "&lt;", ">": "&gt;", '"': "&quot;" })[c]);
+
+/* Top bars */
+document.querySelectorAll("[data-top]").forEach((el, i) => {
+  const crumb = { new: '<span class="crumb"><b>New roadmap</b></span>', course: '<span class="crumb">Roadmap / <b>Build Linux Tools and IoT Firmware in C</b></span>', library: '<span class="crumb"><b>Your library</b></span>' }[el.dataset.top];
+  el.outerHTML = `<div class="top"><span class="brand">${ICON.brand}Roadmap</span>${crumb}<span class="grow"></span>
+    <div class="search">${ICON.search}<input type="search" placeholder="Search" aria-label="Search lessons, notes, tutor chats and ideas" ${el.dataset.pinSearch ? `value="${el.dataset.pinSearch}" data-pin` : ""}><div class="sr" hidden></div></div>
+    <button class="tb" type="button">${ICON.review}Review <span class="count">3</span></button>
+    <button class="tb" type="button" popovertarget="ideas">${ICON.idea}Ideas</button>
+    <button class="tb" type="button" aria-label="Settings">${ICON.gear}</button><span class="dots" aria-hidden="true"><i></i><i></i><i></i></span></div>`;
+});
+
+/* Search */
+const INDEX = [
+  ["Lessons", "1.1 Compile Your First C Program on Linux", "Stage 1 · Compile and Run Small C Programs"],
+  ["Lessons", "1.5 Generate a Stream of Labeled Readings", "Stage 1 · Compile and Run Small C Programs"],
+  ["Lessons", "3.5 Build a Command-Line Sample Checker", "Stage 1 · Make a Command Accept Real Input"],
+  ["Lessons", "4.2 Read One Sample per File Line", "Stage 1 · Project: Sample Summary CLI"],
+  ["Lessons", "4.5 Finish and Verify the Sample Summary CLI", "Stage 1 · Project: Sample Summary CLI"],
+  ["Lessons", "7.2 Send a Datagram to the Loopback Address", "Stage 2 · Move Readings over Local UDP"],
+  ["Lessons", "9.3 Read a Simulated Analog Input", "Stage 3 · Run C on a Simulated Microcontroller"],
+  ["Tutor chats", "sample.c is the file you write and edit. GCC reads it and makes a separate file called sample.", "1.1 Compile Your First C Program on Linux"],
+  ["Tutor chats", "-Wall turns on the common warnings; -Wextra adds more.", "1.1 Compile Your First C Program on Linux"],
+  ["Notes", "sample.c is the source file; sample is the executable GCC builds from it.", "1.1 Compile Your First C Program on Linux"],
+  ["Ideas", "Stream readings from a real Pico over USB serial", "Today"],
+  ["Ideas", "Plot the CSV log as a live chart", "Today"]
+];
+function renderSearch(input) {
+  const box = input.nextElementSibling, q = input.value.trim();
+  if (!q) { box.hidden = true; return; }
+  const words = q.toLowerCase().split(/\s+/);
+  const hits = INDEX.filter(([, t, s]) => words.every(w => (t + " " + s).toLowerCase().includes(w)));
+  const re = new RegExp("(" + words.map(w => w.replace(/[.*+?^${}()|[\]\\]/g, "\\$&")).join("|") + ")", "gi");
+  const hl = s => esc(s).replace(re, "<mark>$1</mark>");
+  let html = '<p class="hint">Search lessons, notes, tutor chats and ideas</p>', last = "";
+  for (const [g, t, s] of hits) { if (g !== last) { html += `<h4>${g}</h4>`; last = g; } html += `<a href="#"><b>${hl(t)}</b><span>${esc(s)}</span></a>`; }
+  box.innerHTML = hits.length ? html : html + `<p class="none">Nothing matches “${esc(q)}”.</p>`;
+  box.hidden = false;
+}
+document.querySelectorAll(".search input").forEach(input => {
+  input.addEventListener("input", () => renderSearch(input));
+  input.addEventListener("focus", () => renderSearch(input));
+  input.addEventListener("keydown", e => { if (e.key === "Escape") { input.value = ""; renderSearch(input); } });
+  input.closest(".search").addEventListener("focusout", e => { if (!input.hasAttribute("data-pin") && !e.currentTarget.contains(e.relatedTarget)) input.nextElementSibling.hidden = true; });
+  if (input.hasAttribute("data-pin")) renderSearch(input);
+});
+
+/* Ideas */
+let ideas = [["Plot the CSV log as a live chart", "Today"], ["Ask the tutor how a ring buffer works", "Yesterday"], ["Try the collector on a Raspberry Pi", "Mon"]];
+function mountIdeas(root, live) {
+  root.append(document.getElementById("ideas-tpl").content.cloneNode(true));
+  const ta = root.querySelector("textarea"), saved = root.querySelector(".saved"), list = root.querySelector("[data-list]");
+  const draw = () => list.innerHTML = ideas.map(([t, d]) => `<li><span>${esc(t)}</span><time>${d}</time></li>`).join("");
+  if (!live) ta.value = "Stream readings from a real Pico over USB serial";
+  ta.addEventListener("input", () => saved.textContent = ta.value.trim() ? "Saved as you type." : "");
+  root.querySelector("[data-new]").addEventListener("click", () => {
+    if (ta.value.trim()) { ideas.unshift([ta.value.trim(), "Just now"]); ta.value = ""; document.querySelectorAll(".ideas-panel [data-list]").forEach(l => l.innerHTML = ideas.map(([t, d]) => `<li><span>${esc(t)}</span><time>${d}</time></li>`).join("")); }
+    ta.focus();
+  });
+  root.querySelector("[data-close]").addEventListener("click", () => live ? root.hidePopover() : null);
+  draw();
+}
+const pop = document.getElementById("ideas");
+mountIdeas(pop, true);
+document.querySelectorAll("[data-ideas-copy]").forEach(el => mountIdeas(el, false));
+pop.addEventListener("toggle", e => { if (e.newState === "open") pop.querySelector("textarea").focus(); });
+
+/* 1 · Placement check */
+const form = document.getElementById("pc-form");
+form.addEventListener("change", () => {
+  const n = new Set([...form.querySelectorAll("input:checked")].map(i => i.name)).size;
+  document.getElementById("pc-bar").value = n;
+  document.getElementById("pc-count").textContent = `${n} of 4 answered`;
+  document.getElementById("pc-go").disabled = n < 4;
+});
+
+/* Real course data */
+const STAGES = [
+  { title: "Write C That Works", lessons: 19, blurb: "Build the Sample Summary CLI, a Linux command that reads numeric samples from a file and reports their range and average.", milestone: "Sample Summary CLI",
+    phases: [["Compile and Run Small C Programs", ["Compile Your First C Program on Linux", "Check a Build and Its Exact Output", "Calculate an Average Without Losing the Fraction", "Classify Readings at a Threshold", "Generate a Stream of Labeled Readings"]],
+             ["Organize a Batch of Readings", ["Extract a Reusable Conversion Function", "Store Readings in a Fixed-Size Array", "Build Labels with C Strings", "Print a Batch Report"]],
+             ["Make a Command Accept Real Input", ["Return a Result Through a Pointer", "Pass an Array with Its Length", "Read Arguments with argc and argv", "Parse Numbers with strtol", "Build a Command-Line Sample Checker"]],
+             ["Project: Sample Summary CLI", ["Model a Reading as a Struct", "Read One Sample per File Line", "Allocate a Batch with a Checked Limit", "Give the CLI a Clear Error Contract", "Finish and Verify the Sample Summary CLI"]]] },
+  { title: "Build Maintainable Linux C Programs", lessons: 18, blurb: "Build the Loopback Telemetry Collector, a tested Linux program that receives sensor readings over local UDP and appends valid records to a CSV log.", milestone: "Loopback Telemetry Collector",
+    phases: [["Split, Build, and Test a C Project", ["Separate an Interface from Its Implementation", "Rebuild Only What Changed with Make", "Lock Down Parser Edge Cases with Unit Tests", "Catch a Buffer Boundary Bug with Sanitizers"]],
+             ["Read and Change Someone Else’s C Code", ["Track a Working Baseline with Git", "Trace a Configuration Value Through inih", "Follow a Failing Setting in GDB", "Make a Reviewable Configuration Patch"]],
+             ["Move Readings over Local UDP", ["Encode a Bounded Telemetry Frame", "Decode One Frame Without Guessing", "Send a Datagram to the Loopback Address", "Reject Datagram Boundary Mistakes", "Build a Telemetry Sender and Listener"]],
+             ["Project: Loopback Telemetry Collector", ["Load Collector Settings at Startup", "Append Accepted Readings to a CSV Log", "Stop Cleanly After an Idle Interval", "Test the Collector as a Separate Process", "Release the Loopback Telemetry Collector"]]] },
+  { title: "Write Embedded C and Connect It to Linux", lessons: 18, blurb: "Build the Device-to-Linux Telemetry Kit, a portfolio project that streams readings from emulated ATmega328P firmware through a Linux bridge to your collector.", milestone: "Device-to-Linux Telemetry Kit",
+    phases: [["Run C on a Simulated Microcontroller", ["Cross-Compile and Boot Your First Firmware", "Drive a GPIO Pin with Bit Masks", "Read a Simulated Analog Input", "Emit Your First UART Telemetry Frame"]],
+             ["Keep Firmware Sampling Predictable", ["Generate Ticks with a Hardware Timer", "Read Interrupt-Owned Time Safely", "Schedule Samples Across Counter Wraparound", "Keep a Threshold Alarm from Chattering", "Run a Periodic Sensor and Alarm"]],
+             ["Bridge Firmware Telemetry to Linux", ["Bridge UART Lines to UDP Datagrams", "Distinguish a Missed Frame from a Repeat", "Measure Firmware Flash and SRAM Use", "Prove the Path from Analog Input to CSV"]],
+             ["Portfolio Project: Device-to-Linux Telemetry Kit", ["Define a Demo Scenario Across Both Targets", "Make the Demo Run from a Clean Checkout", "Measure Sampling Headroom", "Review the Code at the Device-to-Host Boundary", "Tag a Portfolio-Ready Telemetry Release"]]] }
+];
+let phaseNo = 0;
+STAGES.forEach(s => s.phases.forEach(p => p.no = ++phaseNo));
+const DONE = 4; // lessons 1.1–1.4 complete in this sample
+
+/* 2 · Roadmap making: the agent emits one update per step, the screen fills in */
+const LOG = ["Read your goal and answers", "Pick three stages", "Write stage 1 phases", "Write stage 2 phases", "Write stage 3 phases", "Check lesson order", "Save the roadmap"];
+let mkTimers = [];
+function runMaking() {
+  mkTimers.forEach(clearTimeout); mkTimers = [];
+  const head = document.getElementById("mk-head"), spine = document.getElementById("mk-spine"), log = document.getElementById("mk-log"),
+        status = document.getElementById("mk-status"), statusT = document.getElementById("mk-status-t"), foot = document.getElementById("mk-foot");
+  head.innerHTML = '<span class="sk" style="width:60%;height:22px;margin-top:10px"></span><span class="sk" style="width:85%;margin-top:12px"></span><span class="sk" style="width:70%;margin-top:8px"></span>';
+  spine.innerHTML = STAGES.map((s, i) => `<li class="st" data-state="next"><span class="dot">${i + 1}</span><div><span class="kicker">Stage ${i + 1}</span><span class="sk" style="width:55%;height:14px;margin-top:6px"></span><span class="sk" style="width:80%;margin-top:8px"></span></div><span class="meta"></span></li>`).join("");
+  status.classList.remove("done"); foot.hidden = true;
+  const drawLog = n => log.innerHTML = LOG.map((t, i) => `<li class="${i < n ? "done" : i === n ? "now" : "next"}"><i>${i < n ? "✓" : i === n ? '<progress class="spin" aria-label="Working" style="--size:14px"></progress>' : ""}</i><span>${t}</span></li>`).join("");
+  const steps = [
+    () => { drawLog(1); statusT.textContent = "Choosing the stages";
+      head.innerHTML = '<h1 class="serif fade-in">Build Linux Tools and IoT Firmware in C</h1><p class="sum fade-in">Over 54 hands-on lessons, you\'ll go from compiling your first C program to building a Linux telemetry collector and connecting it to microcontroller firmware in an emulator, with no board required.</p>'; },
+    ...STAGES.map((s, i) => () => {
+      drawLog(2 + i); statusT.textContent = `Writing stage ${i + 1} · ${s.title}`;
+      const li = spine.children[i];
+      li.dataset.state = "writing";
+      li.querySelector("div").innerHTML = `<span class="kicker">Stage ${i + 1}</span><h3 class="fade-in">${esc(s.title)}</h3><p class="fade-in">${esc(s.blurb)}</p><div class="phs"><span class="sk" style="width:120px;height:18px"></span><span class="sk" style="width:90px;height:18px"></span></div>`;
+      mkTimers.push(setTimeout(() => {
+        li.dataset.state = "done";
+        li.querySelector(".phs").outerHTML = `<div class="phs fade-in">${s.phases.map(p => `<span>${esc(p[0])}</span>`).join("")}</div>`;
+        li.querySelector(".meta").textContent = `${s.lessons} lessons · ${s.phases.length} phases`;
+      }, 900));
+    }),
+    () => { drawLog(5); statusT.textContent = "Checking lesson order"; },
+    () => { drawLog(7); status.classList.add("done"); statusT.textContent = "55 lessons ready"; foot.hidden = false; }
+  ];
+  drawLog(0);
+  steps.forEach((f, i) => mkTimers.push(setTimeout(f, 900 + i * 1500)));
+}
+document.getElementById("mk-replay").addEventListener("click", runMaking);
+new IntersectionObserver((es, o) => { if (es[0].isIntersecting) { runMaking(); o.disconnect(); } }, { threshold: .3 }).observe(document.getElementById("s2"));
+
+/* 3 · Stage screen */
+let cur = 0;
+function drawStage() {
+  const nav = document.getElementById("stage-nav");
+  nav.innerHTML = STAGES.map((s, i) => `<button type="button" ${i === cur ? 'aria-current="page"' : ""} data-i="${i}" title="Stage ${i + 1} · ${i === 0 ? "In progress" : "Not started"}"><i class="${i === 0 ? "on" : ""}" aria-hidden="true"></i><span>Stage ${i + 1} · ${esc(s.title)}</span></button>`).join("");
+  nav.querySelectorAll("button").forEach(b => b.onclick = () => { cur = +b.dataset.i; drawStage(); nav.querySelector("[aria-current]").focus(); });
+  const s = STAGES[cur], doneHere = cur === 0 ? DONE : 0, started = cur === 0;
+  let n = 0, next = null;
+  const phases = s.phases.map((p, pi) => {
+    const rows = p[1].map((t, li) => { const st = n < doneHere ? "done" : n === doneHere && started ? "now" : "todo"; if (n === doneHere) next = { no: `${p.no}.${li + 1}`, t, phase: p[0] }; n++;
+      return `<li class="lesson" data-s="${st}"><span class="c">${st === "done" ? "✓" : ""}</span><span class="num">${p.no}.${li + 1}</span><span class="t">${esc(t)}</span><span class="steps">${st === "now" ? "Watch · Learn · Practice" : ""}</span></li>`; }).join("");
+    const done = Math.max(0, Math.min(p[1].length, doneHere - s.phases.slice(0, pi).reduce((a, q) => a + q[1].length, 0)));
+    return `<details class="phase" ${pi === 0 ? "open" : ""}><summary><span class="kicker">Phase ${p.no}</span><b>${esc(p[0])}</b><span class="small">${done} / ${p[1].length}</span></summary><ol class="lessons">${rows}</ol></details>`;
+  }).join("");
+  document.getElementById("stage-main").innerHTML = `
+      <div class="sg-head"><p class="kicker">Stage ${cur + 1} of 3 · ${s.lessons} lessons</p><h1 class="serif">${esc(s.title)}</h1><p>${esc(s.blurb)}</p></div>
+      <div class="next"><div class="grow"><p class="kicker">${started ? "Where you are · Recommended next" : "Starts after Stage " + cur}</p><b>${next.no} ${esc(next.t)}</b><p class="small">Stage ${cur + 1} · ${esc(next.phase)}</p></div><button class="btn" type="button" ${started ? "" : "disabled"}>${started ? "Open lesson" : "Locked"}</button></div>
+      ${phases}`;
+  document.getElementById("stage-side").innerHTML = `
+      <div class="card"><div class="goal-row"><div class="grow"><span class="kicker">Daily goal</span><strong>2 / 3</strong><span class="small">steps today · 6-day streak</span></div><div class="ring-wrap"><progress class="ring" max="3" value="2" style="--value:66.7" aria-label="Daily goal" aria-valuetext="2 of 3 steps"></progress></div></div></div>
+      <div class="card"><span class="kicker">Stage milestone</span><p style="font-weight:600;margin-top:4px">${esc(s.milestone)}</p>
+        <div class="ms-row"><span>Phases done</span><b>${started ? "0 of 4" : "0 of 4"}</b></div>
+        <progress class="bar wide" max="${s.lessons}" value="${doneHere}" style="margin-top:8px" aria-label="Stage progress"></progress>
+        <div class="ms-row"><span class="small">${doneHere} of ${s.lessons} lessons</span><span class="small">${Math.round(doneHere / s.lessons * 100)}%</span></div></div>
+      <div class="card"><div class="ms-row" style="margin-top:0"><span class="kicker">Stage exam</span><span class="tag ${started ? "blue" : ""}">${started ? "After phase 4" : "Locked"}</span></div><p class="small" style="margin-top:6px">Pass it to finish Stage ${cur + 1}. Covers all four phases.</p></div>
+      <div class="card"><div class="ms-row" style="margin-top:0"><span class="kicker">Mistakes notebook</span><span class="tag">${started ? 2 : 0}</span></div>
+        ${started ? '<ul class="mist" style="margin-top:6px"><li><span>Ran the source file instead of the program</span><span class="small">1.1</span></li><li><span>Integer division dropped the fraction</span><span class="small">1.3</span></li></ul>' : '<p class="small" style="margin-top:6px">Questions you miss in this stage show up here.</p>'}</div>`;
+}
+drawStage();
+
+/* 4 · Notes with rewrite / undo */
+const RAW = "sample.c = source, sample = the program gcc makes\ngcc -Wall -Wextra sample.c -o sample   (warnings!!)\nrun with ./sample not sample.c\nedit -> rebuild or old output shows";
+const TIDY = '<ul><li><b>sample.c</b> is the source file; <b>sample</b> is the executable GCC builds from it.</li><li>Build with warnings: <code>gcc -Wall -Wextra sample.c -o sample</code></li><li>Run the program with <code>./sample</code>, not the source file.</li><li>After every edit, rebuild before you run <code>./sample</code>. An old build prints old output.</li></ul>';
+const notes = document.getElementById("notes"), rw = document.getElementById("notes-rewrite"), undo = document.getElementById("notes-undo");
+let before = RAW;
+notes.textContent = RAW;
+notes.addEventListener("input", () => { document.getElementById("notes-saved").textContent = "Saved just now."; undo.hidden = true; rw.hidden = false; });
+rw.onclick = () => { before = notes.innerText; notes.classList.remove("raw"); notes.innerHTML = TIDY; rw.hidden = true; undo.hidden = false; };
+undo.onclick = () => { notes.classList.add("raw"); notes.textContent = before; undo.hidden = true; rw.hidden = false; };
+
+/* Tabs: arrow keys move and select (selection follows focus) */
+const tabs = [...document.querySelectorAll("#side-tabs [role=tab]")];
+function selectTab(t) {
+  tabs.forEach(x => { const on = x === t; x.setAttribute("aria-selected", on); x.tabIndex = on ? 0 : -1;
+    document.querySelector(`[role=tabpanel][aria-labelledby="${x.id}"]`).hidden = !on; });
+}
+tabs.forEach((t, i) => {
+  t.addEventListener("click", () => selectTab(t));
+  t.addEventListener("keydown", e => {
+    const k = { ArrowRight: 1, ArrowLeft: -1 }[e.key]; if (!k) return;
+    const nt = tabs[(i + k + tabs.length) % tabs.length]; selectTab(nt); nt.focus(); e.preventDefault();
+  });
+});
+
+/* 7 · Progress tile map by stage */
+const map = document.getElementById("pg-map");
+let k = 0;
+map.insertAdjacentHTML("beforeend", STAGES.map((s, si) => {
+  const lessonsBefore = k; k += s.lessons;
+  const doneHere = si === 0 ? DONE : 0;
+  let m = 0;
+  return `<div class="stage-block"><div class="row"><b style="font-size:12.5px">Stage ${si + 1} · ${esc(s.title)}</b><span class="small">${doneHere}/${s.lessons}</span></div>${s.phases.map(p => `<h3>${esc(p[0])}</h3><div class="tiles">${p[1].map((_, li) => { const c = m < doneHere ? "done" : m === doneHere && si === 0 ? "now" : ""; m++; return `<span class="tile ${c}">${p.no}.${li + 1}</span>`; }).join("")}</div>`).join("")}</div>`;
+}).join(""));
+</script>
+</body>
+</html>

@@ -6,6 +6,13 @@
   var q = new URLSearchParams(location.search);
   var id = q.get('v') || '';
   var start = Math.max(0, parseInt(q.get('start') || '0', 10) || 0);
+  var parts = (q.get('parts') || '').split(',').filter(function (s) { return /^\d+-\d+$/.test(s); })
+    .map(function (s) { return s.split('-').map(Number); });
+  var part = 0;
+  function leaveLesson() {
+    if (parts.length) parent.postMessage({ roadmapFull: true }, '*');
+    parts = [];
+  }
   // local=1: the app saved this video for offline use, and this server plays its own copy instead of YouTube.
   var local = q.get('local') === '1';
   var ready = false, player = null, pending = null, dragging = false, idleTimer = 0;
@@ -22,6 +29,7 @@
   function playing() { return player && player.getPlayerState && player.getPlayerState() === 1; }
   function toggle() { if (!player) return; playing() ? player.pauseVideo() : player.playVideo(); }
   function jump(t) {
+    leaveLesson();
     if (!player || !player.seekTo) { pending = t; return; }
     var d = player.getDuration() || Infinity;
     player.seekTo(Math.max(0, Math.min(t, d - 0.5)), true); player.playVideo();
@@ -30,6 +38,17 @@
   function tick() {
     if (!player || !player.getCurrentTime) return;
     var d = player.getDuration() || 0, t = player.getCurrentTime() || 0;
+    if (!dragging && parts[part] && t >= parts[part][1] && (playing() || player.getPlayerState() === 0)) {
+      part++;
+      if (parts[part]) {
+        player.seekTo(parts[part][0], true);
+        player.playVideo();
+      } else {
+        parts = [];
+        player.pauseVideo();
+        parent.postMessage({ roadmapPartDone: true }, '*');
+      }
+    }
     seek.max = String(Math.floor(d));
     if (!dragging) seek.value = String(Math.floor(t));
     time.textContent = clock(dragging ? +seek.value : t) + ' / ' + clock(d);
@@ -108,7 +127,10 @@
     }
     var cmd = e.source === parent && e.data && e.data.roadmapCommand;
     if (cmd && player) {
-      if (cmd === 'toggle') toggle();
+      if (cmd === 'context') jump(player.getCurrentTime() - 60);
+      else if (cmd === 'time') parent.postMessage({ roadmapTime: player.getCurrentTime() || 0 }, '*');
+      else if (cmd === 'full') { leaveLesson(); player.playVideo(); }
+      else if (cmd === 'toggle') toggle();
       else if (cmd === 'play') player.playVideo();
       else if (cmd === 'pause') player.pauseVideo();
       else if (cmd === 'back' || cmd === 'forward') jump(player.getCurrentTime() + (cmd === 'back' ? -10 : 10));

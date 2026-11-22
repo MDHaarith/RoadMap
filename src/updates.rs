@@ -23,16 +23,26 @@ pub async fn update_check(app: AppHandle, state: State<'_, Updates>) -> Result<(
         let updater = app.updater_builder().timeout(Duration::from_secs(120)).build().map_err(|e| e.to_string())?;
         let update = updater.check().await.map_err(|e| e.to_string())?;
         if let Some(update) = update {
-            state.status.lock().unwrap().available = update.version.clone();
-            if !cfg!(debug_assertions) && supported(tauri::utils::platform::bundle_type()) {
+            let version = update.version.clone();
+            // Notify once per version; the 6-hour recheck must not repeat it.
+            let new = std::mem::replace(&mut state.status.lock().unwrap().available, version.clone()) != version;
+            let body = if !cfg!(debug_assertions) && supported(tauri::utils::platform::bundle_type()) {
                 let bytes = update.download(|_, _| {}, || {}).await.map_err(|e| e.to_string())?;
                 *state.pending.lock().unwrap() = Some((update, bytes));
                 state.status.lock().unwrap().state = "ready".into();
-            } else { state.status.lock().unwrap().state = "download".into(); }
+                "Restart Roadmap to update."
+            } else { state.status.lock().unwrap().state = "download".into(); "Open Roadmap to download it." };
+            if new {
+                use tauri_plugin_notification::NotificationExt;
+                let _ = app.notification().builder().title(format!("Roadmap {version} is available")).body(body).show();
+            }
         } else { state.status.lock().unwrap().state = "latest".into(); }
         Ok::<(), String>(())
     }.await;
-    if let Err(error) = &result { eprintln!("update check: {error}"); state.status.lock().unwrap().state = "error".into(); }
+    if let Err(error) = &result {
+        eprintln!("update check: {error}");
+        let mut s = state.status.lock().unwrap(); s.state = "error".into(); s.available.clear();
+    }
     result
 }
 #[tauri::command]

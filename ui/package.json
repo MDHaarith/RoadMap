@@ -8,7 +8,7 @@
     "build": "vite build",
     "preview": "vite preview",
     "check": "svelte-check --tsconfig ./tsconfig.json",
-    "test": "node --experimental-strip-types --test src/lib/parity.test.ts src/lib/highlight.test.ts",
+    "test": "node --experimental-strip-types --test src/lib/parity.test.ts src/lib/highlight.test.ts src/lib/player.test.ts src/lib/progress.test.ts src/lib/format.test.ts",
     "tauri": "cd .. && tauri"
   },
   "dependencies": {

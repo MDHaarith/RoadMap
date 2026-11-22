@@ -158,7 +158,7 @@ input[type=checkbox]:checked::after { content: ''; width: 9px; height: 5px; bord
 
 /* Option chips (quick picks, examples). */
 .examples, .chips { display: flex; flex-wrap: wrap; gap: var(--s2); margin-top: var(--s3); }
-.examples button, .chip { border: 1px solid var(--line); background: var(--surface); border-radius: var(--r-btn-sm); padding: 5px var(--s3); font-size: var(--t-sm); color: var(--ink-2); display: inline-flex; align-items: center; gap: 6px; }
+.examples button, .chip { border: 1px solid var(--line); background: var(--surface); border-radius: var(--r-btn-sm); padding: 3px var(--s3); line-height: 16px; font-size: var(--t-sm); color: var(--ink-2); display: inline-flex; align-items: center; gap: 6px; }
 .examples button:hover, .chip:hover { border-color: var(--line-strong); background: var(--hover); color: var(--ink); }
 
 /* ---------- Surfaces ---------- */
@@ -189,8 +189,8 @@ input[type=checkbox]:checked::after { content: ''; width: 9px; height: 5px; bord
 
 /* Menu built on <details>: summary is the trigger, .menu-list the popover. */
 .menu { position: relative; }
-.menu > summary { list-style: none; }
-.menu > summary::-webkit-details-marker { display: none; }
+.menu-list, .search-pop { transform-origin: top right; }
+.switch-menu, .select-list { transform-origin: top left; }
 .menu-list { position: absolute; right: 0; top: calc(100% + 6px); z-index: 20; min-width: 260px; background: var(--surface); border: 1px solid var(--line); border-radius: var(--r); box-shadow: var(--overlay-shadow); padding: 6px; display: grid; }
 .menu-list button, .select-list [role=option], .switch-menu a { display: flex; flex-direction: column; align-items: flex-start; gap: 2px; min-height: 30px; text-align: left; border: 0; background: none; padding: var(--s2) var(--s3); border-radius: var(--r-sm); font-size: var(--t-sm); font-weight: 500; color: var(--ink); }
 .select-list { position: fixed; right: auto; min-width: 0; z-index: 100; overflow-y: auto; overscroll-behavior: contain; display: block; }
@@ -251,7 +251,19 @@ input[type=checkbox]:checked::after { content: ''; width: 9px; height: 5px; bord
 .switch-menu span { display: block; font-size: var(--t-xs); color: var(--muted); }
 .meter { display: inline-flex; align-items: center; gap: var(--s2); font-size: var(--t-xs); color: var(--muted); font-variant-numeric: tabular-nums; margin-right: var(--s2); }
 .meter .bar { width: 72px; height: 4px; }
-.top-search input { width: 200px; height: 28px; padding: 0 var(--s3); font-size: var(--t-sm); background: var(--surface); border: 1px solid var(--line-strong); border-radius: var(--r-btn-sm); }
+.top-search { position: relative; }
+.top-search > .icon { position: absolute; left: 9px; top: 7px; color: var(--muted); pointer-events: none; }
+.search-pop { position: absolute; top: calc(100% + 6px); right: 0; z-index: 30; width: min(380px, calc(100vw - 24px)); max-height: min(440px, calc(100dvh - var(--top-h) - 24px)); overflow: auto; padding: var(--s2); background: var(--surface); border: 1px solid var(--line); border-radius: var(--r-btn); box-shadow: 0 16px 40px rgba(20, 20, 30, .12); }
+.search-hint { margin: 0 0 var(--s1); padding: var(--s2) var(--s3) var(--s3); font-size: var(--t-xs); color: var(--muted); border-bottom: 1px solid var(--line); }
+.search-pop h4 { margin: var(--s3) var(--s3) 2px; font-size: 10.5px; font-weight: 600; letter-spacing: .06em; text-transform: uppercase; color: var(--muted); }
+.search-pop a, .search-pop button { display: block; width: 100%; padding: var(--s2) var(--s3); border: 0; border-radius: var(--r); background: none; text-align: left; color: var(--ink); }
+.search-pop a:hover, .search-pop a:focus-visible, .search-pop button:hover, .search-pop button:focus-visible { background: var(--hover); text-decoration: none; outline-offset: -2px; }
+.search-pop b { display: block; font-weight: 550; font-size: var(--t-sm); white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
+.search-pop a span { display: block; font-size: var(--t-xs); color: var(--muted); white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
+.search-pop .search-all { margin-top: var(--s1); border-top: 1px solid var(--line); border-radius: 0 0 var(--r) var(--r); color: var(--accent-ink); font-size: var(--t-sm); font-weight: 550; }
+.search-none { margin: 0; padding: 14px var(--s3); color: var(--muted); }
+mark { background: #fff1a8; color: inherit; border-radius: 3px; padding: 0 1px; }
+.top-search input { width: 220px; height: 28px; padding: 0 var(--s3) 0 28px; font-size: var(--t-sm); background: var(--surface); border: 1px solid var(--line-strong); border-radius: var(--r-btn-sm); }
 .top-search input:focus-visible { background: var(--surface); outline: 2px solid var(--accent-ink); outline-offset: 0; border-radius: var(--r-btn-sm); }
 .top-link { display: inline-flex; align-items: center; gap: 6px; height: 28px; padding: 0 var(--s2); border: 0; border-radius: var(--r-btn-sm); background: none; color: var(--ink-2); font-size: var(--t-sm); font-weight: 500; white-space: nowrap; flex: none; }
 .top-link:hover, .top-link[aria-expanded=true] { background: var(--hover); color: var(--ink); text-decoration: none; }
@@ -363,6 +375,57 @@ input[type=checkbox]:checked::after { content: ''; width: 9px; height: 5px; bord
 .stage-head[aria-expanded=true] .icon { transform: rotate(90deg); }
 .stage-head:hover strong { color: var(--accent-ink); }
 .route-phase { margin-bottom: var(--s5); scroll-margin-top: calc(var(--top-h) + var(--s4)); }
+/* Stage screen: course head and stage tabs on the left, this stage's cards beside them from the top. */
+.overview.stage-view { grid-template-columns: minmax(0, 1fr) 290px; gap: 28px; }
+.course-head { display: grid; grid-template-columns: minmax(0, 1fr) auto; column-gap: var(--s6); align-items: start; }
+.course-head .back-map { grid-column: 1 / -1; justify-self: start; margin-bottom: var(--s2); }
+.course-head h1 { min-width: 0; margin: 0; font-size: 28px; line-height: 1.15; }
+.course-head .menu { margin-top: 2px; }
+.course-head .goal { grid-column: 1; max-width: 78ch; margin: var(--s3) 0 var(--s4); font-size: var(--t-md); color: var(--ink-2); }
+.stage-view .progress-line { margin-bottom: 0; }
+.stage-nav { display: flex; gap: 2px; padding: 2px; margin-top: var(--s6); border: 1px solid var(--line); border-radius: var(--r-btn); background: var(--bg-subtle); width: max-content; max-width: 100%; overflow-x: auto; }
+.stage-nav button { position: relative; flex: none; display: inline-flex; align-items: center; gap: 7px; height: 22px; padding: 0 var(--s3); border: 0; border-radius: 9px; line-height: 16px; background: none; font-size: var(--t-sm); font-weight: 500; color: var(--ink-2); white-space: nowrap; transition: background-color var(--motion-fast), color var(--motion-fast); }
+.stage-nav button:hover { color: var(--ink); }
+.stage-nav button i { width: 8px; height: 8px; flex: none; border-radius: 50%; border: 1.5px solid var(--field-line); }
+.stage-nav button i.on { border-color: var(--accent); background: var(--accent); }
+.stage-nav button i.done { border-color: var(--success); background: var(--success); }
+.stage-nav button span { max-width: 320px; overflow: hidden; text-overflow: ellipsis; }
+/* Same size selected or not; the edge is a real border so forced colors keep it (they drop shadows and backgrounds). */
+.stage-nav button[aria-selected="true"] { background: var(--surface); color: var(--ink); box-shadow: 0 1px 2px rgba(20, 20, 30, .1); }
+.stage-nav button[aria-selected="true"]::after { content: ""; position: absolute; inset: 0; border: 1px solid var(--line); border-radius: inherit; pointer-events: none; }
+@media (forced-colors: active) { .stage-nav button[aria-selected="true"]::after { border-width: 2px; border-color: Highlight; } }
+.sg-head { margin-top: 22px; }
+.sg-head .kicker { margin: 0; }
+.sg-head h2 { margin: 2px 0 0; font: 650 24px/1.2 var(--display); letter-spacing: -.02em; }
+.sg-head p { margin: var(--s1) 0 0; max-width: 70ch; color: var(--ink-2); }
+.stage-view .next-card { flex-direction: row; align-items: center; margin: var(--s6) 0 var(--s5); }
+.stage-view .next-card .grow { min-width: 0; }
+.stage-view .next-card span.btn { cursor: default; }
+.stage-view .celebrate { margin: var(--s6) 0 var(--s5); }
+.stage-view .route-phase { border-top: 1px solid var(--line); margin: 0; }
+.stage-view .route-phase > .phase-flag { list-style: none; justify-content: flex-start; align-items: center; padding: var(--s5) 0 var(--s3); margin: 0; }
+.stage-view .route-phase > .phase-flag::-webkit-details-marker { display: none; }
+.stage-view .phase-flag h3 { flex: 1; min-width: 0; }
+.stage-view .phase-flag .icon { color: var(--muted); transition: transform var(--motion-fast) var(--motion-ease); }
+.stage-view .route-phase[open] > .phase-flag .icon { transform: rotate(90deg); }
+.stage-view .route-phase[open] { padding-bottom: var(--s4); }
+.stage-view .route-board { margin-bottom: var(--s6); }
+.sv-side { display: grid; gap: var(--s5); align-content: start; min-height: 0; overflow-y: auto; padding-bottom: var(--s6); }
+.side-card { padding: 14px var(--s6); border: 1px solid var(--line); border-radius: var(--r-lg); background: var(--surface); }
+.side-card > .kicker, .side-card-head .kicker { margin: 0 0 var(--s2); }
+.side-card p { margin: 0; }
+.side-card-head { display: flex; justify-content: space-between; align-items: baseline; gap: var(--s3); }
+.goal-card { display: flex; align-items: center; gap: 14px; }
+.goal-card strong { display: block; font: 650 22px/1.1 var(--display); }
+.ms-title { display: block; font-weight: 550; color: var(--ink); line-height: 1.4; }
+.ms-row { display: flex; align-items: center; gap: var(--s3); margin-top: var(--s4); }
+.ms-row .bar { flex: 1; }
+.exam-card .exam-row { border: 0; padding: 0; margin: 0; }
+.mist { list-style: none; margin: 0; padding: 0; }
+.mist li { display: flex; align-items: baseline; gap: var(--s3); padding: var(--s2) 0; border-top: 1px solid var(--line); font-size: var(--t-sm); }
+.mist li:first-child { border-top: 0; }
+.mist li a { flex: 1; min-width: 0; color: var(--ink); overflow: hidden; display: -webkit-box; -webkit-line-clamp: 2; line-clamp: 2; -webkit-box-orient: vertical; }
+@media (max-width: 1000px) { .overview.stage-view { grid-template-columns: minmax(0, 1fr); height: auto; } .stage-view .sv-main, .sv-side { overflow: visible; } }
 .stage-head { scroll-margin-top: calc(var(--top-h) + var(--s4)); }
 .phase-flag { display: flex; align-items: baseline; justify-content: space-between; gap: var(--s3); margin-bottom: var(--s2); }
 .phase-flag h3 { font-size: var(--t-md); font-weight: 600; margin: 0; }
@@ -386,8 +449,8 @@ input[type=checkbox]:checked::after { content: ''; width: 9px; height: 5px; bord
 .lesson-action-row.next { background: var(--accent-soft); }
 .lesson-action-row > .lesson-row { flex: 1; min-width: 0; }
 .lesson-action-row > .menu { z-index: 2; }
-.lesson-action-row > .menu[open] { z-index: 8; }
-.lesson-action-row > .menu > summary { background: transparent; border-color: transparent; }
+.lesson-action-row > .menu.open { z-index: 8; }
+.lesson-action-row > .menu > .menu-trigger { background: transparent; border-color: transparent; }
 .lesson-row { display: flex; align-items: center; gap: var(--s3); padding: 8px var(--s4); color: var(--ink); min-height: 42px; }
 .lesson-row:hover { text-decoration: none; }
 .lesson-row .state { color: var(--muted); }
@@ -492,7 +555,9 @@ main:has(.lesson-layout .support:not([hidden])) { padding-right: calc(var(--side
 .chat-log { position: relative; flex: 1; min-height: 0; display: flex; }
 .log { flex: 1; min-width: 0; min-height: 0; overflow-y: auto; display: flex; flex-direction: column; gap: var(--s3); padding: 2px 4px var(--s2) 2px; font-size: var(--t-sm); overflow-anchor: none; }
 .log > * { flex: none; }
-.tutor-toolbar { display: flex; justify-content: flex-end; margin: -4px 0 var(--s2); }
+/* One row: milestone studio on the left, New chat on the right. */
+.tutor-toolbar { display: flex; align-items: center; gap: var(--s2); margin: 0 0 var(--s2); }
+.tutor-toolbar > :first-child { flex: 1; min-width: 0; }
 .tutor-starters { margin-top: var(--s5); }
 .tutor-starters > button { width: 100%; display: flex; flex-direction: column; align-items: flex-start; gap: 2px; padding: var(--s3) 2px; border: 0; border-bottom: 1px solid var(--line); background: none; text-align: left; }
 .tutor-starters strong { font-size: var(--t-sm); font-weight: 550; }
@@ -536,8 +601,12 @@ main:has(.lesson-layout .support:not([hidden])) { padding-right: calc(var(--side
 #compose textarea { font-size: var(--t-sm); resize: none; border: 0; padding: 2px 4px; background: none; }
 #compose textarea:focus-visible { outline: none; }
 #compose .btn { align-self: flex-end; }
-.notes-pane textarea { flex: 1; font-size: var(--t-sm); resize: none; background: var(--surface); }
-.notes-pane .small { margin: var(--s2) 0 0; font-size: var(--t-xs); }
+.notes-pane textarea { flex: 1; padding: var(--s4) var(--s5); font-size: var(--t-sm); line-height: 1.6; resize: none; background: var(--surface); border-radius: var(--r-lg); }
+.notes-pane .err { margin: var(--s2) 0 0; }
+.notes-foot { display: grid; gap: var(--s1); margin-top: var(--s3); }
+.notes-foot .small { margin: 0; font-size: var(--t-xs); }
+.notes-links { display: flex; flex-wrap: wrap; gap: var(--s1) var(--s6); }
+.notes-links .link { font-size: var(--t-sm); }
 .composer-wrap { flex: none; }
 
 /* Videos. */
@@ -875,15 +944,7 @@ details > .answer-why { margin: var(--s2) 0 0 calc(20px + var(--s3)); }
 .mistake-link { display: inline-flex; align-items: center; gap: 4px; padding: 4px 0; font-size: var(--t-sm); font-weight: 550; white-space: nowrap; }
 
 /* ---------- Ideas panel ---------- */
-.ideas { position: fixed; top: calc(var(--top-h) + var(--s2)); right: var(--s3); bottom: var(--s3); width: min(380px, calc(100vw - 24px)); z-index: 30; overflow: auto; padding: var(--s4); background: var(--surface); border: 1px solid var(--line); border-radius: var(--r-lg); box-shadow: var(--overlay-shadow); }
-.ideas-head { display: flex; align-items: flex-start; gap: var(--s2); margin-bottom: var(--s4); }
-.ideas-head h2 { font-size: var(--t-lg); margin: 0; }
-.ideas-head .small { margin: 0; font-size: var(--t-xs); }
-.stickies { display: grid; border-top: 1px solid var(--line); }
-.sticky { display: grid; grid-template-columns: minmax(0, 1fr) auto; align-items: start; gap: var(--s3); padding: var(--s3) 0; }
-.sticky textarea { font-size: var(--t-sm); border-color: transparent; resize: none; }
-.sticky textarea:hover { border-color: var(--field-line); }
-.sticky .link { margin-top: 4px; font-size: var(--t-xs); }
+#ideas-open { anchor-name: --ideas-button; }
 
 /* ---------- Responsive ---------- */
 @media (max-width: 1180px) {
@@ -914,7 +975,6 @@ details > .answer-why { margin: var(--s2) 0 0 calc(20px + var(--s3)); }
 .composer-actions .select-trigger { width: auto; min-width: 0; max-width: 240px; flex: 0 1 auto; font-size: var(--t-xs); cursor: pointer; }
 .notes-pane .waiting { margin-bottom: var(--s2); padding: var(--s3); }
 #compose .send { width: 28px; height: 28px; min-height: 28px; padding: 0; border-radius: 50%; flex: none; }
-.notes-pane > .row { margin-bottom: var(--s2); }
 .overview { max-width: 1440px; }
 .settings-layout > div:last-child { max-width: 900px; }
 .goal { max-width: var(--content); }
@@ -964,8 +1024,8 @@ button:active:not(:disabled), .btn:active { transform: scale(.97); }
 .screen-enter, main > :not(.lesson-layout), .lesson-article, .side-pane:not([hidden]), .message-enter, .msg, .route-phase:not([hidden]), #revise:not([hidden]), .feedback, .score { animation: arrive var(--motion-enter) var(--motion-ease) backwards; }
 .lesson-content, .step-forward { animation: step-forward var(--motion-enter) var(--motion-ease) backwards; }
 .step-back { animation: step-back var(--motion-enter) var(--motion-ease) backwards; }
-.popover-enter, .menu[open] .menu-list { transform-origin: top right; animation: unfold var(--motion-fast) var(--motion-ease) backwards; }
-.switch-menu:not([hidden]) { transform-origin: top left; animation: unfold var(--motion-fast) var(--motion-ease) backwards; }
+/* Dropdown menus animate with the drop transition (lib/motion.ts). Opened sections ease their content in; closing is instant because WebKitGTK cannot keep <details> content painted while it closes. */
+details[open] > :not(summary) { animation: arrive var(--motion-enter) var(--motion-ease) backwards; }
 #completed:not([hidden]), .celebrate { animation: unfold var(--motion-enter) var(--motion-ease) backwards; }
 #toast:not([hidden]) { animation: toast-arrive var(--motion-enter) var(--motion-ease) backwards; }
 .bar i { transform-origin: left; transition: transform var(--motion-slow) var(--motion-ease); animation: fill-progress var(--motion-slow) var(--motion-ease) backwards; }

@@ -2,7 +2,7 @@
   import Skeleton from './Skeleton.svelte';
   let { kind = 'text', rows = 3 }: { kind?: string; rows?: number } = $props();
 </script>
-<div class={`skeleton skeleton-${kind}`} aria-busy="true" role="status">
+<div class={`skeleton skeleton-${kind}`} role="status">
   <span class="sr">Loading</span>
   <div class="skeleton-shape" aria-hidden="true">
     {#if kind === 'home'}

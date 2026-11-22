@@ -18,3 +18,11 @@ export const CHIPS=['Give me a hint','Quiz me','Explain a concept','Review my wo
 export const clock = (t: number) => Math.floor(t / 60) + ":" + String(t % 60).padStart(2, "0");
 export const LANGUAGES: Record<string, string> = {python:'Python',javascript:'JavaScript',bash:'Bash',ruby:'Ruby',php:'PHP',lua:'Lua',perl:'Perl',r:'R',c:'C',cpp:'C++',rust:'Rust',go:'Go',java:'Java'};
 export const languageName = (lang: string) => LANGUAGES[lang] || lang;
+/** Splits `text` into parts, marking each word of the search `q` it contains, so a page can show matches without HTML. */
+export function marks(text: string, q: string) {
+  const words = q.toLowerCase().split(/\s+/).filter(Boolean).sort((a, b) => b.length - a.length).map(w => w.replace(/[.*+?^${}()|[\]\\]/g, '\\$&'));
+  if (!words.length) return [{ t: text, m: false }];
+  return text.split(new RegExp(`(${words.join('|')})`, 'gi')).filter(Boolean).map(t => ({ t, m: words.some(w => new RegExp(`^${w}$`, 'i').test(t)) }));
+}
+/** Search result kinds in the order and words the results are grouped under. */
+export const SEARCH_GROUPS: [string, string][] = [['lesson', 'Lessons'], ['chat', 'Tutor chats'], ['note', 'Notes'], ['idea', 'Ideas']];
