@@ -1,7 +1,11 @@
 name: Signed release
+# Runs when CI passes on a push to master (a merged PR) and publishes the
+# version in tauri.conf.json to MDHaarith/RoadMap-releases, once per version.
 on:
-  push:
-    tags: ['v*.*.*']
+  workflow_run:
+    workflows: [CI]
+    types: [completed]
+    branches: [master]
   workflow_dispatch:
 permissions:
   contents: read
@@ -9,7 +13,32 @@ concurrency:
   group: release
   cancel-in-progress: false
 jobs:
+  check:
+    if: github.event_name == 'workflow_dispatch' || (github.event.workflow_run.conclusion == 'success' && github.event.workflow_run.event == 'push')
+    runs-on: ubuntu-22.04
+    outputs:
+      version: ${{ steps.version.outputs.version }}
+      release: ${{ steps.version.outputs.release }}
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          ref: ${{ github.event.workflow_run.head_sha || github.sha }}
+      - run: python3 scripts/release-check.py
+      - id: version
+        env:
+          GH_TOKEN: ${{ secrets.RELEASES_TOKEN }}
+        run: |
+          version=$(python3 -c "import json; print(json.load(open('tauri.conf.json'))['version'])")
+          echo "version=$version" >> "$GITHUB_OUTPUT"
+          if gh release view "v$version" --repo MDHaarith/RoadMap-releases > /dev/null 2>&1; then
+            echo "v$version is already released; bump the version to release again."
+            echo "release=false" >> "$GITHUB_OUTPUT"
+          else
+            echo "release=true" >> "$GITHUB_OUTPUT"
+          fi
   build:
+    needs: check
+    if: needs.check.outputs.release == 'true'
     strategy:
       fail-fast: false
       matrix:
@@ -20,24 +49,9 @@ jobs:
             bundles: appimage,deb,rpm
     runs-on: ${{ matrix.os }}
     steps:
-      - name: Validate release tag against source versions
-        env:
-          GH_TOKEN: ${{ github.token }}
-        shell: bash
-        run: |
-          [[ "$GITHUB_REF" == refs/tags/v* ]] || { echo 'Select a version tag to release'; exit 1; }
-          gh api "repos/$GITHUB_REPOSITORY/contents/tauri.conf.json?ref=$GITHUB_SHA" --jq .content | base64 --decode > "$RUNNER_TEMP/tauri-version.json"
-          gh api "repos/$GITHUB_REPOSITORY/contents/Cargo.toml?ref=$GITHUB_SHA" --jq .content | base64 --decode > "$RUNNER_TEMP/cargo-version.toml"
-          python - <<'PYTHON'
-          import json, os, pathlib, re
-          root = pathlib.Path(os.environ['RUNNER_TEMP'])
-          tauri = json.loads((root / 'tauri-version.json').read_text())['version']
-          cargo = re.search(r'^version = "([^"]+)"', (root / 'cargo-version.toml').read_text(), re.M)[1]
-          assert os.environ['GITHUB_REF_NAME'] == 'v' + tauri == 'v' + cargo, f'Tag must match Cargo and Tauri versions ({cargo}, {tauri})'
-          PYTHON
       - uses: actions/checkout@v4
-      - name: Validate all versions
-        run: python scripts/release-check.py
+        with:
+          ref: ${{ github.event.workflow_run.head_sha || github.sha }}
       - uses: actions/setup-node@v4
         with:
           node-version: '24'
@@ -55,7 +69,7 @@ jobs:
           TAURI_SIGNING_PRIVATE_KEY: ${{ secrets.TAURI_SIGNING_PRIVATE_KEY }}
           TAURI_SIGNING_PRIVATE_KEY_PASSWORD: ${{ secrets.TAURI_SIGNING_PRIVATE_KEY_PASSWORD }}
         with:
-          tauriScript: npm --prefix ui run tauri --
+          tauriScript: node ui/node_modules/@tauri-apps/cli/tauri.js
           args: --config tauri.release.conf.json --bundles ${{ matrix.bundles }} -- --locked
       - uses: actions/upload-artifact@v4
         with:
@@ -68,26 +82,12 @@ jobs:
             target/release/bundle/**/*.sig
           if-no-files-found: error
   publish:
-    needs: build
+    needs: [check, build]
     runs-on: ubuntu-22.04
     steps:
-      - name: Validate release tag against source versions
-        env:
-          GH_TOKEN: ${{ github.token }}
-        shell: bash
-        run: |
-          [[ "$GITHUB_REF" == refs/tags/v* ]] || { echo 'Select a version tag to release'; exit 1; }
-          gh api "repos/$GITHUB_REPOSITORY/contents/tauri.conf.json?ref=$GITHUB_SHA" --jq .content | base64 --decode > "$RUNNER_TEMP/tauri-version.json"
-          gh api "repos/$GITHUB_REPOSITORY/contents/Cargo.toml?ref=$GITHUB_SHA" --jq .content | base64 --decode > "$RUNNER_TEMP/cargo-version.toml"
-          python - <<'PYTHON'
-          import json, os, pathlib, re
-          root = pathlib.Path(os.environ['RUNNER_TEMP'])
-          tauri = json.loads((root / 'tauri-version.json').read_text())['version']
-          cargo = re.search(r'^version = "([^"]+)"', (root / 'cargo-version.toml').read_text(), re.M)[1]
-          assert os.environ['GITHUB_REF_NAME'] == 'v' + tauri == 'v' + cargo, f'Tag must match Cargo and Tauri versions ({cargo}, {tauri})'
-          PYTHON
       - uses: actions/checkout@v4
-      - run: python3 scripts/release-check.py
+        with:
+          ref: ${{ github.event.workflow_run.head_sha || github.sha }}
       - uses: actions/download-artifact@v4
         with:
           pattern: signed-*
@@ -96,8 +96,9 @@ jobs:
       - name: Publish complete release
         env:
           GH_TOKEN: ${{ secrets.RELEASES_TOKEN }}
+          TAG: v${{ needs.check.outputs.version }}
         run: |
-          gh release create "$GITHUB_REF_NAME" --repo MDHaarith/RoadMap-releases --target main --draft --title "Roadmap $GITHUB_REF_NAME" --notes "Download the installer for your system."
-          find artifacts -type f -print0 | xargs -0 gh release upload "$GITHUB_REF_NAME" --repo MDHaarith/RoadMap-releases
-          gh release upload "$GITHUB_REF_NAME" latest.json --repo MDHaarith/RoadMap-releases
-          gh release edit "$GITHUB_REF_NAME" --repo MDHaarith/RoadMap-releases --draft=false --latest
+          gh release create "$TAG" --repo MDHaarith/RoadMap-releases --target main --draft --title "Roadmap $TAG" --notes "Download the installer for your system."
+          find artifacts -type f -print0 | xargs -0 gh release upload "$TAG" --repo MDHaarith/RoadMap-releases
+          gh release upload "$TAG" latest.json --repo MDHaarith/RoadMap-releases
+          gh release edit "$TAG" --repo MDHaarith/RoadMap-releases --draft=false --latest

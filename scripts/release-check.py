@@ -11,6 +11,6 @@ assert lock == cargo, f'Cargo.lock version {lock} differs from {cargo}'
 ui_lock = json.loads((root / 'ui/package-lock.json').read_text())
 assert ui_lock['version'] == ui_lock['packages']['']['version'] == cargo, 'Update UI lockfile root versions'
 tag = os.environ.get('GITHUB_REF_NAME')
-if tag:
+if tag and tag.startswith('v'):
     assert tag == 'v' + cargo, f'Release must run on tag v{cargo}, got {tag}'
 print('Release versions match: ' + cargo)
