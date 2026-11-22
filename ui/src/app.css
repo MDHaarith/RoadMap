@@ -158,7 +158,7 @@ input[type=checkbox]:checked::after { content: ''; width: 9px; height: 5px; bord
 
 /* Option chips (quick picks, examples). */
 .examples, .chips { display: flex; flex-wrap: wrap; gap: var(--s2); margin-top: var(--s3); }
-.examples button, .chip { border: 1px solid var(--line); background: var(--surface); border-radius: var(--r-btn-sm); padding: 5px var(--s3); font-size: var(--t-sm); color: var(--ink-2); display: inline-flex; align-items: center; gap: 6px; }
+.examples button, .chip { border: 1px solid var(--line); background: var(--surface); border-radius: var(--r-btn-sm); padding: 3px var(--s3); line-height: 16px; font-size: var(--t-sm); color: var(--ink-2); display: inline-flex; align-items: center; gap: 6px; }
 .examples button:hover, .chip:hover { border-color: var(--line-strong); background: var(--hover); color: var(--ink); }
 
 /* ---------- Surfaces ---------- */
@@ -383,13 +383,13 @@ mark { background: #fff1a8; color: inherit; border-radius: 3px; padding: 0 1px; 
 .course-head .menu { margin-top: 2px; }
 .course-head .goal { grid-column: 1; max-width: 78ch; margin: var(--s3) 0 var(--s4); font-size: var(--t-md); color: var(--ink-2); }
 .stage-view .progress-line { margin-bottom: 0; }
-.stage-nav { display: flex; gap: 2px; padding: 2px; margin-top: var(--s6); border: 1px solid var(--line); border-radius: var(--r-lg); background: var(--bg-subtle); width: max-content; max-width: 100%; overflow-x: auto; }
-.stage-nav button { position: relative; flex: none; display: inline-flex; align-items: center; gap: 7px; height: 28px; padding: 0 11px; border: 0; border-radius: var(--r); background: none; font-size: var(--t-sm); font-weight: 500; color: var(--ink-2); white-space: nowrap; transition: background-color var(--motion-fast), color var(--motion-fast); }
+.stage-nav { display: flex; gap: 2px; padding: 2px; margin-top: var(--s6); border: 1px solid var(--line); border-radius: var(--r-btn); background: var(--bg-subtle); width: max-content; max-width: 100%; overflow-x: auto; }
+.stage-nav button { position: relative; flex: none; display: inline-flex; align-items: center; gap: 7px; height: 22px; padding: 0 var(--s3); border: 0; border-radius: 9px; line-height: 16px; background: none; font-size: var(--t-sm); font-weight: 500; color: var(--ink-2); white-space: nowrap; transition: background-color var(--motion-fast), color var(--motion-fast); }
 .stage-nav button:hover { color: var(--ink); }
 .stage-nav button i { width: 8px; height: 8px; flex: none; border-radius: 50%; border: 1.5px solid var(--field-line); }
 .stage-nav button i.on { border-color: var(--accent); background: var(--accent); }
 .stage-nav button i.done { border-color: var(--success); background: var(--success); }
-.stage-nav button span { max-width: 230px; overflow: hidden; text-overflow: ellipsis; }
+.stage-nav button span { max-width: 320px; overflow: hidden; text-overflow: ellipsis; }
 /* Same size selected or not; the edge is a real border so forced colors keep it (they drop shadows and backgrounds). */
 .stage-nav button[aria-selected="true"] { background: var(--surface); color: var(--ink); box-shadow: 0 1px 2px rgba(20, 20, 30, .1); }
 .stage-nav button[aria-selected="true"]::after { content: ""; position: absolute; inset: 0; border: 1px solid var(--line); border-radius: inherit; pointer-events: none; }

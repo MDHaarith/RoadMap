@@ -18,7 +18,14 @@
   let { empty = false }: { empty?: boolean } = $props();
   let kind = $state('build'), folder = $state(''), prompt = $state(''), level = $state('Complete beginner: has never studied or done this'), size = $state('');
   let effort = $state(defaultEffort());
-  let blueprint = $state<Blueprint>(), baseline = $state('');
+  let blueprint = $state<Blueprint>(), baseline = $state(''), editingPlan = $state(false);
+  // The blueprint is plain text from the AI; show it as tidy lines, without markdown or list markers.
+  const tidy = (t: string) => t.replace(/`/g, '').trim();
+  function lines(t: string, sentences = false) {
+    let xs = t.split('\n').map(x => tidy(x.replace(/^\s*([-*•]|\d+[.)])\s*/, ''))).filter(Boolean);
+    if (sentences && xs.length === 1) xs = xs[0].split(/(?<=[.!?])\s+(?=[A-Z])/);
+    return xs;
+  }
   let picking = $state(false), building = $state(false), waiting = $state(false), designing = $state(false);
   let error = $state('');
   // The whole placement check arrives at once; picked[i] is the answer to qs[i], extra is an optional note.
@@ -65,10 +72,14 @@
     try { return await run(w.key); } finally { w.stop(); thought = ''; }
   }
   const what = () => ({ prompt, ...(kind === 'project' ? { folder } : {}) });
+  // Each step of making a roadmap slides in from the side it comes from.
+  // shortcut: CSS slide, not view transitions: startViewTransition crashes the WebKitGTK 2.54 web process; revisit when it is fixed.
+  let flow = $state('step-forward');
+  function go(update: () => void, dir: 'forward' | 'backward') { flow = dir === 'forward' ? 'step-forward' : 'step-back'; update(); }
   function create() {
     if (building) return;
     if (kind === 'project' && !folder) { toast('Choose a project folder first.'); document.getElementById('pick-folder')?.focus(); return; }
-    building = true; qs = []; picked = []; extra = ''; error = '';
+    go(() => { building = true; qs = []; picked = []; extra = ''; error = ''; }, 'forward');
     void ask();
   }
   // Asks for every placement question in one go; with none, the blueprint is drafted straight away.
@@ -88,7 +99,7 @@
     waiting = true; drafting = true; error = ''; failed = '';
     try {
       const plan = await thinkingOn(w => api<Blueprint>('POST', 'api/blueprint', { ...what(), level, size, effort, thinking: w, answers: answers() }));
-      if (live()) { blueprint = plan; baseline = ''; building = false; }
+      if (live()) go(() => { blueprint = plan; baseline = ''; editingPlan = false; building = false; }, 'forward');
     } catch (err) { if (live()) { error = message(err); failed = 'blueprint'; } }
     finally { if (live()) { waiting = false; drafting = false; } }
   }
@@ -111,10 +122,10 @@
     steps.push({ text: 'Check milestones and open your roadmap', state: 'next' }, { text: 'Find videos for every lesson, in the background', state: 'next' });
     return steps;
   });
-  function editGoal() { seq++; building = false; waiting = false; drafting = false; error = ''; void tick().then(() => promptEl?.focus()); }
+  function editGoal() { seq++; go(() => { blueprint = undefined; building = false; waiting = false; drafting = false; error = ''; }, 'backward'); void tick().then(() => promptEl?.focus()); }
   async function approve() {
     if (!blueprint || building) return;
-    building = true; designing = true; error = ''; draft = undefined;
+    go(() => { building = true; designing = true; error = ''; draft = undefined; }, 'forward');
     try {
       const c = await thinkingOn(w => api<Course>('POST','api/courses',{prompt,folder:kind === 'project' ? folder : '',level,size,effort,thinking:w,answers:answers(),blueprint:$state.snapshot(blueprint),baseline}));
       if (alive) goCourse(c);
@@ -123,12 +134,12 @@
   }
 </script>
 
-<div class="wrap narrow create screen-enter" class:designing class:placing={building && !designing}>
+<div class="wrap narrow create screen-enter" class:designing class:placing={!designing && (building || !!blueprint)}>
   {#if !empty}<a class="back-map" id="cancel-new" href="#/" onclick={() => appState.screen = 'library'}><Icon name="back" /> Your library</a>{:else if !building && !blueprint}<div class="create-empty-route"><Icon name="empty-route" /></div>{/if}
   <div class="page-head create-head" hidden={building || !!blueprint}><h1>{empty ? 'What do you want to learn?' : 'New roadmap'}</h1></div>
   <AiSetup why="Add one in Settings to build a roadmap." />
   <form id="new" onsubmit={e => { e.preventDefault(); if (blueprint) void approve(); else void create(); }}>
-    <div class="form-col" hidden={building || !!blueprint}>
+    <div class="form-col {flow}" hidden={building || !!blueprint}>
       <fieldset class="segmented kind-choice"><legend class="sr">What kind of roadmap?</legend><label><input type="radio" name="kind" value="build" bind:group={kind} />Learn or build something new</label><label><input type="radio" name="kind" value="project" bind:group={kind} />Understand a project I have</label></fieldset>
       <div id="project-fields" hidden={kind !== 'project'}>
         <div class="folder-row"><button class="btn secondary" type="button" id="pick-folder" disabled={picking} onclick={pickFolder}><BusyLabel busy={picking} idle={folder ? 'Choose another folder' : 'Choose the project folder'} label="Choosing folder…" /></button><p class="folder-path" id="folder-path" role="status">{folder || 'No folder selected.'}</p></div>
@@ -142,13 +153,21 @@
       <div class="create-pickers"><span class="create-model"><label class="small" for="create-model">AI model</label><ModelPicker id="create-model" /></span>{#if appState.config.base === 'codex'}<span class="create-model"><label class="small" for="create-effort">Thinking</label><EffortPicker id="create-effort" bind:value={effort} /></span>{/if}</div>
       <div class="create-go"><button class="btn big" id="build-roadmap" disabled={noService}>{error ? 'Try again' : 'Build my roadmap'} <Icon name="arrow" /></button>{#if error}<p class="create-error" role="alert"><strong>The roadmap could not be built.</strong> {error} If it keeps failing, check the AI service in <a href="#/settings">Settings</a>.</p>{:else}<span class="small">Next: a few quick questions about what you already know.</span>{/if}</div>
     </div>
-    {#if blueprint && !building}<section class="form-col" aria-label="Edit course blueprint">
-      <h2>Your course blueprint</h2>
-      <BlueprintFields plan={blueprint} />
-      <label for="baseline">Optional starting task</label><p>{blueprint.diagnostic}</p><textarea id="baseline" maxlength="2000" rows="3" bind:value={baseline} placeholder="Try it here or leave this blank."></textarea>
-      {#if error}<p role="alert" class="err">{error}</p>{/if}
-      <div class="row"><button class="btn">Approve and build course</button><button class="btn secondary" type="button" onclick={() => { blueprint = undefined; error = ''; }}>Change goal</button></div>
-    </section>{/if}
+    {#if blueprint && !building}<div class="pc {flow}">
+      {@render goalCard()}
+      <section class="pc-form bp" aria-labelledby="bp-title">
+        <div class="pc-head"><p class="kicker">Your course blueprint</p><h1 id="bp-title">Check the plan before we build</h1><p class="small">The whole course works toward this. Change anything that does not fit you.</p></div>
+        {#if editingPlan}<div class="bp-edit"><BlueprintFields plan={blueprint} /></div>
+        {:else}
+        <div class="bp-sec" style:--i={0}><p class="kicker">Final challenge</p><p class="bp-challenge">{tidy(blueprint.challenge)}</p></div>
+        <div class="bp-sec" style:--i={1}><p class="kicker">You are done when</p><ul class="bp-checks">{#each lines(blueprint.criteria, true) as x, j}<li style:--j={j}><Icon name="check" />{x}</li>{/each}</ul></div>
+        <div class="bp-sec" style:--i={2}><p class="kicker">Milestones</p><ol class="bp-steps">{#each lines(blueprint.milestones) as x, i}<li style:--j={i}><span class="n">{i + 1}</span><span>{x}</span></li>{/each}</ol></div>
+        {/if}
+        {#if blueprint.diagnostic}<details class="bp-try disclosure" style:--i={3}><summary>Optional: try a 5-minute starting task</summary><p>{tidy(blueprint.diagnostic)}</p><textarea id="baseline" aria-label="Your attempt" maxlength="2000" rows="3" bind:value={baseline} placeholder="Try it here or leave this blank."></textarea></details>{/if}
+        {#if error}<p role="alert" class="err">{error}</p>{/if}
+        <div class="pc-foot"><button class="btn secondary" type="button" onclick={() => editingPlan = !editingPlan}>{editingPlan ? 'Done editing' : 'Edit plan'}</button><span class="grow"></span><button class="btn secondary" type="button" onclick={() => go(() => { blueprint = undefined; editingPlan = false; error = ''; building = true; }, 'backward')}>Back</button><button class="btn">Approve and build course <Icon name="arrow" /></button></div>
+      </section>
+    </div>{/if}
     <div id="building" hidden={!building} class={designing ? 'designing' : 'placement'}>
       {#if designing}<div class="mk">
         <div class="mk-main">
@@ -165,24 +184,26 @@
         </div>
         <aside class="mk-log" aria-label="What the AI is doing"><p class="kicker">What the AI is doing</p><ol>{#each log as x}<li class={x.state}><i aria-hidden="true">{#if x.state === 'done'}<Icon name="check" />{:else if x.state === 'now'}<span class="spin"></span>{/if}</i><span>{x.text}</span></li>{/each}</ol></aside>
       </div>
-      {:else}<div class="pc">
-        <aside class="pc-goal"><p class="kicker">Your goal</p><p class="pc-quote">{prompt.trim() || (kind === 'project' ? 'Understand this project so I can change it.' : '')}</p>{#if kind === 'project' && folder}<p class="small pc-folder">{folder}</p>{/if}<dl><dt>Starting</dt><dd>{levelName()}</dd><dt>Length</dt><dd>{sized[2]}</dd></dl><button class="link" type="button" id="edit-goal" onclick={editGoal}>Edit goal</button></aside>
+      {:else}<div class="pc {flow}">
+        {@render goalCard()}
         <div class="pc-form">
           <div class="pc-head"><p class="kicker">Before we build</p><h1 id="pc-title" tabindex="-1">What can you already do?</h1><p class="small">{qs.length ? `${qs.length} quick questions.` : 'A few quick questions.'} Your answers set where the course starts.</p></div>
           {#if waiting}<div class="q"><span class="n">{drafting ? '✓' : 1}</span><div class="pc-wait"><Waiting skeleton="question" inline title={drafting ? 'Drafting your course blueprint' : 'Preparing your questions'} hint="this usually takes 10 to 20 seconds" {thought} /></div></div>
           {:else if failed}<div class="q"><span class="n">!</span><div class="err pc-err" role="alert"><p>{failed === 'blueprint' ? 'The blueprint could not be drafted.' : 'The questions could not be prepared.'} {error}</p><button class="btn secondary sm" type="button" onclick={() => failed === 'blueprint' ? toBlueprint() : ask()}>Try again</button></div></div>
-          {:else}{#each qs as x, i}<fieldset class="q" class:answered={!!picked[i]}><legend><span class="n">{i + 1}</span><span class="qt">{x.q}</span></legend><div class="opts">{#each x.options as o}<label class="opt"><input type="radio" name={`pq-${i}`} value={o} bind:group={picked[i]} />{o}</label>{/each}</div></fieldset>{/each}
-          {#if qs.length}<label class="pc-extra"><span>Anything else the course should know? <span class="small">Optional</span></span><input id="pa-own" maxlength="300" placeholder="For example: what you already have or have tried" bind:value={extra} onkeydown={e => { if (e.key === 'Enter') e.preventDefault(); }} /></label>{/if}{/if}
+          {:else}{#each qs as x, i}<fieldset class="q" class:answered={!!picked[i]} style:--i={i}><legend><span class="n">{i + 1}</span><span class="qt">{x.q}</span></legend><div class="opts">{#each x.options as o, j}<label class="opt" style:--j={j}><input type="radio" name={`pq-${i}`} value={o} bind:group={picked[i]} />{o}</label>{/each}</div></fieldset>{/each}
+          {#if qs.length}<label class="pc-extra" style:--i={qs.length}><span>Anything else the course should know? <span class="small">Optional</span></span><input id="pa-own" maxlength="300" placeholder="For example: what you already have or have tried" bind:value={extra} onkeydown={e => { if (e.key === 'Enter') e.preventDefault(); }} /></label>{/if}{/if}
           <div class="pc-foot"><span class="pc-meter"><Progress n={answered} total={qs.length || 4} wide={false} unit="questions answered" /><span class="small">{answered} of {qs.length || '…'} answered</span></span><button class="btn secondary" type="button" id="pa-back" disabled={waiting} onclick={editGoal}>Back</button><button class="btn" type="button" id="unplaced" disabled={waiting} onclick={() => void toBlueprint()}>{qs.length && answered === qs.length ? 'Continue to blueprint' : 'Skip to blueprint'} <Icon name="arrow" /></button></div>
         </div>
       </div>{/if}
     </div>
   </form>
 </div>
+{#snippet goalCard()}<aside class="pc-goal"><p class="kicker">Your goal</p><p class="pc-quote">{prompt.trim() || (kind === 'project' ? 'Understand this project so I can change it.' : '')}</p>{#if kind === 'project' && folder}<p class="small pc-folder">{folder}</p>{/if}<dl><dt>Starting</dt><dd>{levelName()}</dd><dt>Length</dt><dd>{sized[2]}</dd></dl><button class="link" type="button" id="edit-goal" onclick={editGoal}>Edit goal</button></aside>{/snippet}
 <style>
-  .wrap.narrow.create.placing { max-width: 1100px; }
+  /* The whole placement check fits one screen at 1366x768. */
+  .wrap.narrow.create.placing { max-width: 1100px; margin-top: var(--s5); }
   /* Placement check: the goal stays on the left; each question number lines up with its options. */
-  .pc { display: grid; grid-template-columns: 280px minmax(0, 1fr); gap: 36px; margin-top: var(--s4); }
+  .pc { display: grid; grid-template-columns: 280px minmax(0, 1fr); gap: 36px; margin-top: var(--s2); }
   /* The goal card runs the full height of the questions, as in the sample. */
   .pc-goal { display: grid; gap: var(--s4); align-content: start; padding: var(--s6); border-radius: var(--r-lg); background: var(--bg-subtle); }
   .pc-goal .kicker { margin: 0; }
@@ -194,25 +215,60 @@
   .pc-goal .link { justify-self: start; }
   .pc-head h1 { margin: 2px 0 var(--s1); font-size: 24px; }
   .pc-head .kicker { margin: 0; }
-  .q { display: grid; grid-template-columns: 22px minmax(0, 1fr); column-gap: var(--s5); row-gap: var(--s4); padding: var(--s6) 0; border-bottom: 1px solid var(--line); }
+  .q { display: grid; grid-template-columns: 22px minmax(0, 1fr); column-gap: var(--s5); row-gap: var(--s3); padding: var(--s5) 0; border-bottom: 1px solid var(--line); }
   .q legend { display: contents; }
   .n { grid-column: 1; width: 22px; height: 22px; border-radius: 50%; background: var(--ink); color: var(--on-accent); font-size: var(--t-xs); font-weight: 600; display: grid; place-items: center; }
   .q.answered .n { background: var(--accent); }
   .qt { grid-column: 2; align-self: center; font-weight: 600; font-size: var(--t-lg); line-height: 1.4; }
   .opts, .pc-wait, .pc-err { grid-column: 2; }
   .opts { display: flex; flex-wrap: wrap; gap: var(--s3); }
-  .opt { display: inline-flex; align-items: center; gap: var(--s3); min-height: 32px; padding: var(--s2) var(--s5) var(--s2) var(--s4); border: 1px solid var(--line-strong); border-radius: var(--r-btn-sm); background: var(--surface); color: var(--ink-2); font-size: var(--t-md); font-weight: 400; cursor: pointer; transition: border-color var(--motion-fast), background-color var(--motion-fast); }
+  .opt { margin: 0; display: inline-flex; align-items: center; gap: var(--s3); min-height: 32px; padding: var(--s2) var(--s5) var(--s2) var(--s4); border: 1px solid var(--line-strong); border-radius: var(--r-btn-sm); background: var(--surface); color: var(--ink-2); font-size: var(--t-md); font-weight: 400; cursor: pointer; transition: border-color var(--motion-fast), background-color var(--motion-fast); }
   .opt input { flex: none; width: 14px; height: 14px; margin: 0; accent-color: var(--accent); }
   .opt:hover { border-color: var(--accent); }
   .opt:has(:checked) { border-color: var(--accent); background: var(--accent-soft); color: var(--accent-ink); font-weight: 550; }
   .opt:has(:focus-visible) { outline: 2px solid var(--accent); outline-offset: 2px; }
-  .pc-extra { display: grid; gap: var(--s2); padding: var(--s6) 0; border-bottom: 1px solid var(--line); font-weight: 600; font-size: var(--t-md); }
+  .pc-extra { display: grid; grid-template-columns: auto minmax(0, 1fr); align-items: center; gap: var(--s5); margin: 0; padding: var(--s5) 0; border-bottom: 1px solid var(--line); font-weight: 600; font-size: var(--t-md); }
   .pc-extra .small { font-weight: 400; }
   .pc-err { display: grid; gap: var(--s3); justify-items: start; }
   .pc-err p { margin: 0; }
-  .pc-foot { display: flex; flex-wrap: wrap; align-items: center; gap: var(--s5); padding-top: var(--s6); }
+  .pc-foot { display: flex; flex-wrap: wrap; align-items: center; gap: var(--s5); padding-top: var(--s5); }
   .pc-meter { display: flex; align-items: center; gap: var(--s4); flex: 1; }
   .pc-meter :global(.bar) { width: 120px; }
+  .pc-foot .grow { flex: 1; }
+  /* Blueprint review: same frame as the questions, read first and edit on request. */
+  .bp-sec { padding: var(--s5) 0; border-bottom: 1px solid var(--line); }
+  .bp-sec .kicker { margin: 0 0 var(--s3); }
+  .bp-challenge { margin: 0; font: 600 var(--t-xl)/1.45 var(--display); }
+  .bp-checks, .bp-steps { list-style: none; margin: 0; padding: 0; display: grid; gap: var(--s3); }
+  .bp-checks li { display: flex; gap: var(--s3); align-items: baseline; font-size: var(--t-md); }
+  .bp-checks :global(svg) { flex: none; width: 14px; height: 14px; color: var(--success); transform: translateY(2px); }
+  .bp-steps li { display: grid; grid-template-columns: 22px minmax(0, 1fr); gap: var(--s5); align-items: start; font-size: var(--t-md); line-height: 1.45; }
+  .bp-steps .n { margin-top: -1px; }
+  .bp-steps li:last-child .n { background: var(--accent); }
+  .bp-edit { padding-top: var(--s3); }
+  .bp-try { padding: var(--s5) 0; border-bottom: 1px solid var(--line); }
+  .bp-try { margin: 0; }
+  .bp-try > summary { cursor: pointer; }
+  .bp-steps { position: relative; }
+  /* The milestones hang on one line, like the course route. */
+  .bp-steps::before { content: ""; position: absolute; left: 10.5px; top: 11px; bottom: 11px; width: 1px; background: var(--line-strong); transform-origin: top; }
+  .bp-steps .n { position: relative; }
+  @media (prefers-reduced-motion: no-preference) {
+    /* Questions and blueprint parts arrive one after another, then their answers and lines. */
+    :is(.q, .pc-extra, .bp-sec, .bp-try) { animation: arrive var(--motion-slow) var(--motion-ease) calc(var(--i, 0) * 70ms) backwards; }
+    .opt { animation: arrive var(--motion-slow) var(--motion-ease) calc(var(--i, 0) * 70ms + 120ms + var(--j, 0) * 35ms) backwards; }
+    .opt input:checked { animation: pick-dot 300ms var(--motion-mark-ease); }
+    .q.answered .n { animation: pick 300ms var(--motion-mark-ease); transition: background-color var(--motion-enter); }
+    .bp-challenge { animation: word-in 500ms var(--motion-ease) 60ms backwards; }
+    .bp-checks li { animation: arrive var(--motion-slow) var(--motion-ease) calc(180ms + var(--j, 0) * 60ms) backwards; }
+    .bp-checks :global(svg) { animation: stop-appear var(--motion-slow) var(--motion-mark-ease) calc(260ms + var(--j, 0) * 60ms) backwards; }
+    .bp-steps::before { animation: route-grow 700ms var(--motion-ease) 300ms backwards; }
+    .bp-steps .n { animation: stop-appear var(--motion-slow) var(--motion-mark-ease) calc(320ms + var(--j, 0) * 110ms) backwards; }
+    .bp-steps li > span:last-child { animation: arrive var(--motion-slow) var(--motion-ease) calc(360ms + var(--j, 0) * 110ms) backwards; }
+  }
+  @keyframes pick { 40% { transform: scale(1.12); } }
+  @keyframes pick-dot { 40% { transform: scale(1.4); } }
+  .bp-try p { margin: var(--s3) 0; }
 
   /* Roadmap making: the screen fills in as the AI writes the title, summary and each stage. */
   .mk { display: grid; grid-template-columns: minmax(0, 1fr) 300px; gap: 36px; align-items: start; }
@@ -252,5 +308,16 @@
   @media (prefers-reduced-motion: reduce) { .spin { animation-duration: 6s; } .arrive { animation: none; } }
   /* Forced colors paint every border one color, which hides the turning arc. */
   @media (forced-colors: active) { .spin { forced-color-adjust: none; border-color: GrayText; border-top-color: CanvasText; } }
-  @media (max-width: 900px) { .pc, .mk { grid-template-columns: minmax(0, 1fr); } .pc-goal, .mk-log { position: static; } }
+  @media (max-width: 900px) {
+    .pc, .mk { grid-template-columns: minmax(0, 1fr); } .pc-goal, .mk-log { position: static; }
+    /* Narrow: the goal shrinks to a one-line strip so the questions stay on screen. */
+    .pc { gap: var(--s6); }
+    .pc-goal { grid-template-columns: minmax(0, 1fr) auto; align-items: center; gap: var(--s1) var(--s5); padding: var(--s4) var(--s5); }
+    .pc-goal > :not(.link) { grid-column: 1; }
+    .pc-goal .kicker { display: none; }
+    .pc-quote { font-size: var(--t-md); }
+    .pc-goal dl { display: flex; flex-wrap: wrap; gap: 0 var(--s2); }
+    .pc-goal dd + dt { margin-left: var(--s4); }
+    .pc-goal .link { grid-column: 2; grid-row: 1 / span 3; }
+  }
 </style>

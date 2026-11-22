@@ -276,7 +276,7 @@ Planning the path
 Fields
 - title (course): a short name for what they will be able to do. summary: one or two sentences on where they will be at the end.
 - needs: what the learner must have before the first lesson that not everyone has: programs to install, hardware, parts, instruments, materials, accounts. At most 12, and an empty list when a computer with a web browser is enough. A program that the first lessons teach them to install still belongs in the list. kind is "tool" for a program started from a terminal and "part" for everything else. command is the one word typed in a terminal to start that program, such as `python3`, `git` or `arduino-cli`, with no arguments; use an empty string for a part, or when you are not sure of the word. The app only looks up whether that command is installed and never runs it. why: a few words on what in the course needs it.
-- title (stage): the theme of that month. blurb (stage): one sentence naming the milestone project that ends it.
+- title (stage): the theme of that month, in a few words, without "Stage" or "Month" and a number in front: the app numbers the stages. blurb (stage): one sentence naming the milestone project that ends it.
 - blurb (phase): one sentence on what this phase gets them and why it comes now.
 - title (lesson): specific, never "Introduction" or "Basics" alone. goal: one sentence saying what the learner can do after this lesson, specific enough that the lesson can be written from it later.
 
