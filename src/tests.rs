@@ -243,6 +243,10 @@ impl FakeAI {
     fn last(&self) -> Value {
         self.seen.lock().unwrap().last().unwrap().clone()
     }
+    // The latest request whose messages contain `text`; background work such as prefetch can call after the request a test checks.
+    fn last_with(&self, text: &str) -> Value {
+        self.seen.lock().unwrap().iter().rev().find(|r| r["messages"].to_string().contains(text)).cloned().unwrap()
+    }
 }
 impl Drop for FakeAI {
     fn drop(&mut self) {
@@ -731,7 +735,8 @@ fn python_spec_end_to_end() {
         call(&base, "POST", "api/chat", chat.clone()).1,
         json!({"text":"hint for: 1.1: Mix"})
     );
-    let last = ai.last();
+    // Not ai.last(): opening the course started a background prefetch whose AI calls can land after the chat's.
+    let last = ai.last_with("hint?");
     let results = list(&last["messages"])
         .iter()
         .filter(|m| m["role"] == "tool")
@@ -755,12 +760,12 @@ fn python_spec_end_to_end() {
     assert_eq!(saved["1.1"][1]["steps"], json!(steps));
     let again = json!({"course":cid,"lesson":"1.1","messages":[saved["1.1"][0],saved["1.1"][1],{"role":"user","content":"hint?"}]});
     app.chat_stream(&again, &mut |_| Ok(())).unwrap();
-    assert!(list(&ai.last()["messages"]).iter().all(|m| m.get("steps").is_none()));
+    assert!(list(&ai.last_with("hint?")["messages"]).iter().all(|m| m.get("steps").is_none()));
     assert_eq!(app.read_side(&app.chat_file(&cid).unwrap())["1.1"][1]["steps"], json!(steps));
     assert!(app.tool_result(&app.load(&cid).unwrap(), &json!({"id":"1.1"}), "search_course", &json!({"words":"hydration"})).unwrap().starts_with("Lesson 1.1 Mix (lesson): "));
-    assert_eq!(ai.last()["stream"], true);
+    assert_eq!(ai.last_with("hint?")["stream"], true);
     assert_eq!(
-        list(&ai.last()["messages"])
+        list(&ai.last_with("hint?")["messages"])
             .iter()
             .filter(|m| m["role"] == "tool")
             .count(),
