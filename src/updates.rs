@@ -9,7 +9,8 @@ pub struct Status { pub version: String, pub state: String, pub available: Strin
 pub struct Updates { status: Mutex<Status>, pending: Mutex<Option<(Update, Vec<u8>)>> }
 fn supported(bundle: Option<tauri::utils::config::BundleType>) -> bool {
     use tauri::utils::config::BundleType::*;
-    matches!(bundle, Some(Nsis | AppImage | Deb | Rpm))
+    // Windows builds ship in the Inno Setup installer, which Tauri doesn't tag with a bundle type.
+    cfg!(windows) || matches!(bundle, Some(Nsis | AppImage | Deb | Rpm))
 }
 #[tauri::command]
 pub fn update_status(app: AppHandle, state: State<Updates>) -> Status {
@@ -18,9 +19,15 @@ pub fn update_status(app: AppHandle, state: State<Updates>) -> Status {
 }
 #[tauri::command]
 pub async fn update_check(app: AppHandle, state: State<'_, Updates>) -> Result<(), String> {
+    // MSIX (Store) installs live under WindowsApps; the Store updates them, so never self-update there.
+    if std::env::current_exe().is_ok_and(|p| p.to_string_lossy().contains("\\WindowsApps\\")) {
+        state.status.lock().unwrap().state = "latest".into(); return Ok(());
+    }
     { let mut s = state.status.lock().unwrap(); if s.state == "downloading" || s.state == "ready" { return Ok(()); } s.state = "downloading".into(); }
     let result = async {
-        let updater = app.updater_builder().timeout(Duration::from_secs(120)).build().map_err(|e| e.to_string())?;
+        // Inno Setup ignores the NSIS flags Tauri adds; these make it update without prompts.
+        let updater = app.updater_builder().timeout(Duration::from_secs(120))
+            .installer_args(["/SILENT", "/SUPPRESSMSGBOXES", "/NORESTART"]).build().map_err(|e| e.to_string())?;
         let update = updater.check().await.map_err(|e| e.to_string())?;
         if let Some(update) = update {
             let version = update.version.clone();
@@ -57,7 +64,7 @@ pub async fn update_install(app: AppHandle, state: State<'_, Updates>) -> Result
 #[cfg(test)]
 mod tests {
     #[test] fn self_updatable_packages() {
-        assert!(!super::supported(None));
+        assert_eq!(super::supported(None), cfg!(windows));
         use tauri::utils::config::BundleType::*;
         for bundle in [Nsis, AppImage, Deb, Rpm] { assert!(super::supported(Some(bundle))); }
         assert!(!super::supported(Some(Dmg)));

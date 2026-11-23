@@ -12,5 +12,6 @@ for extension, platform in [('exe', 'windows-x86_64-nsis'), ('AppImage', 'linux-
     platforms[platform] = {'signature': signature.read_text().strip(), 'url': f'https://github.com/MDHaarith/RoadMap-releases/releases/download/v{version}/{name}'}
 # Unbundled/development copies can discover the release and offer its web page.
 platforms['linux-x86_64'] = platforms['linux-x86_64-appimage']
+# The key keeps its old name: 1.0.0 (NSIS) installs look it up; the exe is now the Inno Setup installer.
 platforms['windows-x86_64'] = platforms['windows-x86_64-nsis']
 Path('latest.json').write_text(json.dumps({'version': version, 'notes': 'Roadmap update', 'platforms': platforms}, indent=2))
