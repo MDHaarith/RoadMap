@@ -1,5 +1,6 @@
 //! Daily goal, streak and the numbers behind the Progress page. Each day the learner does something is kept in
-//! activity.json as {"days": {"<day number>": {"n": steps, "right": right answers, "asked": answers}}}.
+//! activity.json as {"days": {"<day number>": {"n": steps, "right": right answers, "asked": answers, "s": seconds in the app}},
+//! "courses": {"<roadmap id>": seconds}}.
 use crate::*;
 
 const DEFAULT_GOAL: u64 = 3;
@@ -17,8 +18,31 @@ impl App {
             a["days"] = json!({});
         }
         let day = &mut a["days"][self.today().to_string()];
-        let n = |v: &Value, k: &str| v[k].as_u64().unwrap_or(0);
-        *day = json!({"n":n(day,"n")+steps,"right":n(day,"right")+right,"asked":n(day,"asked")+asked});
+        for (k, v) in [("n", steps), ("right", right), ("asked", asked)] {
+            day[k] = json!(day[k].as_u64().unwrap_or(0) + v);
+        }
+        let _ = self.write_side("activity.json", &a);
+    }
+    /// Adds `secs` of time spent in the app to today ("s") and, when a roadmap was open, to that roadmap's total.
+    pub(crate) fn log_time(&self, secs: u64, course: &str) {
+        // The window reports once a minute; anything bigger is not a real report.
+        let secs = secs.min(120);
+        if secs == 0 {
+            return;
+        }
+        let _meter = self.meter.lock().unwrap_or_else(|e| e.into_inner());
+        let mut a = self.read_side("activity.json");
+        if !a["days"].is_object() {
+            a["days"] = json!({});
+        }
+        let day = &mut a["days"][self.today().to_string()];
+        day["s"] = json!(day["s"].as_u64().unwrap_or(0) + secs);
+        if course.len() == 12 && course.bytes().all(|c| c.is_ascii_alphanumeric()) {
+            if !a["courses"].is_object() {
+                a["courses"] = json!({});
+            }
+            a["courses"][course] = json!(a["courses"][course].as_u64().unwrap_or(0) + secs);
+        }
         let _ = self.write_side("activity.json", &a);
     }
     pub(crate) fn goal(&self) -> u64 {
@@ -37,6 +61,9 @@ impl App {
         let mut keys = days.as_object().into_iter().flatten().filter_map(|(k, _)| k.parse::<i64>().ok()).collect::<Vec<_>>();
         keys.sort();
         let mut last = i64::MIN;
+        // Day 1 is the first day with any step; total adds up every step since.
+        let first_day = keys.iter().copied().find(|&d| steps(d) > 0);
+        let total: u64 = keys.iter().map(|&d| steps(d)).sum();
         for d in keys {
             if steps(d) < goal {
                 continue;
@@ -45,7 +72,7 @@ impl App {
             best = best.max(run);
             last = d;
         }
-        json!({"today":today,"goal":goal,"done":steps(today),"streak":streak,"best":best.max(streak),
+        json!({"today":today,"goal":goal,"done":steps(today),"streak":streak,"best":best.max(streak),"first":first_day,"total":total,
             "days":(0..35).rev().map(|i| json!({"day":today-i,"n":steps(today-i)})).collect::<Vec<_>>()})
     }
     pub(crate) fn set_goal(&self, b: &Value) -> Result<Value> {
@@ -57,8 +84,15 @@ impl App {
     /// The Progress page: activity, weekly accuracy, each roadmap's progress and the weakest lessons.
     pub(crate) fn stats(&self) -> Result<Value> {
         let a = self.activity();
-        let days = self.read_side("activity.json")["days"].clone();
+        let side = self.read_side("activity.json");
+        let days = side["days"].clone();
         let today = self.today();
+        // The time grid: Monday 52 weeks back through today, seconds and steps per day. Day 0 was a Thursday.
+        let start = today - (today + 3).rem_euclid(7) - 52 * 7;
+        let year = (start..=today).map(|d| {
+            let x = &days[d.to_string()];
+            json!({"day":d,"s":x["s"].as_u64().unwrap_or(0),"n":x["n"].as_u64().unwrap_or(0)})
+        }).collect::<Vec<_>>();
         // Eight weeks, oldest first; a week with no answers has no accuracy (null), so the line skips it.
         let weeks = (0..8).rev().map(|w| {
             let (mut right, mut asked) = (0, 0);
@@ -77,7 +111,8 @@ impl App {
             let done = ls.iter().filter(|l| truth(&st["done"][string(&l["id"])])).count();
             lessons_done += done;
             mistakes_open += st["mistakes"].as_object().map_or(0, |m| m.values().filter(|x| !truth(&x["fixed"])).count());
-            roadmaps.push(json!({"id":c["id"],"title":c["title"],"done":done,"total":ls.len(),"paused":truth(&c["paused"])}));
+            roadmaps.push(json!({"id":c["id"],"title":c["title"],"done":done,"total":ls.len(),"paused":truth(&c["paused"]),
+                "secs":side["courses"][string(&c["id"])].as_u64().unwrap_or(0)}));
             for l in ls {
                 let q = &st["quiz"][string(&l["id"])];
                 let total = q["total"].as_f64().unwrap_or(0.);
@@ -90,7 +125,7 @@ impl App {
             }
         }
         weak.sort_by(|x, y| x.0.total_cmp(&y.0));
-        Ok(json!({"activity":a,"weeks":weeks,"roadmaps":roadmaps,"weak":weak.into_iter().take(8).map(|w| w.1).collect::<Vec<_>>(),
+        Ok(json!({"activity":a,"weeks":weeks,"year":year,"roadmaps":roadmaps,"weak":weak.into_iter().take(8).map(|w| w.1).collect::<Vec<_>>(),
             "lessons_done":lessons_done,"mistakes_open":mistakes_open}))
     }
     /// Changes when any roadmap file is added, removed or saved, so the library can reload after the MCP server writes one.

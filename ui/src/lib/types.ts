@@ -31,8 +31,8 @@ export interface Mistake extends ReviewItem { fixed?: boolean; n: number; picked
 /** A review card made from the learner's notes; it comes back in the daily review. */
 export interface Card { front: string; back: string }
 /** days: the last 35 days, oldest first; `day` counts days since 1970 on the learner's calendar, like `today`. */
-export interface Activity { today: number; goal: number; done: number; streak: number; best: number; days: { day: number; n: number }[] }
-export interface Stats { activity: Activity; weeks: { week: number; right: number; asked: number }[]; roadmaps: { id: string; title: string; done: number; total: number; paused: boolean }[]; weak: { course: string; roadmap: string; lesson: string; title: string; score: number; total: number }[]; lessons_done: number; mistakes_open: number }
+export interface Activity { today: number; goal: number; done: number; streak: number; best: number; first?: number | null; total?: number; days: { day: number; n: number }[] }
+export interface Stats { activity: Activity; weeks: { week: number; right: number; asked: number }[]; year: { day: number; s: number; n: number }[]; roadmaps: { id: string; title: string; done: number; total: number; paused: boolean; secs: number }[]; weak: { course: string; roadmap: string; lesson: string; title: string; score: number; total: number }[]; lessons_done: number; mistakes_open: number }
 export interface OfflineStatus { on: boolean; saved: number; total: number; bytes: number; running: boolean; failed: number; error: string }
 export interface WorkCheck { verdict: 'done' | 'partly' | 'not_yet'; summary: string; next: string; items: { task: string; met: boolean; note: string }[] }
 /** One search match: a lesson, a note, a tutor chat message or an idea (ideas have no course or lesson). */

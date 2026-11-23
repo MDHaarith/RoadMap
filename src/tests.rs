@@ -2350,7 +2350,18 @@ fn daily_goal_streak_progress_cards_and_library_stamp() {
     assert!(r("POST", "api/review", json!({"course":cid,"lesson":"1.1","kind":"card","q":"Gone?","right":true})).1["changed"] == true);
     let a = r("GET", "api/activity", json!({})).1;
     assert_eq!((a["done"].as_u64(), a["streak"].as_u64(), a["best"].as_u64()), (Some(1), Some(1), Some(1)));
+    assert_eq!((a["first"].as_i64(), a["total"].as_u64()), (Some(a["today"].as_i64().unwrap() - 1), Some(3)));
+    // Time in the app: one minute on the roadmap, an oversized report capped at two minutes, and a bad id kept off roadmaps.
+    r("POST", "api/time", json!({"secs":60,"course":cid}));
+    r("POST", "api/time", json!({"secs":99999,"course":cid}));
+    r("POST", "api/time", json!({"secs":30,"course":"../x"}));
     let p = r("GET", "api/progress", json!({})).1;
+    let year = list(&p["year"]);
+    assert_eq!((year.last().unwrap()["s"].as_u64(), year.last().unwrap()["n"].as_u64()), (Some(210), Some(1)));
+    assert_eq!(year[0]["day"].as_i64().map(|d| (d + 3).rem_euclid(7)), Some(0), "the grid starts on a Monday");
+    assert_eq!(p["roadmaps"][0]["secs"], 180);
+    // Logging time keeps the day's steps.
+    assert_eq!(r("GET", "api/activity", json!({})).1["done"], 1);
     assert_eq!(p["weak"][0]["lesson"], "1.1");
     assert_eq!(p["weeks"][7]["asked"], 3);
     assert_eq!(p["lessons_done"], 1);

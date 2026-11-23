@@ -37,7 +37,16 @@
     let alive = true;
     void api<Settings>('GET', 'api/settings').then(c => { if (alive) appState.config = c; }).catch(e => { if (!location.hash.startsWith('#/settings')) toast(message(e)); }); // Settings shows this error itself.
     void route();
-    return () => { stopUpdates(); stopScroll(); alive = false; void dispose(); };
+    // Time in the app: each minute the window is in front and was used in the last five minutes counts as one minute.
+    let lastInput = Date.now();
+    const used = () => { lastInput = Date.now(); };
+    const events = ['pointerdown', 'keydown', 'wheel', 'pointermove'] as const;
+    events.forEach(e => addEventListener(e, used, { passive: true }));
+    const clock = setInterval(() => {
+      if (document.visibilityState === 'visible' && document.hasFocus() && Date.now() - lastInput < 5 * 60e3)
+        void api('POST', 'api/time', { secs: 60, course: appState.course?.id ?? '' }).catch(() => {});
+    }, 60e3);
+    return () => { stopUpdates(); stopScroll(); alive = false; clearInterval(clock); events.forEach(e => removeEventListener(e, used)); void dispose(); };
   });
   function externalLink(e: MouseEvent) {
     const a = (e.target as Element).closest<HTMLAnchorElement>('a[href]');
