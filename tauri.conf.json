@@ -30,6 +30,7 @@
     "active": true,
     "targets": "all",
     "category": "Education",
+    "publisher": "MDHaarith",
     "shortDescription": "Learn anything by doing",
     "icon": [
       "icons/32x32.png",
