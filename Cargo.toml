@@ -27,6 +27,8 @@ ureq = { version = "2.12", features = ["native-certs"] }
 tiny_http = "0.12"
 sha2 = "0.10"
 base64 = "0.22"
+# Unpacks the Deno download (yt-dlp needs a JavaScript runtime for YouTube); already in the Windows and macOS builds through the updater.
+zip = { version = "9", default-features = false, features = ["deflate-flate2"] }
 chrono = { version = "0.4", default-features = false, features = ["clock"] }
 tauri-plugin-notification = "2"
 

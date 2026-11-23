@@ -9,7 +9,7 @@ BuildRequires:  gcc-c++ pkgconf-pkg-config gtk3-devel webkit2gtk4.1-devel openss
 %if 0%{!?local_toolchain:1}
 BuildRequires:  cargo >= 1.92 rust >= 1.92 nodejs npm
 %endif
-Requires:       gtk3 webkit2gtk4.1 yt-dlp bubblewrap bash ca-certificates
+Requires:       gtk3 webkit2gtk4.1 bubblewrap bash ca-certificates
 # Optional exercise interpreters are installed on demand; Python does not run the app.
 # Cargo downloads Cargo.lock's crates during this local RPM build (not vendored).
 %global debug_package %{nil}
