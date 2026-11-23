@@ -295,6 +295,10 @@ impl App {
             ("GET", "api/activity") => return Ok(self.activity()),
             ("GET", "api/progress") => return self.stats(),
             ("PUT", "api/goal") => return self.set_goal(b),
+            ("POST", "api/time") => {
+                self.log_time(b["secs"].as_u64().unwrap_or(0), &string(&b["course"]));
+                return Ok(json!({}));
+            }
             ("GET", "api/stamp") => return Ok(self.library_stamp()),
             ("PUT", "api/unsandboxed") => {
                 let _guard = self.guard();
