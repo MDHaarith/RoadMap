@@ -44,7 +44,6 @@ jobs:
       matrix:
         include:
           - os: windows-latest
-            bundles: nsis
           - os: ubuntu-22.04
             bundles: appimage,deb,rpm
     runs-on: ${{ matrix.os }}
@@ -65,21 +64,45 @@ jobs:
       - run: npm --prefix ui ci
       - run: npm --prefix ui run build
       - uses: tauri-apps/tauri-action@v1
+        if: runner.os == 'Linux'
         env:
           TAURI_SIGNING_PRIVATE_KEY: ${{ secrets.TAURI_SIGNING_PRIVATE_KEY }}
           TAURI_SIGNING_PRIVATE_KEY_PASSWORD: ${{ secrets.TAURI_SIGNING_PRIVATE_KEY_PASSWORD }}
         with:
           tauriScript: node ui/node_modules/@tauri-apps/cli/tauri.js
           args: --config tauri.release.conf.json --bundles ${{ matrix.bundles }} -- --locked
+      # Inno Setup instead of NSIS: NSIS loads unsigned plugin DLLs that Smart App Control blocks.
+      - name: Windows installer
+        if: runner.os == 'Windows'
+        shell: pwsh
+        env:
+          TAURI_SIGNING_PRIVATE_KEY: ${{ secrets.TAURI_SIGNING_PRIVATE_KEY }}
+          TAURI_SIGNING_PRIVATE_KEY_PASSWORD: ${{ secrets.TAURI_SIGNING_PRIVATE_KEY_PASSWORD }}
+          VERSION: ${{ needs.check.outputs.version }}
+        run: |
+          node ui/node_modules/@tauri-apps/cli/tauri.js build --no-bundle -- --locked
+          if ($LASTEXITCODE) { exit $LASTEXITCODE }
+          cargo build --release --locked --bin roadmap-mcp
+          if ($LASTEXITCODE) { exit $LASTEXITCODE }
+          ./scripts/build-windows-installer.ps1 -Version $env:VERSION
+          node ui/node_modules/@tauri-apps/cli/tauri.js signer sign "target/release/Roadmap_${env:VERSION}_x64-setup.exe"
+          if ($LASTEXITCODE) { exit $LASTEXITCODE }
       - uses: actions/upload-artifact@v4
         with:
           name: signed-${{ runner.os }}
           path: |
-            target/release/bundle/**/*.exe
+            target/release/Roadmap_*_x64-setup.exe
+            target/release/Roadmap_*_x64-setup.exe.sig
             target/release/bundle/**/*.AppImage
             target/release/bundle/**/*.deb
             target/release/bundle/**/*.rpm
             target/release/bundle/**/*.sig
+          if-no-files-found: error
+      - uses: actions/upload-artifact@v4
+        if: runner.os == 'Windows'
+        with:
+          name: store-exe
+          path: target/release/roadmap-app.exe
           if-no-files-found: error
   publish:
     needs: [check, build]
@@ -102,3 +125,45 @@ jobs:
           find artifacts -type f -print0 | xargs -0 gh release upload "$TAG" --repo MDHaarith/RoadMap-releases
           gh release upload "$TAG" latest.json --repo MDHaarith/RoadMap-releases
           gh release edit "$TAG" --repo MDHaarith/RoadMap-releases --draft=false --latest
+  # Packages the Windows build as MSIX and submits it to the Microsoft Store, which
+  # signs it and updates Store installs. Skipped until MSSTORE_PRODUCT_ID is set.
+  store:
+    needs: [check, publish]
+    if: vars.MSSTORE_PRODUCT_ID != ''
+    runs-on: windows-latest
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          ref: ${{ github.event.workflow_run.head_sha || github.sha }}
+      - uses: actions/download-artifact@v4
+        with:
+          name: store-exe
+          path: msix
+      - name: Package MSIX
+        shell: pwsh
+        env:
+          IDENTITY_NAME: ${{ vars.MSIX_IDENTITY_NAME }}
+          PUBLISHER: ${{ vars.MSIX_PUBLISHER }}
+          PUBLISHER_DISPLAY_NAME: ${{ vars.MSIX_PUBLISHER_DISPLAY_NAME }}
+          VERSION: ${{ needs.check.outputs.version }}
+        run: |
+          if (-not ($env:IDENTITY_NAME -and $env:PUBLISHER -and $env:PUBLISHER_DISPLAY_NAME)) { throw 'Set the MSIX_* repo variables from Partner Center > Product identity' }
+          # The Store requires the fourth version part to be 0.
+          $m = (Get-Content msix/AppxManifest.xml -Raw).Replace('{{IDENTITY_NAME}}', $env:IDENTITY_NAME).Replace('{{PUBLISHER}}', $env:PUBLISHER).Replace('{{PUBLISHER_DISPLAY_NAME}}', $env:PUBLISHER_DISPLAY_NAME).Replace('{{VERSION}}', "$env:VERSION.0")
+          Set-Content msix/AppxManifest.xml $m -Encoding utf8
+          $makeappx = Get-ChildItem "${env:ProgramFiles(x86)}\Windows Kits\10\bin\*\x64\makeappx.exe" | Sort-Object FullName | Select-Object -Last 1
+          & $makeappx.FullName pack /o /d msix /p "Roadmap_$env:VERSION.msix"
+          if ($LASTEXITCODE) { exit $LASTEXITCODE }
+      - uses: actions/upload-artifact@v4
+        with:
+          name: store-msix
+          path: Roadmap_*.msix
+          if-no-files-found: error
+      - uses: microsoft/setup-msstore-cli@v1
+      - name: Submit to Microsoft Store
+        shell: pwsh
+        run: |
+          msstore reconfigure --tenantId "${{ secrets.MSSTORE_TENANT_ID }}" --sellerId "${{ secrets.MSSTORE_SELLER_ID }}" --clientId "${{ secrets.MSSTORE_CLIENT_ID }}" --clientSecret "${{ secrets.MSSTORE_CLIENT_SECRET }}"
+          if ($LASTEXITCODE) { exit $LASTEXITCODE }
+          msstore publish -v -i "Roadmap_${{ needs.check.outputs.version }}.msix" -id "${{ vars.MSSTORE_PRODUCT_ID }}"
+          if ($LASTEXITCODE) { exit $LASTEXITCODE }

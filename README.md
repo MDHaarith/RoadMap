@@ -54,7 +54,7 @@ The model picker lists models from your AI provider, or the ones your ChatGPT si
 
 Windows users need WebView2 (included with current Windows 10/11), a ChatGPT account, and yt-dlp on PATH. Exercises are unavailable on Windows.
 
-From Linux, install cargo-xwin and the Rust x86_64-pc-windows-msvc target, then run `make windows`. This compiles both executables and the Tauri frontend without bundling. Linux cannot run the Windows tests or build the NSIS installer here; CI runs tests and builds the installer on Windows.
+From Linux, install cargo-xwin and the Rust x86_64-pc-windows-msvc target, then run `make windows`. This compiles both executables and the Tauri frontend without bundling. Linux cannot run the Windows tests or build the Windows installer here; CI runs tests and builds the Inno Setup installer (`windows/roadmap.iss`) on Windows.
 
 ## Releasing
 
@@ -75,7 +75,7 @@ Configure these repository Actions secrets once:
 - `RELEASES_TOKEN`: a token with contents write access to the public
   `MDHaarith/RoadMap-releases` repository.
 
-The release workflow builds signed NSIS and Linux AppImage/deb/rpm installers.
+The release workflow builds a Windows Inno Setup installer, Linux AppImage/deb/rpm installers, and their update signatures, then submits an MSIX build to the Microsoft Store once the `MSSTORE_*` and `MSIX_*` repo settings exist.
 A final job waits for both builds, assembles a manifest with all four package
 entries, uploads everything to a draft public release, then publishes it.
 This prevents clients from seeing an incomplete manifest. Check the Actions
