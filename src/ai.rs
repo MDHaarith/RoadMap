@@ -909,7 +909,8 @@ impl App {
         let _done = Done(&self.yt_running);
         // YouTube needs a JS challenge solver: yt-dlp enables only deno by default, so allow node and bun too and fetch the solver script.
         const JS: [&str; 8] = ["--js-runtimes", "deno", "--js-runtimes", "node", "--js-runtimes", "bun", "--remote-components", "ejs:github"];
-        let run = |js: &[&str]| process(Command::new(&self.yt_program).args(["-J", "--no-warnings"]).args(js).args(args), 60);
+        let yt = self.yt_path()?;
+        let run = |js: &[&str]| process(Command::new(&yt).args(["-J", "--no-warnings"]).args(js).args(args), 60);
         let mut r = run(&JS);
         // yt-dlp older than 2025.11 does not know these options; run it the old way.
         if matches!(&r, Ok((s, _, e, _)) if *s != 0 && e.contains("no such option")) {
@@ -918,7 +919,7 @@ impl App {
         let (status, out, err, timeout) = r
         .map_err(|e| {
             if e.kind() == std::io::ErrorKind::NotFound {
-                Error::bad(if cfg!(target_os = "linux") { "yt-dlp is not installed. Run: sudo dnf install yt-dlp" } else { "yt-dlp is not installed. Install yt-dlp and add it to PATH." })
+                Error::bad("yt-dlp could not be started. Restart Roadmap and try again.")
             } else {
                 e.into()
             }

@@ -43,7 +43,6 @@
     "linux": {
       "deb": {
         "depends": [
-          "yt-dlp",
           "bubblewrap",
           "bash",
           "ca-certificates"
@@ -52,7 +51,6 @@
       },
       "rpm": {
         "depends": [
-          "yt-dlp",
           "bubblewrap",
           "bash",
           "ca-certificates"
