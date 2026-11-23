@@ -67,6 +67,6 @@ mod tests {
         assert_eq!(super::supported(None), cfg!(windows));
         use tauri::utils::config::BundleType::*;
         for bundle in [Nsis, AppImage, Deb, Rpm] { assert!(super::supported(Some(bundle))); }
-        assert!(!super::supported(Some(Dmg)));
+        assert_eq!(super::supported(Some(Dmg)), cfg!(windows));
     }
 }
