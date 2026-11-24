@@ -64,27 +64,29 @@ Set the same version in `Cargo.toml`, `tauri.conf.json`, `roadmap-app.spec`, `ui
 and the root package entries in `ui/package-lock.json`. The UI version matches
 for release validation; the running version comes from Tauri. Run `cargo check`
 to update the root package version in `Cargo.lock`, then `make release-check`.
-Commit the changes and merge them into `master` through a pull request. When CI
-passes on `master`, the release workflow builds signed installers and publishes
-`vX.Y.Z` to `MDHaarith/RoadMap-releases`. A version that is already released is
-skipped, so bump the version for each release. A manual Actions run on `master`
-does the same.
+Commit the changes and open a pull request into `master`. CI runs on the pull
+request only. Label it `release: linux`, `release: windows`, or both: merging
+it builds signed installers for those platforms and publishes `vX.Y.Z` to
+`MDHaarith/RoadMap-releases`. No release label means no release. A platform
+already in that version is skipped, so bump the version to release it again;
+the other platform can still be added to the same version later. A manual
+Actions run (Release, with Linux and Windows tick boxes) does the same.
 
 Configure these repository Actions secrets once:
 
 - `TAURI_SIGNING_PRIVATE_KEY`: the signing private key content (never commit it).
-- `TAURI_SIGNING_PRIVATE_KEY_PASSWORD`: empty, since this key has no password.
 - `RELEASES_TOKEN`: a token with contents write access to the public
   `MDHaarith/RoadMap-releases` repository.
 
-The release workflow builds a Windows Inno Setup installer, Linux AppImage/deb/rpm installers, and their update signatures, then submits an MSIX build to the Microsoft Store once the `MSSTORE_*` and `MSIX_*` repo settings exist.
-A final job waits for both builds, assembles a manifest with all four package
-entries, uploads everything to a draft public release, then publishes it.
-This prevents clients from seeing an incomplete manifest. Check the Actions
-logs, the public release assets (including each `.sig` and `latest.json`), and
-that the latest-download endpoint resolves. Two published versions are needed
-to test an actual upgrade. Ordinary bundle builds do not require signing keys;
-only `--config tauri.release.conf.json` enables updater artifacts.
+Linux builds an AppImage, deb and rpm; Windows builds the Inno Setup installer.
+A final job waits for the chosen builds, uploads them to a draft public release
+(or the existing release of that version), then publishes it. The app reads its
+updates from `updater/linux.json` or `updater/windows.json` in the `updater`
+pre-release, written last, so each platform updates on its own version and never
+sees links to a draft. 1.0.0 and 1.0.1 read the release's `latest.json`, which
+lists every platform in that version. Two published versions are needed to test
+an actual upgrade. Ordinary bundle builds do not require signing keys; only
+`--config tauri.release.conf.json` enables updater artifacts.
 
 The app checks after startup and every six hours, downloads signed updates,
 and waits for “Restart and update”. RPM/deb may request administrator approval.
