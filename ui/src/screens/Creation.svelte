@@ -18,6 +18,8 @@
   let { empty = false }: { empty?: boolean } = $props();
   let kind = $state('build'), folder = $state(''), prompt = $state(''), level = $state('Complete beginner: has never studied or done this'), size = $state('');
   let effort = $state(defaultEffort());
+  // Ties this roadmap's placement, blueprint and writing together, so Settings can show what creating it cost.
+  const usageKey = crypto.randomUUID();
   let blueprint = $state<Blueprint>(), baseline = $state(''), editingPlan = $state(false);
   // The blueprint is plain text from the AI; show it as tidy lines, without markdown or list markers.
   const tidy = (t: string) => t.replace(/`/g, '').trim();
@@ -87,7 +89,7 @@
     const mine = ++seq, version = appState.routeVersion, live = () => alive && mine === seq && version === appState.routeVersion;
     waiting = true; error = ''; failed = '';
     try {
-      const r = await thinkingOn(w => api<{ questions: { q: string; options: string[] }[] }>('POST', 'api/placement', { ...what(), level, effort, thinking: w }));
+      const r = await thinkingOn(w => api<{ questions: { q: string; options: string[] }[] }>('POST', 'api/placement', { ...what(), level, effort, draft: usageKey, thinking: w }));
       if (!live()) return;
       if (!r.questions.length) return await toBlueprint();
       qs = r.questions; picked = []; waiting = false;
@@ -98,7 +100,7 @@
     const mine = ++seq, live = () => alive && mine === seq;
     waiting = true; drafting = true; error = ''; failed = '';
     try {
-      const plan = await thinkingOn(w => api<Blueprint>('POST', 'api/blueprint', { ...what(), level, size, effort, thinking: w, answers: answers() }));
+      const plan = await thinkingOn(w => api<Blueprint>('POST', 'api/blueprint', { ...what(), level, size, effort, draft: usageKey, thinking: w, answers: answers() }));
       if (live()) go(() => { blueprint = plan; baseline = ''; editingPlan = false; building = false; }, 'forward');
     } catch (err) { if (live()) { error = message(err); failed = 'blueprint'; } }
     finally { if (live()) { waiting = false; drafting = false; } }
@@ -127,7 +129,7 @@
     if (!blueprint || building) return;
     go(() => { building = true; designing = true; error = ''; draft = undefined; }, 'forward');
     try {
-      const c = await thinkingOn(w => api<Course>('POST','api/courses',{prompt,folder:kind === 'project' ? folder : '',level,size,effort,thinking:w,answers:answers(),blueprint:$state.snapshot(blueprint),baseline}));
+      const c = await thinkingOn(w => api<Course>('POST','api/courses',{prompt,folder:kind === 'project' ? folder : '',level,size,effort,draft:usageKey,thinking:w,answers:answers(),blueprint:$state.snapshot(blueprint),baseline}));
       if (alive) goCourse(c);
     } catch (err) { if (alive) error = message(err); }
     finally { building = false; designing = false; }

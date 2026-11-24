@@ -67,12 +67,14 @@ impl FakeAI {
                 }
                 seen2.lock().unwrap().push(b.clone());
                 let system = b["messages"][0]["content"].as_str().unwrap();
+                // The tutor's changing state rides in a message of its own just before the learner's newest one.
+                let every = list(&b["messages"]).iter().map(|m| string(&m["content"])).collect::<Vec<_>>().join("\n");
                 let user = string(&b["messages"][1]["content"]);
                 let mut msg = None;
                 assert!(
                     system.contains("JSON object")
-                        || system.contains("1.1 Mix (completed)")
-                            && system.contains("[x] Dough holds together"),
+                        || every.contains("Lessons they completed: 1.1 Mix")
+                            && every.contains("[x] Dough holds together"),
                     "{system}"
                 );
                 let text = if system.contains("Design an editable course blueprint") {
@@ -185,9 +187,9 @@ impl FakeAI {
                     format!("Here you go:\n```json\n{}\n```", course())
                 } else {
                     assert!(
-                        system.contains("bakers percentage chart")
-                            && system.contains(GOOD)
-                            && system.contains("Last quiz score: 1 of 1")
+                        every.contains("bakers percentage chart")
+                            && every.contains(GOOD)
+                            && every.contains("Last quiz score: 1 of 1")
                     );
                     let text = format!(
                         "hint for: {}",
@@ -410,9 +412,15 @@ fn python_spec_end_to_end() {
         .0,
         200
     );
+    let mut got = call(&base, "GET", "api/settings", json!({})).1;
+    // The trailing-slash fix is the same host, so the key stayed; this computer's AI programs vary.
+    assert_eq!(got["providers"][&ai.base], json!({"model":"m","small":"","key_set":true}));
+    for k in ["providers", "opencode", "claude"] {
+        assert!(got.as_object_mut().unwrap().remove(k).is_some(), "{k}");
+    }
     assert_eq!(
-        call(&base, "GET", "api/settings", json!({})).1,
-        json!({"base":ai.base,"model":"m","small":"","usage":{},"key_set":true,"theme":"dark","videos":{"style":"","length":"","lang":"","recent":""},"effort":"medium","damaged":0,"goal":3,"os":std::env::consts::OS,"unsandboxed":false})
+        got,
+        json!({"base":ai.base,"model":"m","small":"","usage":{},"prices":{},"key_set":true,"theme":"dark","videos":{"style":"","length":"","lang":"","recent":""},"effort":"medium","damaged":0,"goal":3,"os":std::env::consts::OS,"unsandboxed":false})
     );
     assert_eq!(
         fs::metadata(&app.conf).unwrap().permissions().mode() & 0o777,
@@ -1088,14 +1096,14 @@ fn sse_tool_fragments_stream_fallback_and_ai_errors() {
     app.save_config(&json!({"base":format!("http://{address}/v1"),"model":"m"}))
         .unwrap();
     let worker = thread::spawn(move || {
-        for i in 0..7 {
+        for i in 0..8 {
             let mut req = server.recv().unwrap();
             let mut data = String::new();
             req.as_reader().read_to_string(&mut data).unwrap();
             let body: Value = serde_json::from_str(&data).unwrap();
             let (status, ct, response) = match i {
                 0 => {
-                    assert_eq!(body["stream"], true);
+                    assert_eq!((&body["stream"], &body["stream_options"]["include_usage"]), (&json!(true), &json!(true)));
                     let deltas = [
                         json!({"content":"hi ","tool_calls":[{"index":1,"id":"b","function":{"name":"get_","arguments":"{\"id\":"}},{"index":0,"id":"a","function":{"name":"run_exercise_","arguments":"{"}}]}),
                         json!({"content":"there","tool_calls":[{"index":0,"function":{"name":"tests","arguments":"}"}},{"index":1,"function":{"name":"lesson","arguments":"\"1.1\"}"}}]}),
@@ -1110,12 +1118,16 @@ fn sse_tool_fragments_stream_fallback_and_ai_errors() {
                         format!(": comment\n\n{frames}data: [DONE]\n\n"),
                     )
                 }
+                // A service that refuses a request first loses only the usage field, then everything extra.
                 1 => {
-                    assert_eq!(body["stream"], true);
-                    assert!(body.get("response_format").is_some());
+                    assert!(body["stream"] == true && body.get("response_format").is_some() && body.get("stream_options").is_some());
                     (422, "application/json", "unsupported".into())
                 }
                 2 => {
+                    assert!(body["stream"] == true && body.get("response_format").is_some() && body.get("stream_options").is_none());
+                    (422, "application/json", "unsupported".into())
+                }
+                3 => {
                     assert!(body.get("stream").is_none() && body.get("response_format").is_none());
                     (
                         200,
@@ -1123,7 +1135,7 @@ fn sse_tool_fragments_stream_fallback_and_ai_errors() {
                         json!({"choices":[{"message":{"content":"fallback"}}]}).to_string(),
                     )
                 }
-                3 => (200, "application/json", json!({"choices":[]}).to_string()),
+                4 => (200, "application/json", json!({"choices":[]}).to_string()),
                 _ => (503, "text/plain", "service unavailable".into()),
             };
             req.respond(
@@ -2066,6 +2078,20 @@ fn chatgpt_is_the_default_service_and_can_call_tutor_tools() {
     let items = gpt.body(2)["input"].to_string();
     assert!(items.contains("\"function_call\"") && items.contains("\"call_id\":\"c1\"") && items.contains("Lesson 1.1: Mix"), "{items}");
     assert_eq!(app.read_side("usage.json")["in"], 21);
+    // Tutor tokens are counted per model and against the roadmap, whose calls share one ChatGPT cache key.
+    let u = app.read_side("usage.json");
+    let model = u["models"].as_object().unwrap().keys().next().unwrap().clone();
+    assert!(u["roadmaps"]["0123456789ab"]["tutor"][&model]["in"].as_u64().unwrap() > 0);
+    assert_eq!(gpt.body(1)["prompt_cache_key"], "roadmap-0123456789ab");
+    // The learner's changing state comes after the cacheable start, just before their newest message.
+    let first = gpt.body(1);
+    let input = list(&first["input"]);
+    assert!(input[input.len() - 2].to_string().contains("Sent by the app") && !text(&first["instructions"]).contains("Lessons they completed"), "{input:?}");
+    // A draft's creation tokens move to the roadmap made from it.
+    crate::ai::metering(("new:d1".into(), "create"), || app.count("S", "m", 10, 4, 2));
+    app.claim_usage("new:d1", "fedcba987654");
+    let u = app.read_side("usage.json");
+    assert_eq!((u["roadmaps"]["fedcba987654"]["create"]["m"]["cached"].clone(), u["roadmaps"]["new:d1"].clone()), (json!(4), Value::Null));
     // A failed answer says what ChatGPT said.
     gpt.answer("data: {\"type\":\"response.failed\",\"response\":{\"error\":{\"message\":\"model gone\"}}}\n\n".into());
     let (code, e) = call(&app, "POST", "api/placement", json!({"prompt":"bake bread","answers":[]}));
@@ -2497,4 +2523,18 @@ fn tutor_remembers_earlier_help() {
     assert!(!rows.contains("Quiz me") && !rows.contains("later lesson"), "{rows}");
     // Nothing earlier was asked: no memory row at all.
     assert!(app.past_help(&c, &list(&c["phases"][0]["lessons"])[0]).is_empty());
+}
+
+#[test]
+fn a_key_never_follows_to_another_service() {
+    let tmp = tempfile::tempdir().unwrap();
+    let app = isolated_app(tmp.path());
+    app.save_config(&json!({"base":"https://api.deepseek.com/v1","model":"m","key":"sk-deep"})).unwrap();
+    app.save_config(&json!({"base":"https://api.deepseek.com/v1/","model":"m"})).unwrap();
+    assert_eq!(app.config()["key"], "sk-deep", "a typo fix on the same host keeps the key");
+    app.save_config(&json!({"base":"https://api.z.ai/api/paas/v4","model":"glm"})).unwrap();
+    assert_eq!(app.config()["key"], "");
+    app.save_config(&json!({"base":"claude","model":"default"})).unwrap();
+    app.save_config(&json!({"base":"https://api.deepseek.com/v1","model":"m"})).unwrap();
+    assert_eq!(app.config()["key"], "sk-deep", "a service used before gets its own key back");
 }

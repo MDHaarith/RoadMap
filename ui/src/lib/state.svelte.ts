@@ -96,9 +96,11 @@ export async function flushSave() {
 // ChatGPT reasoning effort: value, label, hint. More effort is slower but plans more carefully.
 export const EFFORTS = [['low', 'Low effort', 'Fastest answers'], ['medium', 'Medium effort', 'Balanced'], ['high', 'High effort', 'Slowest, most careful']];
 export const defaultEffort = () => appState.config.effort || 'medium';
-export function aiProblem(cfg: Settings = appState.config): '' | 'none' | 'signed_out' {
+export function aiProblem(cfg: Settings = appState.config): '' | 'none' | 'signed_out' | 'missing' | 'claude_signed_out' {
   if (cfg.base === undefined) return '';
   if (!cfg.base || !cfg.model) return 'none';
+  if ((cfg.base === 'claude' && cfg.claude === false) || (cfg.base === 'opencode' && cfg.opencode === false)) return 'missing';
+  if (cfg.base === 'claude' && cfg.claude_auth === 'signed_out') return 'claude_signed_out';
   return cfg.base === 'codex' && cfg.codex === 'signed_out' ? 'signed_out' : '';
 }
 export async function refreshConfig() {
@@ -157,7 +159,7 @@ export async function route() {
       return;
     }
     appState.course = null;
-    if (a === 'settings' || a === 'review' || a === 'mistakes' || a === 'search' || a === 'import' || a === 'progress') appState.screen = a;
+    if (a === 'settings' || a === 'review' || a === 'mistakes' || a === 'search' || a === 'import' || a === 'progress' || a === 'usage') appState.screen = a;
     else await loadLibrary();
   } catch (error) {
     if (version !== appState.routeVersion) return;

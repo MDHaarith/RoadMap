@@ -1,11 +1,12 @@
 export type Theme = 'light' | 'dark' | 'system';
-export interface Usage { in?: number; out?: number; calls?: number; since?: number }
+export type Tally = { in?: number; cached?: number; out?: number; calls?: number };
+export interface Usage extends Tally { since?: number; models?: Record<string, Tally & { service?: string }>; days?: Record<string, Record<string, Tally>>; roadmaps?: Record<string, { title?: string; create?: Record<string, Tally>; tutor?: Record<string, Tally>; use?: Record<string, Tally> }> }
 export interface VideoPrefs { style: string; length: string; lang: string; recent: string }
 export interface PlanOption { label: string; note: string; added: { title: string; goal: string; after?: number; phase?: boolean; lessons?: string[] }[]; dropped: string[]; changed: { from: string; title: string; goal: string }[]; plan: object }
 export interface PlanPreview { options: PlanOption[]; note: string }
 /** codex: only when the AI service is ChatGPT (base "codex"). ready = this app is signed in; signed_out = press Sign in with ChatGPT.
  *  damaged: how many roadmap files could not be read and are left out of the library (kept on disk untouched). */
-export interface Settings { videos: VideoPrefs; base: string; model: string; small?: string; key_set?: boolean; theme: Theme; usage?: Usage; codex?: 'ready' | 'signed_out'; chatgpt_email?: string; effort?: string; damaged: number; goal?: number; os?: string; unsandboxed?: boolean }
+export interface Settings { videos: VideoPrefs; base: string; model: string; small?: string; key_set?: boolean; theme: Theme; usage?: Usage; prices?: Record<string, number[]>; codex?: 'ready' | 'signed_out'; chatgpt_email?: string; opencode?: boolean; claude?: boolean; claude_auth?: 'ready' | 'signed_out'; claude_email?: string; ollama?: boolean; providers?: Record<string, { model: string; small: string; key_set: boolean }>; effort?: string; damaged: number; goal?: number; os?: string; unsandboxed?: boolean }
 /** steps: what the tutor looked up before this reply, in the order it did so. */
 export interface Message { role: 'user' | 'assistant'; content: string; steps?: string[] }
 /** exam: a stage exam question kept in its lesson's bank; the lesson quiz leaves it out. */
@@ -24,7 +25,7 @@ export interface Walkthrough {
   date: string; outlines: number; additional: string; perspective: string;
   findings: { lesson: string; title: string; quote: string; difficulty: string; change: string }[];
 }
-export interface Course { walkthrough?: Walkthrough; blueprint?: Blueprint; prefs?: VideoPrefs; id: string; title: string; summary: string; prompt: string; phases: Phase[]; state: CourseState; stages?: { title: string; blurb?: string }[]; folder?: string; work?: string; changes?: { changed?: string[]; note: string; added: string[]; dropped: string[] }[]; needs?: { name: string; why?: string; kind: string; command?: string }[]; chats?: Record<string, Message[]>; offline?: boolean; saved_videos?: string[] }
+export interface Course { walkthrough?: Walkthrough; blueprint?: Blueprint; prefs?: VideoPrefs; id: string; title: string; summary: string; prompt: string; phases: Phase[]; state: CourseState; stages?: { title: string; blurb?: string }[]; folder?: string; work?: string; changes?: { changed?: string[]; note: string; added: string[]; dropped: string[] }[]; needs?: { name: string; why?: string; kind: string; command?: string; stage?: number }[]; chats?: Record<string, Message[]>; offline?: boolean; saved_videos?: string[] }
 export interface LibraryCourse { id: string; title: string; summary: string; total: number; done: number; paused?: boolean; project?: boolean; next?: { id: string; title: string } }
 export interface ReviewItem extends Quiz { course: string; lesson: string; i: string | number; roadmap: string; lesson_title: string; kind?: string; title?: string; prompt?: string; starter?: string; back?: string }
 export interface ReviewData { count: number; questions: ReviewItem[] }

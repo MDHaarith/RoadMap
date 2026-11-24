@@ -108,6 +108,9 @@ fn main() {
                     .unwrap_or_default()
             })?;
             let _ = player::VIDEOS.set(roadmap.data.join("videos"));
+            // Points Claude Code, Codex, OpenCode and the other AI tools here at this copy's MCP server.
+            let data = roadmap.data.clone();
+            std::thread::spawn(move || roadmap_app::harness::keep_connected(&data));
             app.manage(roadmap);
             Ok(())
         })

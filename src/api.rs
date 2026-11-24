@@ -211,7 +211,17 @@ impl App {
         if let Some(id) = path.strip_prefix("api/captions/") {
             return self.captions(id);
         }
-        self.with_effort(&b["effort"], || self.thinking(&cap(&string(&b["thinking"]), 64), || self.route_on(method, path, b)))
+        // Whose tokens these are: an open roadmap, or a draft that creating one starts (the page sends its key).
+        let meter = match path.strip_prefix("api/courses/") {
+            Some(rest) => (cap(rest.split('/').next().unwrap_or(""), 12), "use"),
+            None if method == "POST" && ["api/courses", "api/placement", "api/blueprint"].contains(&path) => {
+                let d = string(&b["draft"]);
+                (format!("new:{}", if matches(r"^[A-Za-z0-9-]{1,40}$", &d) { d } else { random_hex(6).unwrap_or_default() }), "create")
+            }
+            None if path == "api/chat" => (cap(&string(&b["course"]), 12), "tutor"),
+            None => (String::new(), "use"),
+        };
+        crate::ai::metering(meter, || self.with_effort(&b["effort"], || self.thinking(&cap(&string(&b["thinking"]), 64), || self.route_on(method, path, b))))
     }
     fn route_on(self: &Arc<Self>, method: &str, path: &str, b: &Value) -> Result<Value> {
         match (method, path) {
@@ -227,13 +237,29 @@ impl App {
             }
             ("GET", "api/settings") => {
                 let c = self.config();
-                let mut out = json!({"base":c.get("base").unwrap_or(&json!("")),"model":c.get("model").unwrap_or(&json!("")),"small":string(&c["small"]),"usage":self.read_side("usage.json"),"key_set":truth(&c["key"]),"theme":self.theme(),"videos":clean_prefs(&c["videos"]),
+                let mut out = json!({"base":c.get("base").unwrap_or(&json!("")),"model":c.get("model").unwrap_or(&json!("")),"small":string(&c["small"]),"usage":self.usage(),"prices":c["prices"].as_object().cloned().unwrap_or_default(),"key_set":truth(&c["key"]),"theme":self.theme(),"videos":clean_prefs(&c["videos"]),
                     "effort":self.default_effort(),"damaged":self.damaged()?,"goal":self.goal(),"os":std::env::consts::OS,"unsandboxed":truth(&c["unsandboxed"])});
+                // Settings shows which AI programs this computer has.
+                out["opencode"] = json!(crate::harness::find_opencode().is_some());
+                out["claude"] = json!(crate::harness::find_claude().is_some());
+                // Services used before, so picking one again fills in its model; keys never leave the backend.
+                out["providers"] = c["providers"].as_object().map(|p| p.iter().map(|(b, s)| (b.clone(), json!({"model":string(&s["model"]),"small":string(&s["small"]),"key_set":truth(&s["key"])}))).collect()).unwrap_or_default();
                 if c["base"] == "codex" {
                     let s = self.chatgpt_status();
                     out["codex"] = s["status"].clone();
                     out["chatgpt_email"] = s["email"].clone();
                 }
+                if c["base"] == "claude" {
+                    local_auth(&mut out);
+                }
+                return Ok(out);
+            }
+            // The provider picker's checks, slower than the rest of Settings: Claude Code's sign-in and whether Ollama runs.
+            ("GET", "api/local") => {
+                let ollama = std::thread::spawn(crate::local_ai::ollama_running);
+                let mut out = json!({"opencode":crate::harness::find_opencode().is_some(),"claude":crate::harness::find_claude().is_some()});
+                local_auth(&mut out);
+                out["ollama"] = json!(ollama.join().unwrap_or(false));
                 return Ok(out);
             }
             ("PUT", "api/video-prefs") => {
@@ -249,6 +275,24 @@ impl App {
                 }
                 let _guard = self.guard();
                 self.write_config(&merge(self.config(), json!({"theme":b["theme"]})))?;
+                return Ok(json!({}));
+            }
+            // Price per million tokens of one model, in US dollars: [input, cached input, output]; null forgets it.
+            ("GET", "api/usage") => return Ok(json!({"usage":self.usage(),"prices":self.config()["prices"].as_object().cloned().unwrap_or_default()})),
+            ("PUT", "api/prices") => {
+                let model = cap(&string(&b["model"]), 200);
+                let price = list(&b["price"]).iter().map(|v| v.as_f64().filter(|x| x.is_finite() && (0.0..=10_000.0).contains(x))).collect::<Option<Vec<_>>>();
+                if model.is_empty() || (!b["price"].is_null() && price.as_ref().is_none_or(|p| p.len() != 3)) {
+                    return Err(Error::bad("Give a model and three prices."));
+                }
+                let _guard = self.guard();
+                let c = self.config();
+                let mut prices = c["prices"].as_object().cloned().unwrap_or_default();
+                match price {
+                    Some(p) if !b["price"].is_null() => { prices.insert(model, json!(p)); }
+                    _ => { prices.remove(&model); }
+                }
+                self.write_config(&merge(c, json!({"prices":prices})))?;
                 return Ok(json!({}));
             }
             ("PUT", "api/effort") => {
@@ -354,6 +398,9 @@ impl App {
                 }
                 self.save(&c)?;
                 let cid = string(&c["id"]);
+                // Writing the first phase, videos and the walkthrough below still count as creating it.
+                self.claim_usage(&crate::ai::meter().0, &cid);
+                crate::ai::set_meter((cid.clone(), "create"));
                 let first = lessons(&c).next().cloned().unwrap_or_default();
                 // A long roadmap is saved as an outline: write its first phase now so the learner can start.
                 // If that fails, the lesson page asks again when it is opened.
@@ -428,6 +475,10 @@ impl App {
                 let answer = self.tutor(&c, &merge(l.clone(), json!({"watching":b["video"]})), ms.clone(), &mut None, &mut |_, _| {})?;
                 self.save_chat(&string(&c["id"]), &string(&l["id"]), &ms, &answer, &[]);
                 return Ok(json!({"text":answer}));
+            }
+            ("POST", "api/opencode/install") => {
+                crate::harness::install_opencode().map_err(Error::bad)?;
+                return Ok(json!({"opencode":true}));
             }
             ("POST", "api/chat/stop") => {
                 self.stop_chat.store(true, Ordering::Relaxed);
@@ -823,9 +874,9 @@ impl App {
                 pieces.push_str(piece);
                 Ok(())
             };
-            self.with_effort(&body["effort"], || self.thinking(&cap(&string(&body["thinking"]), 64), || {
+            crate::ai::metering((string(&c["id"]), "tutor"), || self.with_effort(&body["effort"], || self.thinking(&cap(&string(&body["thinking"]), 64), || {
                 self.tutor(&c, &merge(l.clone(), json!({"watching":body["video"]})), msgs.clone(), &mut Some(&mut out), on_status)
-            }))
+            })))
         };
         match result {
             // A stopped reply keeps what had arrived and adds no note; the page already knows.
@@ -867,4 +918,11 @@ fn missed(c: &mut Value, key: &str, picked: Option<i64>, day: i64) {
     }
     let old = c["state"]["mistakes"][key].clone();
     c["state"]["mistakes"][key] = json!({"n":old["n"].as_u64().unwrap_or(0)+1,"picked":picked.map_or(old["picked"].clone(),|p|json!(p)),"day":day,"fixed":false});
+}
+/// Claude Code's sign-in, when it is installed and can say: "ready" or "signed_out", and the email it uses.
+fn local_auth(out: &mut Value) {
+    if let Some((signed_in, email)) = crate::local_ai::claude_auth() {
+        out["claude_auth"] = json!(if signed_in { "ready" } else { "signed_out" });
+        out["claude_email"] = json!(email);
+    }
 }
