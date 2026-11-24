@@ -14,6 +14,7 @@
   import TopBar from './components/TopBar.svelte';
   import Ideas from './components/Ideas.svelte';
   import Confirm from './components/Confirm.svelte';
+  import ProviderDialog from './components/ProviderDialog.svelte';
   import Library from './screens/Library.svelte';
   import Creation from './screens/Creation.svelte';
   import Overview from './screens/Overview.svelte';
@@ -25,6 +26,7 @@
   import Mistakes from './screens/Mistakes.svelte';
   import Import from './screens/Import.svelte';
   import Progress from './screens/Progress.svelte';
+  import UsagePage from './screens/UsagePage.svelte';
   function toastMotion(node: Element) {
     const styles = getComputedStyle(node);
     return {
@@ -87,9 +89,11 @@
     {:else if appState.screen === 'mistakes'}<Mistakes />
     {:else if appState.screen === 'import'}<Import />
     {:else if appState.screen === 'progress'}<Progress />
+    {:else if appState.screen === 'usage'}<UsagePage />
     {:else if appState.screen === 'error'}{@const roadmap = location.hash.startsWith('#/c/')}<div class="wrap narrow screen-enter">{#if roadmap}<a class="back-map" href="#/"><Icon name="back" /> Your library</a>{/if}<div class="page-head"><h1>{roadmap ? 'Could not open this roadmap' : 'Could not open your library'}</h1></div><LoadError what={roadmap ? 'The roadmap could not load.' : 'Your roadmaps could not load.'} error={appState.error} retry={() => void route()} /></div>
     {:else}<div class="wrap narrow screen-enter"><a class="back-map" href="#/"><Icon name="back" /> Your library</a><div class="page-head"><h1>Your roadmap</h1></div><Waiting inline title="Opening your roadmap" /></div>{/if}
   {/key}
 </main>
 <Ideas />
 <Confirm />
+<ProviderDialog />

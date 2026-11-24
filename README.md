@@ -35,9 +35,11 @@ part-way through; new phases arrive as outlines and are written the same way.
 
 ## Connect an AI agent (MCP)
 
-`roadmap-mcp` lets an agent list, read, create and fill learning roadmaps, read progress, append ideas and search. It never calls AI or the network and cannot change progress, delete roadmaps, access settings or API keys, run exercises, or read project folders. Search includes learner notes and tutor chats.
+`roadmap-mcp` lets an agent list, read, create and fill learning roadmaps, read progress, append ideas and search. As a server it never calls AI or the network and cannot change progress, delete roadmaps, access settings or API keys, run exercises, or read project folders. Search includes learner notes and tutor chats.
 
-Claude Code: `claude mcp add roadmap -- roadmap-mcp`
+The installed app adds it to every AI tool it finds each time it starts: Claude Code, Claude Desktop, Codex, OpenCode, Gemini CLI, Cursor, VS Code and Windsurf. A settings file with comments is left alone. `roadmap-mcp connect` does the same by hand; `roadmap-mcp disconnect` removes it and stops the app adding it back. The Windows installer offers both, and can install OpenCode (`roadmap-mcp install-opencode`, which also puts `~/.opencode/bin` on your PATH for new terminals).
+
+By hand, Claude Code: `claude mcp add roadmap -- roadmap-mcp`
 
 Codex, in `~/.codex/config.toml`:
 

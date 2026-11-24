@@ -281,9 +281,10 @@ impl App {
             let f = &t["function"];
             json!({"type":"function","name":f["name"],"description":f["description"],"parameters":f["parameters"],"strict":false})
         }).collect();
+        let cache_key = crate::ai::cache_key();
         let mut body = json!({
             "model":model,"instructions":instructions.join("\n\n"),"input":input,"tools":tools,"tool_choice":"auto",
-            "parallel_tool_calls":false,"reasoning":{"effort":extra["effort"].as_str().unwrap_or("low"),"summary":"auto"},"store":false,"stream":true,"include":[],
+            "parallel_tool_calls":false,"prompt_cache_key":cache_key,"reasoning":{"effort":extra["effort"].as_str().unwrap_or("low"),"summary":"auto"},"store":false,"stream":true,"include":[],
         });
         let format = &extra["response_format"]["json_schema"];
         if format.is_object() {
@@ -342,7 +343,7 @@ impl App {
                 }
                 "response.completed" => {
                     let u = &d["response"]["usage"];
-                    self.count(u["input_tokens"].as_u64().unwrap_or(0), u["output_tokens"].as_u64().unwrap_or(0));
+                    self.count(&crate::ai::provider_name("codex"), &model, u["input_tokens"].as_u64().unwrap_or(0), crate::ai::cached_of(u), u["output_tokens"].as_u64().unwrap_or(0));
                 }
                 "response.failed" | "error" => {
                     let said = [&d["response"]["error"]["message"], &d["error"]["message"], &d["message"]].into_iter().map(string).find(|s| !s.is_empty()).unwrap_or_default();

@@ -1,7 +1,9 @@
+pub mod harness;
 pub mod mcp;
 mod ai;
 mod api;
 mod chatgpt;
+mod local_ai;
 pub use api::request_body;
 mod exercise;
 mod habits;
@@ -430,8 +432,13 @@ pub(crate) fn clean_needs(v: &Value) -> Vec<Value> {
         .take(20)
         .map(|n| {
             let cmd = string(&n["command"]);
-            json!({"name":cap(&text(&n["name"]),120),"kind":if n["kind"]=="tool"{"tool"}else{"part"},
-                "command":if matches(r"^[A-Za-z0-9_+-][A-Za-z0-9_.+-]{0,39}$",&cmd){cmd}else{String::new()},"why":cap(&string(&n["why"]),300)})
+            let mut o = json!({"name":cap(&text(&n["name"]),120),"kind":if n["kind"]=="tool"{"tool"}else{"part"},
+                "command":if matches(r"^[A-Za-z0-9_+-][A-Za-z0-9_.+-]{0,39}$",&cmd){cmd}else{String::new()},"why":cap(&string(&n["why"]),300)});
+            // 1-based stage that first needs it; missing means stage 1.
+            if let Some(k) = n["stage"].as_u64().filter(|k| (2..=12).contains(k)) {
+                o["stage"] = json!(k);
+            }
+            o
         })
         .collect()
 }

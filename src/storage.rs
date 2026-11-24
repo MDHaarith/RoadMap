@@ -33,14 +33,18 @@ impl App {
         let _guard = self.guard();
         let mut c = self.config();
         let base = string(&b["base"]).trim().to_string();
-        if base != "codex" && !matches(r"^https?://", &base) {
-            return Err(Error::bad("Base URL must start with http:// or https://, or be the word codex."));
+        if !crate::ai::named_base(&base) && !matches(r"^https?://", &base) {
+            return Err(Error::bad(crate::ai::BASE_RULE));
         }
         remember_provider(&mut c);
+        let host = |b: &str| b.split("://").nth(1).unwrap_or(b).split('/').next().unwrap_or(b).to_ascii_lowercase();
         if c["base"] != base.as_str() && c["providers"][&base].is_object() {
-            // A service set up before keeps its key, so switching back needs no new paste. A new address keeps the current key, as when fixing a typo.
+            // A service set up before keeps its key, so switching back needs no new paste.
             let key = c["providers"][&base]["key"].clone();
             c["key"] = key;
+        } else if host(&string(&c["base"])) != host(&base) {
+            // A new address on the same host keeps the key, as when fixing a typo; another service never gets it.
+            c["key"] = json!("");
         }
         c["base"] = json!(base);
         c["model"] = json!(b.get("model").map(text).unwrap_or_default().trim());
@@ -64,7 +68,7 @@ impl App {
         remember_provider(&mut c);
         if !base.is_empty() && c["base"] != base.as_str() {
             let saved = c["providers"][&base].clone();
-            if base != "codex" && !saved.is_object() {
+            if !crate::ai::named_base(&base) && !saved.is_object() {
                 return Err(Error::bad("That AI service is not set up. Add it in Settings first."));
             }
             c["base"] = json!(base);
@@ -251,14 +255,55 @@ impl App {
         all[cap(lid, 20)] = json!(&ms[start..]);
         let _ = self.write_side(&name, &all);
     }
-    pub(crate) fn count(&self, input: u64, output: u64) {
+    /// Adds one AI call to usage.json: the totals, its model, and the roadmap the thread's meter names.
+    pub(crate) fn count(&self, service: &str, model: &str, input: u64, cached: u64, output: u64) {
         let _meter = self.meter.lock().unwrap_or_else(|e| e.into_inner());
-        let u = self.read_side("usage.json");
-        let n = |k: &str| u[k].as_u64().unwrap_or(0);
-        let _ = self.write_side(
-            "usage.json",
-            &json!({"in":n("in")+input,"out":n("out")+output,"calls":n("calls")+1,"since":u["since"].as_i64().unwrap_or(self.today())}),
-        );
+        let mut u = self.read_side("usage.json");
+        if !u.is_object() {
+            u = json!({});
+        }
+        let add = |t: &mut Value| {
+            for (k, n) in [("in", input), ("cached", cached), ("out", output), ("calls", 1)] {
+                t[k] = json!(t[k].as_u64().unwrap_or(0) + n);
+            }
+        };
+        add(&mut u);
+        if u["since"].as_i64().is_none() {
+            u["since"] = json!(self.today());
+        }
+        let model = if model.is_empty() { "unknown" } else { model };
+        add(&mut u["models"][model]);
+        u["models"][model]["service"] = json!(service);
+        let today = self.today();
+        add(&mut u["days"][today.to_string()][model]);
+        // A year of days is plenty for the usage page.
+        if let Some(days) = u["days"].as_object_mut() {
+            days.retain(|d, _| d.parse::<i64>().is_ok_and(|d| d > today - 366));
+        }
+        let (id, phase) = crate::ai::meter();
+        if !id.is_empty() {
+            add(&mut u["roadmaps"][&id][phase][model]);
+        }
+        let _ = self.write_side("usage.json", &u);
+    }
+    /// usage.json with each roadmap's title; a roadmap deleted since keeps its numbers without a title.
+    pub(crate) fn usage(&self) -> Value {
+        let mut u = self.read_side("usage.json");
+        for c in self.courses().unwrap_or_default() {
+            if let Some(r) = u["roadmaps"].get_mut(string(&c["id"])) {
+                r["title"] = c["title"].clone();
+            }
+        }
+        u
+    }
+    /// A new roadmap's id replaces the draft key its placement, blueprint and writing were counted under.
+    pub(crate) fn claim_usage(&self, draft: &str, id: &str) {
+        let _meter = self.meter.lock().unwrap_or_else(|e| e.into_inner());
+        let mut u = self.read_side("usage.json");
+        if let Some(r) = u["roadmaps"].as_object_mut().and_then(|r| r.remove(draft)) {
+            u["roadmaps"][id] = r;
+            let _ = self.write_side("usage.json", &u);
+        }
     }
     fn out_file(&self, title: &str, ext: &str) -> PathBuf {
         let out = if self.home.join("Downloads").is_dir() {
@@ -291,6 +336,7 @@ impl App {
                 .map(|l| l["id"].clone())
                 .unwrap_or(json!("1.1"));
             c.as_object_mut().unwrap().remove("changes");
+            c.as_object_mut().unwrap().remove("walkthrough");
             c["level"] = json!("");
             c["state"] = json!({"checks":{},"done":{},"notes":{},"last":first});
         }
@@ -512,6 +558,9 @@ impl App {
         };
         let mut c = json!({"id":random_hex(6)?,"prompt":cap(&string(&d["prompt"]),2000),"level":cap(&string(&d["level"]),3000),"folder":null,"title":cap(&if truth(&d["title"]){text(&d["title"])}else{"Imported roadmap".into()},200),"summary":cap(&string(&d["summary"]),600),"phases":phases,"state":state});
         if let Some(plan) = d.get("blueprint") { c["blueprint"] = crate::ai::clean_blueprint(plan)?; }
+        if let Ok(report) = serde_json::from_value::<crate::ai::Walkthrough>(d["walkthrough"].clone()) {
+            c["walkthrough"] = json!(report);
+        }
         if let Some(history) = d["changes"].as_array() {
             c["changes"] = json!(history.iter().map(|x| json!({"day":x["day"].as_i64(),"note":cap(&string(&x["note"]),600),"added":strs(&x["added"],300),"changed":strs(&x["changed"],300),"dropped":strs(&x["dropped"],300)})).collect::<Vec<_>>());
         }
