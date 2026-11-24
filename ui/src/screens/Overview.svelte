@@ -7,6 +7,7 @@
   import type { Course, Blueprint, PlanPreview, OfflineStatus, Activity, Mistake } from '../lib/types';
   import Ring from '../components/Ring.svelte';
   import BlueprintFields from '../components/BlueprintFields.svelte';
+  import LearnerWalkthrough from '../components/LearnerWalkthrough.svelte';
   import PlanOptions from '../components/PlanOptions.svelte';
   import VideoPrefs from '../components/VideoPrefs.svelte';
   import LessonActions from '../components/LessonActions.svelte';
@@ -193,6 +194,7 @@
       <p class="goal">{c.summary}</p>
     </div>
     <div class="progress-line"><Progress {n} total={ls.length} wide={false} /><span>{n} of {ls.length} lessons complete · {ls.length ? Math.round(n / ls.length * 100) : 0}%</span></div>
+    <LearnerWalkthrough {c} />
     {#if tabbed}<div class="stage-nav" role="tablist" aria-label="Stages" tabindex="-1" bind:this={tabsEl} onkeydown={stageKeys}>{#each c.stages! as st, i}<button type="button" role="tab" id={`stage-tab-${i}`} aria-selected={i === cur} tabindex={i === cur ? 0 : -1} title={`Stage ${i + 1}: ${st.title} · ${stageDoneAll(i) ? 'Complete' : i === nextStage ? 'In progress' : 'Not started'}`} onclick={() => pickStage(i)}><i class:on={i === nextStage && !complete} class:done={stageDoneAll(i)} aria-hidden="true"></i><span>Stage {i + 1}{c.stages!.length <= 4 || i === cur ? ` · ${st.title.replace(/^(stage|month|week|phase)\s*\d+\s*[:·.–—-]\s*/i, '')}` : ''}</span></button>{/each}</div>{/if}
   {#if appState.adapting}<Waiting skeleton="plan" inline title="Preparing a recommendation from your results. This can take a minute." />{/if}
   {#if bulk?.text || bulk?.error}<div class="row bulk-row">{#if bulk?.text}{#key bulk.text}<Waiting skeleton="plan" inline title={`${bulk.text}. Each phase takes about a minute.`} />{/key}<button class="btn secondary sm" id="stop-writing" disabled={bulk.stop} onclick={() => { if (bulk) bulk.stop = true; }}><BusyLabel busy={bulk.stop} idle="Stop" label="Stopping after this phase…" /></button>{/if}{#if bulk?.error}<p class="err">{bulk.error}</p>{/if}</div>{/if}

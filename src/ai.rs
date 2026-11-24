@@ -1,4 +1,6 @@
 mod milestone;
+mod walkthrough;
+pub(crate) use walkthrough::Walkthrough;
 pub(crate) use milestone::{clean_blueprint, clean_checkpoint, clean_portfolio};
 use crate::*;
 use crate::{

@@ -291,6 +291,7 @@ impl App {
                 .map(|l| l["id"].clone())
                 .unwrap_or(json!("1.1"));
             c.as_object_mut().unwrap().remove("changes");
+            c.as_object_mut().unwrap().remove("walkthrough");
             c["level"] = json!("");
             c["state"] = json!({"checks":{},"done":{},"notes":{},"last":first});
         }
@@ -512,6 +513,9 @@ impl App {
         };
         let mut c = json!({"id":random_hex(6)?,"prompt":cap(&string(&d["prompt"]),2000),"level":cap(&string(&d["level"]),3000),"folder":null,"title":cap(&if truth(&d["title"]){text(&d["title"])}else{"Imported roadmap".into()},200),"summary":cap(&string(&d["summary"]),600),"phases":phases,"state":state});
         if let Some(plan) = d.get("blueprint") { c["blueprint"] = crate::ai::clean_blueprint(plan)?; }
+        if let Ok(report) = serde_json::from_value::<crate::ai::Walkthrough>(d["walkthrough"].clone()) {
+            c["walkthrough"] = json!(report);
+        }
         if let Some(history) = d["changes"].as_array() {
             c["changes"] = json!(history.iter().map(|x| json!({"day":x["day"].as_i64(),"note":cap(&string(&x["note"]),600),"added":strs(&x["added"],300),"changed":strs(&x["changed"],300),"dropped":strs(&x["dropped"],300)})).collect::<Vec<_>>());
         }

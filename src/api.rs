@@ -358,9 +358,15 @@ impl App {
                 // A long roadmap is saved as an outline: write its first phase now so the learner can start.
                 // If that fails, the lesson page asks again when it is opened.
                 if truth(&first["stub"]) {
-                    return Ok(self.expand(&cid, &first["id"]).unwrap_or(c));
+                    c = self.expand(&cid, &first["id"]).unwrap_or(c);
+                } else {
+                    self.prefetch(cid.clone());
                 }
-                self.prefetch(cid);
+                // Keep the finished course usable when the separate reviewer is unavailable.
+                match self.learner_walkthrough(&cid, "") {
+                    Ok(report) => c["walkthrough"] = report,
+                    Err(e) => eprintln!("learner walkthrough failed: {e}"),
+                }
                 return Ok(c);
             }
             ("POST", "api/run") => {
@@ -430,7 +436,7 @@ impl App {
             _ => {}
         }
         let re = regex(
-            r"^api/courses/([0-9a-f]{12})(/blueprint|/milestone|/notes|/state|/videos|/video-names|/practice|/paused|/adapt|/revise|/expand|/export|/summary|/setup|/work|/edit|/apply|/prefs|/chat|/exam|/cards|/check|/offline)?$",
+            r"^api/courses/([0-9a-f]{12})(/walkthrough|/blueprint|/milestone|/notes|/state|/videos|/video-names|/practice|/paused|/adapt|/revise|/expand|/export|/summary|/setup|/work|/edit|/apply|/prefs|/chat|/exam|/cards|/check|/offline)?$",
         );
         let m = re.captures(path).ok_or_else(Error::missing)?;
         let cid = &m[1];
@@ -567,6 +573,7 @@ impl App {
                 Ok(latest)
             }
             ("POST", "/milestone") => self.milestone(cid,b),
+            ("POST", "/walkthrough") => self.learner_walkthrough(cid, &string(&b["additional"])),
             ("POST", "/adapt") => self.adapt(cid),
             ("POST", "/revise") => {
                 let ask = cap(b.get("ask").map(text).unwrap_or_default().trim(), 600);

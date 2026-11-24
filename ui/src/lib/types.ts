@@ -20,7 +20,11 @@ export interface Blueprint { challenge: string; criteria: string; milestones: st
 export interface Attempt { mode: 'practice' | 'independent'; task: string; work: string; evidence: string; improvement: string; next: string }
 export interface Portfolio { attempts: Attempt[]; challenge?: string; version: number }
 export interface CourseState { portfolio?: Record<string, Portfolio>; checks: Record<string, boolean>; done: Record<string, boolean>; notes: Record<string, string>; quiz: Record<string, Score>; code: Record<string, string>; last: string; exams?: Record<number, Score>; stageOpen?: Record<number, boolean>; have?: Record<number, boolean>; tests?: Record<string, { ok: boolean; runs: number }> }
-export interface Course { blueprint?: Blueprint; prefs?: VideoPrefs; id: string; title: string; summary: string; prompt: string; phases: Phase[]; state: CourseState; stages?: { title: string; blurb?: string }[]; folder?: string; work?: string; changes?: { changed?: string[]; note: string; added: string[]; dropped: string[] }[]; needs?: { name: string; why?: string; kind: string; command?: string }[]; chats?: Record<string, Message[]>; offline?: boolean; saved_videos?: string[] }
+export interface Walkthrough {
+  date: string; outlines: number; additional: string; perspective: string;
+  findings: { lesson: string; title: string; quote: string; difficulty: string; change: string }[];
+}
+export interface Course { walkthrough?: Walkthrough; blueprint?: Blueprint; prefs?: VideoPrefs; id: string; title: string; summary: string; prompt: string; phases: Phase[]; state: CourseState; stages?: { title: string; blurb?: string }[]; folder?: string; work?: string; changes?: { changed?: string[]; note: string; added: string[]; dropped: string[] }[]; needs?: { name: string; why?: string; kind: string; command?: string }[]; chats?: Record<string, Message[]>; offline?: boolean; saved_videos?: string[] }
 export interface LibraryCourse { id: string; title: string; summary: string; total: number; done: number; paused?: boolean; project?: boolean; next?: { id: string; title: string } }
 export interface ReviewItem extends Quiz { course: string; lesson: string; i: string | number; roadmap: string; lesson_title: string; kind?: string; title?: string; prompt?: string; starter?: string; back?: string }
 export interface ReviewData { count: number; questions: ReviewItem[] }

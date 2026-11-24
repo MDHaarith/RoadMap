@@ -77,6 +77,11 @@ impl FakeAI {
                 );
                 let text = if system.contains("Design an editable course blueprint") {
                     json!({"challenge":"Deliver the project","criteria":"Justify the result","milestones":"Produce an artifact and check it","diagnostic":"Explain your starting approach"}).to_string()
+                } else if system.contains("Walk through this roadmap as the particular learner") {
+                    let brief: Value = serde_json::from_str(user.split("\nAdditional learner context:").next().unwrap()).unwrap();
+                    let first = &brief["phases"][0]["lessons"][0];
+                    let quote = if user.ends_with("invalid citation fixture") { json!("An invented step") } else { first["instructions"]["title"].clone() };
+                    json!({"perspective":"I am starting from the experience in my placement answers.","findings":[{"lesson":first["id"],"quote":quote,"difficulty":"I need an example before I can try this.","change":"Show a worked example."}]}).to_string()
                 } else if system.contains("Audit the generated course") {
                     json!({"checkpoints":[{"lesson":"1.1","preparation":"Gather inputs","task":"Deliver the project","criteria":"Justify the result"}]}).to_string()
                 } else if system.contains("Create one fresh independent") {
@@ -436,6 +441,7 @@ fn python_spec_end_to_end() {
     );
     assert_eq!(status, 200, "{c}");
     assert_eq!(c["title"], "Bake bread");
+    assert_eq!(c["walkthrough"]["findings"][0]["lesson"], "1.1");
     assert_eq!(
         lessons(&c).map(|l| string(&l["id"])).collect::<Vec<_>>(),
         ["1.1"]
@@ -2406,6 +2412,37 @@ fn big_library_timing() {
     time("progress page", &|| { app.stats().unwrap(); });
     time("open one roadmap (mark_known)", &|| { app.mark_known(app.load("000000000000").unwrap()).unwrap(); });
     time("library stamp", &|| { app.library_stamp(); });
+}
+
+#[test]
+fn learner_walkthrough_uses_the_current_learner_and_cites_visible_steps() {
+    let tmp = tempfile::tempdir().unwrap();
+    let app = isolated_app(tmp.path());
+    let ai = FakeAI::new();
+    app.write_config(&json!({"base":ai.base,"model":"m","key":"sk-test"})).unwrap();
+    let course = json!({"id":"123456789abc","prompt":"Give a speech","level":"First talk; ten minutes a day",
+        "title":"Public speaking","needs":[{"name":"Microphone"}],"phases":[{"title":"Practice","lessons":[
+            {"id":"1.1","title":"Opening","tasks":["Record an opening line"],"done":["Hear the first word"]},
+            {"id":"1.2","title":"Rehearsal","stub":true,"goal":"Try a longer talk"}]}],
+        "state":{"checks":{},"notes":{"1.1":"private note"},"done":{},"quiz":{"1.1":{"score":1,"total":3}}}});
+    app.save(&course).unwrap();
+    let run = |extra: &str| app.route("POST","api/courses/123456789abc/walkthrough",&json!({"additional":extra}));
+    let report = run("Shared rehearsal space").unwrap();
+    let request = string(&ai.last()["messages"][1]["content"]);
+    for fact in ["First talk; ten minutes a day","Shared rehearsal space","Record an opening line","Hear the first word","Microphone","\"outline_only\":true","\"score\":1"] {
+        assert!(request.contains(fact), "{request}");
+    }
+    assert!(!request.contains("private note"));
+    assert_eq!(report["outlines"], 1);
+    assert!(run("invalid citation fixture").is_err());
+    let saved = app.load("123456789abc").unwrap();
+    assert_eq!(saved["walkthrough"], report);
+    assert_eq!(saved["state"], course["state"]);
+    let file = app.export_course(&saved, false).unwrap();
+    assert_eq!(app.import_course(file["path"].as_str().unwrap()).unwrap()["walkthrough"], report);
+    let file = app.export_course(&saved, true).unwrap();
+    let template = fs::read_to_string(file["path"].as_str().unwrap()).unwrap();
+    assert!(!template.contains("Shared rehearsal space"));
 }
 
 #[test]

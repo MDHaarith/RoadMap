@@ -119,7 +119,7 @@
         units.forEach((u, i) => steps.push(i < units.length - 1 ? { text: `Wrote ${unitName} ${i + 1}: ${u.title}`, state: 'done' } : { text: `Writing ${unitName} ${i + 1}${u.title ? ': ' + u.title : ''}`, state: 'now' }));
       }
     }
-    steps.push({ text: 'Check milestones and open your roadmap', state: 'next' }, { text: 'Find videos for every lesson, in the background', state: 'next' });
+    steps.push({ text: 'Check milestones and walk through the lessons from your starting point', state: 'next' }, { text: 'Find videos for every lesson, in the background', state: 'next' });
     return steps;
   });
   function editGoal() { seq++; go(() => { blueprint = undefined; building = false; waiting = false; drafting = false; error = ''; }, 'backward'); void tick().then(() => promptEl?.focus()); }
