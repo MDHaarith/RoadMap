@@ -1,84 +1,99 @@
-name: Signed release
-# Runs when CI passes on a push to master (a merged PR) and publishes the
-# version in tauri.conf.json to MDHaarith/RoadMap-releases, once per version.
+name: Release
+# Publishes the version in tauri.conf.json to MDHaarith/RoadMap-releases for Linux, Windows,
+# or both. Runs when a pull request into master is merged with the label "release: linux"
+# and/or "release: windows" (CI already passed on the pull request, so it does not run again),
+# or by hand from the Actions tab with the two tick boxes.
 on:
-  workflow_run:
-    workflows: [CI]
-    types: [completed]
+  pull_request:
+    types: [closed]
     branches: [master]
   workflow_dispatch:
+    inputs:
+      linux:
+        description: Release Linux (AppImage, deb, rpm)
+        type: boolean
+      windows:
+        description: Release Windows (installer)
+        type: boolean
 permissions:
   contents: read
 concurrency:
   group: release
   cancel-in-progress: false
 jobs:
-  check:
-    if: github.event_name == 'workflow_dispatch' || (github.event.workflow_run.conclusion == 'success' && github.event.workflow_run.event == 'push')
-    runs-on: ubuntu-22.04
+  plan:
+    if: github.event_name == 'workflow_dispatch' || github.event.pull_request.merged
+    runs-on: ubuntu-latest
     outputs:
-      version: ${{ steps.version.outputs.version }}
-      release: ${{ steps.version.outputs.release }}
+      version: ${{ steps.plan.outputs.version }}
+      ref: ${{ steps.plan.outputs.ref }}
+      matrix: ${{ steps.plan.outputs.matrix }}
     steps:
       - uses: actions/checkout@v4
         with:
-          ref: ${{ github.event.workflow_run.head_sha || github.sha }}
+          ref: ${{ github.event.pull_request.merge_commit_sha || github.sha }}
       - run: python3 scripts/release-check.py
-      - id: version
+      - id: plan
         env:
           GH_TOKEN: ${{ secrets.RELEASES_TOKEN }}
+          LABELS: ${{ toJSON(github.event.pull_request.labels.*.name) }}
+          LINUX: ${{ inputs.linux }}
+          WINDOWS: ${{ inputs.windows }}
+          REF: ${{ github.event.pull_request.merge_commit_sha || github.sha }}
         run: |
-          version=$(python3 -c "import json; print(json.load(open('tauri.conf.json'))['version'])")
-          echo "version=$version" >> "$GITHUB_OUTPUT"
-          if gh release view "v$version" --repo MDHaarith/RoadMap-releases > /dev/null 2>&1; then
-            echo "v$version is already released; bump the version to release again."
-            echo "release=false" >> "$GITHUB_OUTPUT"
-          else
-            echo "release=true" >> "$GITHUB_OUTPUT"
+          if [ "$GITHUB_EVENT_NAME" = pull_request ]; then
+            LINUX=$(jq 'index("release: linux") != null' <<<"$LABELS")
+            WINDOWS=$(jq 'index("release: windows") != null' <<<"$LABELS")
           fi
+          version=$(jq -r .version tauri.conf.json)
+          # A platform already in this version's release is skipped; bump the version to release it again.
+          assets=$(gh release view "v$version" --repo MDHaarith/RoadMap-releases --json assets --jq '.assets[].name' 2>/dev/null || true)
+          include='[]'
+          if [ "$LINUX" = true ]; then
+            if grep -q '\.AppImage$' <<<"$assets"; then echo "Linux v$version is already released."
+            else include=$(jq -c '. + [{"platform":"linux","os":"ubuntu-22.04"}]' <<<"$include"); fi
+          fi
+          if [ "$WINDOWS" = true ]; then
+            if grep -q 'setup\.exe$' <<<"$assets"; then echo "Windows v$version is already released."
+            else include=$(jq -c '. + [{"platform":"windows","os":"windows-latest"}]' <<<"$include"); fi
+          fi
+          [ "$include" = '[]' ] && echo "Nothing to release: no release label (or tick box), or already released."
+          { echo "version=$version"; echo "ref=$REF"; echo "matrix={\"include\":$include}"; } >> "$GITHUB_OUTPUT"
   build:
-    needs: check
-    if: needs.check.outputs.release == 'true'
+    needs: plan
+    if: needs.plan.outputs.matrix != '{"include":[]}'
     strategy:
       fail-fast: false
-      matrix:
-        include:
-          - os: windows-latest
-          - os: ubuntu-22.04
-            bundles: appimage,deb,rpm
+      matrix: ${{ fromJSON(needs.plan.outputs.matrix) }}
     runs-on: ${{ matrix.os }}
+    env:
+      TAURI_SIGNING_PRIVATE_KEY: ${{ secrets.TAURI_SIGNING_PRIVATE_KEY }}
+      # The key has no password; an empty value stops the signer from asking for one.
+      TAURI_SIGNING_PRIVATE_KEY_PASSWORD: ''
+      VERSION: ${{ needs.plan.outputs.version }}
     steps:
       - uses: actions/checkout@v4
         with:
-          ref: ${{ github.event.workflow_run.head_sha || github.sha }}
+          ref: ${{ needs.plan.outputs.ref }}
       - uses: actions/setup-node@v4
         with:
           node-version: '24'
       - name: Rust 1.92
         run: rustup toolchain install 1.92.0 --profile minimal && rustup default 1.92.0
       - name: Linux dependencies
-        if: runner.os == 'Linux'
+        if: matrix.platform == 'linux'
         run: |
           sudo apt-get update
           sudo apt-get install -y libwebkit2gtk-4.1-dev libgtk-3-dev libssl-dev libayatana-appindicator3-dev librsvg2-dev patchelf rpm
       - run: npm --prefix ui ci
       - run: npm --prefix ui run build
-      - uses: tauri-apps/tauri-action@v1
-        if: runner.os == 'Linux'
-        env:
-          TAURI_SIGNING_PRIVATE_KEY: ${{ secrets.TAURI_SIGNING_PRIVATE_KEY }}
-          TAURI_SIGNING_PRIVATE_KEY_PASSWORD: ${{ secrets.TAURI_SIGNING_PRIVATE_KEY_PASSWORD }}
-        with:
-          tauriScript: node ui/node_modules/@tauri-apps/cli/tauri.js
-          args: --config tauri.release.conf.json --bundles ${{ matrix.bundles }} -- --locked
+      - name: Linux packages
+        if: matrix.platform == 'linux'
+        run: node ui/node_modules/@tauri-apps/cli/tauri.js build --config tauri.release.conf.json --bundles appimage,deb,rpm -- --locked
       # Inno Setup instead of NSIS: NSIS loads unsigned plugin DLLs that Smart App Control blocks.
       - name: Windows installer
-        if: runner.os == 'Windows'
+        if: matrix.platform == 'windows'
         shell: pwsh
-        env:
-          TAURI_SIGNING_PRIVATE_KEY: ${{ secrets.TAURI_SIGNING_PRIVATE_KEY }}
-          TAURI_SIGNING_PRIVATE_KEY_PASSWORD: ${{ secrets.TAURI_SIGNING_PRIVATE_KEY_PASSWORD }}
-          VERSION: ${{ needs.check.outputs.version }}
         run: |
           node ui/node_modules/@tauri-apps/cli/tauri.js build --no-bundle -- --locked
           if ($LASTEXITCODE) { exit $LASTEXITCODE }
@@ -89,81 +104,50 @@ jobs:
           if ($LASTEXITCODE) { exit $LASTEXITCODE }
       - uses: actions/upload-artifact@v4
         with:
-          name: signed-${{ runner.os }}
+          name: signed-${{ matrix.platform }}
           path: |
             target/release/Roadmap_*_x64-setup.exe
             target/release/Roadmap_*_x64-setup.exe.sig
-            target/release/bundle/**/*.AppImage
-            target/release/bundle/**/*.deb
-            target/release/bundle/**/*.rpm
-            target/release/bundle/**/*.sig
-          if-no-files-found: error
-      - uses: actions/upload-artifact@v4
-        if: runner.os == 'Windows'
-        with:
-          name: store-exe
-          path: target/release/roadmap-app.exe
+            target/release/bundle/appimage/*.AppImage
+            target/release/bundle/appimage/*.AppImage.sig
+            target/release/bundle/deb/*.deb
+            target/release/bundle/deb/*.deb.sig
+            target/release/bundle/rpm/*.rpm
+            target/release/bundle/rpm/*.rpm.sig
           if-no-files-found: error
   publish:
-    needs: [check, build]
-    runs-on: ubuntu-22.04
+    needs: [plan, build]
+    runs-on: ubuntu-latest
+    env:
+      GH_TOKEN: ${{ secrets.RELEASES_TOKEN }}
+      REPO: MDHaarith/RoadMap-releases
+      TAG: v${{ needs.plan.outputs.version }}
     steps:
       - uses: actions/checkout@v4
         with:
-          ref: ${{ github.event.workflow_run.head_sha || github.sha }}
+          ref: ${{ needs.plan.outputs.ref }}
       - uses: actions/download-artifact@v4
         with:
           pattern: signed-*
           path: artifacts
+      # Adding a platform to a version that already has the other one keeps both in latest.json.
+      - run: gh release download "$TAG" --repo "$REPO" --pattern latest.json --output old-latest.json || true
       - run: python3 scripts/release-manifest.py
-      - name: Publish complete release
-        env:
-          GH_TOKEN: ${{ secrets.RELEASES_TOKEN }}
-          TAG: v${{ needs.check.outputs.version }}
+      - name: Publish the release
         run: |
-          gh release create "$TAG" --repo MDHaarith/RoadMap-releases --target main --draft --title "Roadmap $TAG" --notes "Download the installer for your system."
-          find artifacts -type f -print0 | xargs -0 gh release upload "$TAG" --repo MDHaarith/RoadMap-releases
-          gh release upload "$TAG" latest.json --repo MDHaarith/RoadMap-releases
-          gh release edit "$TAG" --repo MDHaarith/RoadMap-releases --draft=false --latest
-  # Packages the Windows build as MSIX and submits it to the Microsoft Store, which
-  # signs it and updates Store installs. Skipped until MSSTORE_PRODUCT_ID is set.
-  store:
-    needs: [check, publish]
-    if: vars.MSSTORE_PRODUCT_ID != ''
-    runs-on: windows-latest
-    steps:
-      - uses: actions/checkout@v4
-        with:
-          ref: ${{ github.event.workflow_run.head_sha || github.sha }}
-      - uses: actions/download-artifact@v4
-        with:
-          name: store-exe
-          path: msix
-      - name: Package MSIX
-        shell: pwsh
-        env:
-          IDENTITY_NAME: ${{ vars.MSIX_IDENTITY_NAME }}
-          PUBLISHER: ${{ vars.MSIX_PUBLISHER }}
-          PUBLISHER_DISPLAY_NAME: ${{ vars.MSIX_PUBLISHER_DISPLAY_NAME }}
-          VERSION: ${{ needs.check.outputs.version }}
+          new=false
+          if ! gh release view "$TAG" --repo "$REPO" > /dev/null 2>&1; then
+            gh release create "$TAG" --repo "$REPO" --target main --draft --title "Roadmap $TAG" --notes "Download the installer for your system."
+            new=true
+          fi
+          find artifacts -type f -print0 | xargs -0 gh release upload "$TAG" --repo "$REPO" --clobber
+          gh release upload "$TAG" latest.json --repo "$REPO" --clobber
+          if [ "$new" = true ]; then gh release edit "$TAG" --repo "$REPO" --draft=false --latest; fi
+      # The app reads updater/<linux|windows>.json, so each platform moves on its own version.
+      # Written after the release is public, so clients never see links to a draft.
+      - name: Point the app updater at this release
         run: |
-          if (-not ($env:IDENTITY_NAME -and $env:PUBLISHER -and $env:PUBLISHER_DISPLAY_NAME)) { throw 'Set the MSIX_* repo variables from Partner Center > Product identity' }
-          # The Store requires the fourth version part to be 0.
-          $m = (Get-Content msix/AppxManifest.xml -Raw).Replace('{{IDENTITY_NAME}}', $env:IDENTITY_NAME).Replace('{{PUBLISHER}}', $env:PUBLISHER).Replace('{{PUBLISHER_DISPLAY_NAME}}', $env:PUBLISHER_DISPLAY_NAME).Replace('{{VERSION}}', "$env:VERSION.0")
-          Set-Content msix/AppxManifest.xml $m -Encoding utf8
-          $makeappx = Get-ChildItem "${env:ProgramFiles(x86)}\Windows Kits\10\bin\*\x64\makeappx.exe" | Sort-Object FullName | Select-Object -Last 1
-          & $makeappx.FullName pack /o /d msix /p "Roadmap_$env:VERSION.msix"
-          if ($LASTEXITCODE) { exit $LASTEXITCODE }
-      - uses: actions/upload-artifact@v4
-        with:
-          name: store-msix
-          path: Roadmap_*.msix
-          if-no-files-found: error
-      - uses: microsoft/setup-msstore-cli@v1
-      - name: Submit to Microsoft Store
-        shell: pwsh
-        run: |
-          msstore reconfigure --tenantId "${{ secrets.MSSTORE_TENANT_ID }}" --sellerId "${{ secrets.MSSTORE_SELLER_ID }}" --clientId "${{ secrets.MSSTORE_CLIENT_ID }}" --clientSecret "${{ secrets.MSSTORE_CLIENT_SECRET }}"
-          if ($LASTEXITCODE) { exit $LASTEXITCODE }
-          msstore publish -v -i "Roadmap_${{ needs.check.outputs.version }}.msix" -id "${{ vars.MSSTORE_PRODUCT_ID }}"
-          if ($LASTEXITCODE) { exit $LASTEXITCODE }
+          gh release view updater --repo "$REPO" > /dev/null 2>&1 || gh release create updater --repo "$REPO" --target main --prerelease --latest=false --title "Update manifests" --notes "The app reads linux.json and windows.json here to find updates. Do not delete."
+          for f in linux.json windows.json; do
+            if [ -f "$f" ]; then gh release upload updater "$f" --repo "$REPO" --clobber; fi
+          done
