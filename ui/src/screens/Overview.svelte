@@ -176,7 +176,7 @@
 <div class="overview stage-view">
   <div class="overview-main sv-main">
     <div class="course-head">
-      <a class="back-map" href="#/"><Icon name="back" /> Your library</a>
+      <a class="back-map" href="#/"><Icon name="back" /> Back</a>
       <h1>{c.title}</h1>
       <div class="menu" class:open={menuOpen} bind:this={menuEl}><button type="button" class="btn secondary sm menu-trigger" aria-haspopup="true" aria-expanded={menuOpen} aria-label="More roadmap actions" onclick={() => menuOpen = !menuOpen}><Icon name="more" /> More</button>{#if menuOpen}<div class="menu-list stagger" transition:drop>
         <button aria-expanded={prefsOpen} aria-controls="video-prefs" onclick={() => act(async () => { prefsOpen = !prefsOpen; await tick(); document.querySelector<HTMLElement>(prefsOpen ? '#video-prefs h2' : '.course-head .menu-trigger')?.focus(); })}>Video preferences for this roadmap</button>

@@ -2,7 +2,7 @@
   import { onMount, tick } from 'svelte';
   import { openUrl } from '@tauri-apps/plugin-opener';
   import { api } from './lib/api';
-  import { appState, route, toast, message, dispose, flushSave } from './lib/state.svelte';
+  import { appState, route, toast, message, dispose, flushSave, hashChanged, goBack, redirect } from './lib/state.svelte';
   import { href } from './lib/format';
   import type { Settings } from './lib/types';
   import { updates, startUpdates } from './lib/updates.svelte';
@@ -52,12 +52,15 @@
   });
   function externalLink(e: MouseEvent) {
     const a = (e.target as Element).closest<HTMLAnchorElement>('a[href]');
+    // Back links return to the screen you came from; their href is only the fallback when the app has no earlier screen.
+    // New roadmap is not a hash route, so its cancel link keeps going to the library.
+    if (a?.classList.contains('back-map') && a.id !== 'cancel-new' && e.button === 0) { e.preventDefault(); goBack(a.getAttribute('href')!); return; }
     // In `tauri dev` the app itself is served over http, so its own links must stay in the window.
     if (!a || !/^https?:/i.test(a.href) || a.origin === location.origin) return;
     e.preventDefault(); void openUrl(a.href).catch(error => toast(message(error)));
   }
   let online = $state(navigator.onLine);
-  $effect(() => { if (appState.screen === 'lesson' && appState.course && !appState.current) location.hash = href(appState.course.id); });
+  $effect(() => { if (appState.screen === 'lesson' && appState.course && !appState.current) redirect(href(appState.course.id)); });
   // After a route change the clicked link is gone and focus falls to the page; start keyboard and screen-reader users at the new page title.
   $effect(() => {
     if (appState.screen === 'loading') return;
@@ -69,7 +72,7 @@
     });
   });
 </script>
-<svelte:window onhashchange={() => void route()} ononline={() => online = true} onoffline={() => online = false} />
+<svelte:window onhashchange={hashChanged} ononline={() => online = true} onoffline={() => online = false} />
 <svelte:document onclick={externalLink} onauxclick={e => { if (e.button === 1) externalLink(e); }} />
 <TopBar />
 {#if appState.toast}<p id="toast" class="err" role="alert" transition:toastMotion>{appState.toast}</p>{/if}
@@ -90,8 +93,8 @@
     {:else if appState.screen === 'import'}<Import />
     {:else if appState.screen === 'progress'}<Progress />
     {:else if appState.screen === 'usage'}<UsagePage />
-    {:else if appState.screen === 'error'}{@const roadmap = location.hash.startsWith('#/c/')}<div class="wrap narrow screen-enter">{#if roadmap}<a class="back-map" href="#/"><Icon name="back" /> Your library</a>{/if}<div class="page-head"><h1>{roadmap ? 'Could not open this roadmap' : 'Could not open your library'}</h1></div><LoadError what={roadmap ? 'The roadmap could not load.' : 'Your roadmaps could not load.'} error={appState.error} retry={() => void route()} /></div>
-    {:else}<div class="wrap narrow screen-enter"><a class="back-map" href="#/"><Icon name="back" /> Your library</a><div class="page-head"><h1>Your roadmap</h1></div><Waiting inline title="Opening your roadmap" /></div>{/if}
+    {:else if appState.screen === 'error'}{@const roadmap = location.hash.startsWith('#/c/')}<div class="wrap narrow screen-enter">{#if roadmap}<a class="back-map" href="#/"><Icon name="back" /> Back</a>{/if}<div class="page-head"><h1>{roadmap ? 'Could not open this roadmap' : 'Could not open your library'}</h1></div><LoadError what={roadmap ? 'The roadmap could not load.' : 'Your roadmaps could not load.'} error={appState.error} retry={() => void route()} /></div>
+    {:else}<div class="wrap narrow screen-enter"><a class="back-map" href="#/"><Icon name="back" /> Back</a><div class="page-head"><h1>Your roadmap</h1></div><Waiting inline title="Opening your roadmap" /></div>{/if}
   {/key}
 </main>
 <Ideas />

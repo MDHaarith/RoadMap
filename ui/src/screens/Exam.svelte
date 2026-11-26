@@ -1,7 +1,7 @@
 <script lang="ts">
   import { onMount, tick } from 'svelte';
   import { api } from '../lib/api';
-  import { save, message } from '../lib/state.svelte';
+  import { save, message, redirect } from '../lib/state.svelte';
   import { examPool, examReady, stageLessons } from '../lib/progress';
   import { href, clock } from '../lib/format';
   import type { Course, Session, Quiz } from '../lib/types';
@@ -32,7 +32,7 @@
   }
   // Every attempt asks the AI for a new set, sized to the stage, from its lessons and video captions.
   async function exam() {
-    if (!Number.isInteger(stage) || !c.stages?.[stage] || !examReady(c, stage)) { location.hash = href(c.id); return; }
+    if (!Number.isInteger(stage) || !c.stages?.[stage] || !examReady(c, stage)) { redirect(href(c.id)); return; }
     writing = true; error = ''; qs = [];
     try {
       const r = await api<{ questions: ExamQ[] }>('POST', 'api/courses/' + encodeURIComponent(c.id) + '/exam', { stage });
@@ -67,7 +67,7 @@
   }
   const mistakes = $derived('#/mistakes/' + encodeURIComponent(c.id));
 </script>
-<div class="wrap narrow review-wrap screen-enter"><a class="back-map" href={href(c.id)}><Icon name="back" /> {c.title}</a><div class="page-head session-head"><div><div class="kicker">Stage {stage + 1} exam</div><h1>{c.stages?.[stage]?.title}</h1></div>{#if qs.length}<div class="row"><span class="session-count">{started && !s.finished ? `Question ${s.index + 1} of ${qs.length}` : `${qs.length} questions`}</span>{#if started && !s.finished}<span class="timer" class:low={left <= 10} role="timer"><span>Time left</span> <b id="exam-clock">{clock(Math.max(0, left))}</b></span>{/if}</div>{/if}</div>
+<div class="wrap narrow review-wrap screen-enter"><a class="back-map" href={href(c.id)}><Icon name="back" /> Back</a><div class="page-head session-head"><div><div class="kicker">Stage {stage + 1} exam</div><h1>{c.stages?.[stage]?.title}</h1></div>{#if qs.length}<div class="row"><span class="session-count">{started && !s.finished ? `Question ${s.index + 1} of ${qs.length}` : `${qs.length} questions`}</span>{#if started && !s.finished}<span class="timer" class:low={left <= 10} role="timer"><span>Time left</span> <b id="exam-clock">{clock(Math.max(0, left))}</b></span>{/if}</div>{/if}</div>
   {#if writing}<Waiting skeleton="question" title="Writing a new exam for this stage" hint="from its lessons and videos, about a minute" />
   {:else if error}<LoadError what="The exam could not be written." {error} retry={() => void exam()} />{#if pool.length >= 5}<p class="small">Or take it now with the {Math.min(10, pool.length)} questions already saved in this stage’s lessons. <button type="button" class="link" id="exam-saved" onclick={useSaved}>Use saved questions</button></p>{/if}
   {:else if qs.length}{#if !started}<div class="card exam-intro"><h2>{qs.length} questions, one minute each</h2><ul class="facts stagger"><li>{saved ? 'They come from this stage’s lesson quizzes, in a new order.' : 'Written for this stage from its lessons and videos. Each attempt gets a new set.'}</li><li>Score 70% to pass{c.stages?.[stage + 1] ? ' and open Stage ' + (stage + 2) : ''}.</li><li>No notes and no tutor: this shows you what stuck.</li></ul>{#if last}<p class="small">Your best result so far: {last.score} of {last.total}.</p>{/if}<button class="btn big" id="exam-start" onclick={() => { started = true; void focus(); }}>Start the exam <Icon name="arrow" /></button></div>

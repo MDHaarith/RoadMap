@@ -6,9 +6,10 @@ use crate::*;
 const DEFAULT_GOAL: u64 = 3;
 
 impl App {
-    /// Counts `steps` toward today's goal, and `right` of `asked` answers toward the accuracy chart.
-    pub(crate) fn log_activity(&self, steps: u64, right: u64, asked: u64) {
-        if steps == 0 && asked == 0 {
+    /// Counts `steps`, plus each lesson in `done` ("roadmap/lesson") not already counted today, toward today's goal,
+    /// and `right` of `asked` answers toward the accuracy chart. A lesson unticked and ticked again counts once a day.
+    pub(crate) fn log_activity(&self, steps: u64, done: &[String], right: u64, asked: u64) {
+        if steps == 0 && done.is_empty() && asked == 0 {
             return;
         }
         // The usage meter's lock: callers may already hold the roadmap guard, which is not reentrant.
@@ -18,6 +19,16 @@ impl App {
             a["days"] = json!({});
         }
         let day = &mut a["days"][self.today().to_string()];
+        let mut steps = steps;
+        for id in done {
+            if !list(&day["ids"]).contains(&json!(id)) {
+                if !day["ids"].is_array() {
+                    day["ids"] = json!([]);
+                }
+                day["ids"].as_array_mut().unwrap().push(json!(id));
+                steps += 1;
+            }
+        }
         for (k, v) in [("n", steps), ("right", right), ("asked", asked)] {
             day[k] = json!(day[k].as_u64().unwrap_or(0) + v);
         }

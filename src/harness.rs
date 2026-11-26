@@ -183,14 +183,18 @@ pub fn install_opencode() -> std::result::Result<PathBuf, String> {
         return Ok(p);
     }
     use std::io::Read;
-    // shortcut: always the AVX2 build; a CPU without AVX2 needs the "-baseline" download, add it if someone hits that.
+    // The x64 builds need AVX2; older processors get the "-baseline" build.
+    #[cfg(target_arch = "x86_64")]
+    let x64 = if std::arch::is_x86_feature_detected!("avx2") { "x64" } else { "x64-baseline" };
+    #[cfg(not(target_arch = "x86_64"))]
+    let x64 = "x64";
     let target = match (std::env::consts::OS, std::env::consts::ARCH) {
-        ("windows", "x86_64") => "windows-x64.zip",
-        ("windows", "aarch64") => "windows-arm64.zip",
-        ("macos", "x86_64") => "darwin-x64.zip",
-        ("macos", "aarch64") => "darwin-arm64.zip",
-        ("linux", "x86_64") => "linux-x64.tar.gz",
-        ("linux", "aarch64") => "linux-arm64.tar.gz",
+        ("windows", "x86_64") => format!("windows-{x64}.zip"),
+        ("windows", "aarch64") => "windows-arm64.zip".into(),
+        ("macos", "x86_64") => format!("darwin-{x64}.zip"),
+        ("macos", "aarch64") => "darwin-arm64.zip".into(),
+        ("linux", "x86_64") => format!("linux-{x64}.tar.gz"),
+        ("linux", "aarch64") => "linux-arm64.tar.gz".into(),
         _ => return Err("OpenCode has no download for this computer.".into()),
     };
     let url = format!("https://github.com/anomalyco/opencode/releases/latest/download/opencode-{target}");

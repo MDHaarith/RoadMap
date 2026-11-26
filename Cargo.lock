@@ -3185,7 +3185,7 @@ dependencies = [
 
 [[package]]
 name = "roadmap-app"
-version = "1.0.1"
+version = "1.0.2"
 dependencies = [
  "base64 0.22.1",
  "chrono",
@@ -3205,6 +3205,7 @@ dependencies = [
  "tempfile",
  "tiny_http",
  "ureq",
+ "windows-sys 0.61.2",
  "zip",
 ]
 

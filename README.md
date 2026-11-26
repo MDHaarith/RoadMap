@@ -19,7 +19,7 @@ The architecture-specific RPM is written under `dist/`. Cargo downloads the
 versions in `Cargo.lock`, so the container needs network access; crates are not
 vendored. Runtime packages are GTK3, WebKitGTK 4.1, bubblewrap, Bash, and
 the system CA certificates.
-On Linux, other exercise interpreters/compilers are installed on demand through the same Polkit / DNF dialog as before. Sandbox execution and runtime installation return an explicit unsupported error on Windows and macOS. The app downloads its own yt-dlp (and, for saving videos offline, Deno) from their GitHub releases on first use, on every system. Python exercises still use an optional Python
+On Linux, other exercise interpreters/compilers are installed on demand through the same Polkit / DNF dialog as before. On Windows and macOS, exercises run only after the learner turns on “Run exercises on this computer” in Settings, with lighter limits than Linux: a time limit and a 64 MB cap on files written everywhere, and a Job object (512 MB of memory, 64 processes) on Windows. Neither has network or file system walls. The app downloads its own yt-dlp (and, for saving videos offline, Deno) from their GitHub releases on first use, on every system. Python exercises still use an optional Python
 interpreter.
 
 The root crate is also the Tauri app; `tauri.conf.json` points at `ui/dist`. The `api(method, path, body)` command runs the existing routes on a blocking worker. `chat_stream(body, onPiece)` sends tutor pieces over a Tauri channel and returns the final text. Both reject invalid bodies and preserve the 1 MiB limit. Errors serialize as `{ "status": 400, "message": "..." }`. File/folder selection uses native dialogs; window controls and HTTP(S) links use scoped Tauri capabilities.
@@ -54,7 +54,7 @@ The model picker lists models from your AI provider, or the ones your ChatGPT si
 
 ## Windows
 
-Windows users need WebView2 (included with current Windows 10/11), and a ChatGPT account. Exercises are unavailable on Windows.
+Windows users need WebView2 (included with current Windows 10/11), and a ChatGPT account. Exercises need the Settings switch described above.
 
 From Linux, install cargo-xwin and the Rust x86_64-pc-windows-msvc target, then run `make windows`. This compiles both executables and the Tauri frontend without bundling. Linux cannot run the Windows tests or build the Windows installer here; CI runs tests and builds the Inno Setup installer (`windows/roadmap.iss`) on Windows.
 

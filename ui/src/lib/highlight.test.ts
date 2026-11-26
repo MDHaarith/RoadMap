@@ -14,3 +14,13 @@ test('highlight colours C and Python and keeps the text exact', () => {
   const py = highlight("def f(x):\n    return 'it''s' # done", 'python');
   assert.ok(py.includes('<span class="hl-k">def</span> <span class="hl-f">f</span>') && py.includes('<span class="hl-c"># done</span>'));
 });
+
+test('highlight keeps Rust lifetimes and shell heredocs from swallowing code', () => {
+  const rs = highlight("fn f<'a>(s: &'a str) -> char { 'x' } // end", 'rust');
+  assert.ok(rs.includes('<span class="hl-k">&#39;a</span>'));
+  assert.ok(rs.includes('<span class="hl-k">str</span>') === false && rs.includes('<span class="hl-s">&#39;x&#39;</span>'));
+  assert.ok(rs.includes('<span class="hl-c">// end</span>'));
+  const sh = highlight('cat <<EOF\nif not code\nEOF\necho $((1<<2))\nif true; then :; fi', 'bash');
+  assert.ok(sh.includes('<span class="hl-s">&lt;&lt;EOF\nif not code\nEOF</span>'));
+  assert.ok(sh.includes('<span class="hl-k">echo</span>') === false && sh.includes('<span class="hl-k">then</span>'));
+});

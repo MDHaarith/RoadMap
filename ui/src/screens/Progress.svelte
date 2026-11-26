@@ -73,7 +73,7 @@
   });
   let mapNext = $derived(map ? nextLesson(map) : undefined);
 </script>
-<div class="wrap screen-enter progress-page" class:narrow={!stats}><a class="back-map" href="#/"><Icon name="back" /> Your library</a><div class="page-head"><h1>Your progress</h1></div>
+<div class="wrap screen-enter progress-page" class:narrow={!stats}><a class="back-map" href="#/"><Icon name="back" /> Back</a><div class="page-head"><h1>Your progress</h1></div>
   {#if error}<LoadError what="Your progress could not load." {error} retry={load} />{:else if !stats}<Waiting skeleton="rows" inline title="Adding up your progress" />{:else}{@const a = stats.activity}
   <div class="stats">
     <div class="stat"><div class="grow"><p class="kicker">Daily goal</p><strong>{a.done} / {a.goal}</strong><span class="small">steps today</span></div><Ring value={a.done} max={a.goal} label="Daily goal" /></div>

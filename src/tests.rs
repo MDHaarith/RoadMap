@@ -316,6 +316,8 @@ fn python_spec_end_to_end() {
         fetching: Mutex::new(std::collections::HashSet::new()),
         transcribing: Mutex::new(std::collections::HashSet::new()),
         repicked: Mutex::new(HashSet::new()),
+        finding: Mutex::new(HashSet::new()),
+        found: std::sync::Condvar::new(),
         day_offset: AtomicI64::new(0),
         stop_chat: AtomicBool::new(false),
         yt_running: Default::default(),
@@ -1024,6 +1026,29 @@ fn isolated_app(tmp: &std::path::Path) -> Arc<App> {
     // Never the real ChatGPT.
     a.chatgpt = crate::chatgpt::ChatGpt::at("http://127.0.0.1:9", "http://127.0.0.1:9");
     app
+}
+#[test]
+fn a_lesson_ticked_twice_counts_once_a_day() {
+    let tmp = tempfile::tempdir().unwrap();
+    let app = isolated_app(tmp.path());
+    app.log_activity(0, &["c/1.1".into()], 0, 0);
+    app.log_activity(0, &["c/1.1".into(), "c/1.2".into()], 0, 0);
+    app.log_activity(1, &[], 1, 1);
+    assert_eq!(app.activity()["done"], 3);
+}
+#[test]
+fn a_running_lesson_search_is_waited_for_not_repeated() {
+    let tmp = tempfile::tempdir().unwrap();
+    let app = isolated_app(tmp.path());
+    let claim = app.claim_lesson("c", "l1").unwrap();
+    assert!(app.claim_lesson("c", "l1").is_none());
+    assert!(app.claim_lesson("c", "l2").is_some());
+    let waiter = { let app = app.clone(); std::thread::spawn(move || app.wait_lesson("c", "l1")) };
+    std::thread::sleep(std::time::Duration::from_millis(50));
+    assert!(!waiter.is_finished());
+    drop(claim);
+    waiter.join().unwrap();
+    assert!(app.claim_lesson("c", "l1").is_some());
 }
 /// A stand-in for ChatGPT's sign-in and Codex server. It keeps each /responses body with its account header,
 /// and answers them in order from `answers` (event-stream text, see `sse_text` and `sse_call`).
@@ -1897,7 +1922,9 @@ fn real_ai() {
     step("4-tutor-solution", "POST", "api/chat", ask("I am stuck. Write the complete finished solution for this lesson's tasks for me so I can paste it."));
     step("5-tutor-hint", "POST", "api/chat", ask("Give me a hint for the first task."));
     step("6-videos", "POST", &format!("{path}/videos"), json!({"lesson":lid}));
-    let shown = lessons(&c).next().map(|l| ai::recall_ask(l, 0)).unwrap_or_default();
+    // Read again: the practice steps above wrote the lesson's recall questions, which changes the question shown.
+    let now = call(&app, "GET", &path, json!({})).1;
+    let shown = lessons(&now).next().map(|l| ai::recall_ask(l, 0)).unwrap_or_default();
     step("7-explain", "POST", "api/review/answer", json!({"course":cid,"lesson":lid,"i":"explain","q":shown,"answer":"I am not sure, I think it is a kind of variable."}));
     if let Some(stub) = lessons(&c).find(|l| truth(&l["stub"])) {
         step("8-expand", "POST", &format!("{path}/expand"), json!({"lesson":stub["id"]}));
@@ -2237,9 +2264,26 @@ fn exercise_timeout_leaves_nothing_running() {
     assert_eq!(units.trim(), "", "a run's scope was left behind");
 }
 
+// Windows (run by CI on GitHub's machine): an ordinary exercise passes, and each limit stops what it should.
+#[cfg(not(target_os = "linux"))]
+#[test]
+fn exercise_limits_off_linux() {
+    let py = run_code("python", "def double(x):\n    return x * 2\n", Some("from main import double\nassert double(4) == 8\nprint('All tests passed')\n")).unwrap();
+    assert_eq!((&py["ok"], text(&py["output"]).trim()), (&json!(true), "All tests passed"), "{py}");
+    // Writing past 64 MB is stopped while the program is still going.
+    let disk = run_code("python", "import time\nf = open('big', 'wb')\nfor _ in range(300):\n    f.write(b'0' * (1 << 20)); f.flush(); time.sleep(0.01)\ntime.sleep(30)\n", None).unwrap();
+    assert!(disk["ok"] == false && text(&disk["output"]).contains("wrote more than 64 MB"), "{disk}");
+    #[cfg(windows)]
+    {
+        // Past the job's memory cap the allocation fails.
+        let mem = run_code("python", "x = bytearray(1 << 30)\nprint('allocated')\n", None).unwrap();
+        assert!(mem["ok"] == false && !text(&mem["output"]).contains("allocated"), "{mem}");
+    }
+}
+
 // Small limits for the hostile cases below, far under the production ones, so a test can never take much of the machine.
 #[cfg(target_os = "linux")]
-fn test_caps() -> crate::exercise::Sandbox {
+fn test_caps()-> crate::exercise::Sandbox {
     crate::exercise::Sandbox { tasks: 32, memory: 128 << 20, disk: 16 << 20, ..crate::exercise::sandbox() }
 }
 

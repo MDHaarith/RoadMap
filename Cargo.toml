@@ -1,6 +1,6 @@
 [package]
 name = "roadmap-app"
-version = "1.0.1"
+version = "1.0.2"
 edition = "2021"
 default-run = "roadmap-app"
 rust-version = "1.92"
@@ -35,6 +35,10 @@ tauri-plugin-notification = "2"
 # statvfs for the exercise sandbox's disk watch; already in the build through other crates.
 [target.'cfg(target_os = "linux")'.dependencies]
 libc = "0.2"
+
+# Job objects that cap an exercise's memory and processes; already in the build through other crates.
+[target.'cfg(windows)'.dependencies]
+windows-sys = { version = "0.61", features = ["Win32_Foundation", "Win32_Security", "Win32_System_JobObjects", "Win32_System_Threading"] }
 
 [profile.release]
 strip = true

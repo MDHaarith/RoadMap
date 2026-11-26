@@ -1,5 +1,5 @@
 // Colours code in the exercise editor: comments, strings, numbers, keywords and called functions.
-// shortcut: one regex per language, not a parser; odd cases (Rust lifetimes, heredocs) colour slightly wrong. Swap in a real highlighter if that matters.
+// One regex per language, not a parser: Rust lifetimes and shell heredocs are handled, rarer cases may colour slightly wrong.
 const esc = (s: string) => s.replace(/[&<>"']/g, c => ({ '&': '&amp;', '<': '&lt;', '>': '&gt;', '"': '&quot;', "'": '&#39;' }[c]!));
 const C = 'auto break case char const continue default do double else enum extern float for goto if inline int long return short signed sizeof static struct switch typedef union unsigned void volatile while bool true false NULL size_t';
 const KEYWORDS: Record<string, string> = {
@@ -21,11 +21,15 @@ const HASH = ['python', 'bash', 'ruby', 'perl', 'r'];
 export function highlight(code: string, lang: string): string {
   const words = new Set((KEYWORDS[lang] || '').split(' '));
   const comment = lang === 'lua' ? String.raw`--[^\n]*` : HASH.includes(lang) ? String.raw`#[^\n]*` : String.raw`\/\/[^\n]*|\/\*[\s\S]*?(?:\*\/|$)`;
-  const re = new RegExp(String.raw`(${comment})|("(?:[^"\\\n]|\\.)*"?|'(?:[^'\\\n]|\\.)*'?|${'`'}(?:[^${'`'}\\]|\\.)*${'`'}?)|(\b\d[\w.]*)|(^[ \t]*#[ \t]*\w+)|([A-Za-z_]\w*)(?=\s*\()|([A-Za-z_]\w*)`, 'gm');
+  // Rust's ' starts a lifetime ('a) unless it closes as a character ('a', '\n'); other languages' ' starts a string.
+  const single = lang === 'rust' ? String.raw`'(?:\\.[^'\n]*|[^'\\\n])'` : String.raw`'(?:[^'\\\n]|\\.)*'?`;
+  const heredoc = lang === 'bash' ? String.raw`<<-?[ \t]*['"]?(?<hd>[A-Za-z_]\w*)['"]?[^\n]*\n[\s\S]*?(?:^[ \t]*\k<hd>$|(?![\s\S]))|` : '';
+  const life = lang === 'rust' ? String.raw`|(?<life>'[A-Za-z_]\w*)` : '';
+  const re = new RegExp(String.raw`(?<comm>${comment})|(?<str>${heredoc}"(?:[^"\\\n]|\\.)*"?|${single}|${'`'}(?:[^${'`'}\\]|\\.)*${'`'}?)${life}|(?<num>\b\d[\w.]*)|(?<dir>^[ \t]*#[ \t]*\w+)|(?<call>[A-Za-z_]\w*)(?=\s*\()|(?<word>[A-Za-z_]\w*)`, 'gm');
   let out = '', last = 0;
   for (const m of code.matchAll(re)) {
-    const [t, comm, str, num, directive, call, word] = m;
-    const kind = comm ? 'c' : str ? 's' : num ? 'n' : directive ? 'k' : call ? (words.has(call) ? 'k' : 'f') : words.has(word) ? 'k' : '';
+    const t = m[0], g = m.groups!;
+    const kind = g.comm ? 'c' : g.str ? 's' : g.life || g.dir ? 'k' : g.num ? 'n' : g.call ? (words.has(g.call) ? 'k' : 'f') : words.has(g.word) ? 'k' : '';
     out += esc(code.slice(last, m.index)) + (kind ? `<span class="hl-${kind}">${esc(t)}</span>` : esc(t));
     last = m.index + t.length;
   }

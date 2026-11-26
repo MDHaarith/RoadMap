@@ -21,7 +21,7 @@
     catch (e) { if (alive) importError = message(e); } finally { if (alive) busy = ''; }
   }
 </script>
-<div class="wrap narrow import screen-enter"><a class="back-map" href="#/"><Icon name="back" /> Your library</a>
+<div class="wrap narrow import screen-enter"><a class="back-map" href="#/"><Icon name="back" /> Back</a>
   <div class="page-head"><h1>Import a roadmap</h1>{#if files.length}<div class="row"><button type="button" class="btn secondary sm" id="import-pick" disabled={!!busy} onclick={() => void bring()}><BusyLabel busy={busy === 'pick'} idle="Choose another file" label="Opening…" /></button></div>{/if}</div>
   {#if importError}<p class="err" role="alert">{importError}</p>{/if}
   {#if loading}<Waiting skeleton="rows" inline title="Looking for roadmap files" />
