@@ -367,7 +367,8 @@ fn dir_size(p: &std::path::Path) -> u64 {
         .flatten()
         .map(|e| match e.file_type() {
             Ok(t) if t.is_dir() => dir_size(&e.path()),
-            Ok(t) if t.is_file() => e.metadata().map_or(0, |m| m.len()),
+            // The file's own size, not the folder listing's: on Windows the listing lags behind a file still open for writing.
+            Ok(t) if t.is_file() => fs::metadata(e.path()).map_or(0, |m| m.len()),
             _ => 0,
         })
         .sum()
