@@ -23,7 +23,7 @@
   let alive = true;
   function load() { loading = true; error = ''; api<{ items: Mistake[] }>('GET', 'api/mistakes').then(r => { if (alive) items = r.items; }).catch(e => { if (alive) error = message(e); }).finally(() => { if (alive) loading = false; }); }
   // replaceState: switching roadmaps keeps the page instead of reloading it through the router.
-  function pick(v: string) { chosen = v; history.replaceState(null, '', '#/mistakes/' + encodeURIComponent(v)); }
+  function pick(v: string) { chosen = v; history.replaceState(history.state,'', '#/mistakes/' + encodeURIComponent(v)); }
   onMount(() => { load(); return () => { alive = false; }; });
 </script>
 {#snippet row(m: Mistake)}
@@ -32,7 +32,7 @@
     {:else}<h3><Formatted text={m.q} /></h3>{#if m.options[m.picked] !== undefined}<p class="picked">You answered: {m.options[m.picked]}</p>{/if}<div class="mistake-foot"><details class="disclosure"><summary>Show the answer</summary><div class="answer"><p><strong>{m.options[m.answer]}</strong></p><p><Formatted text={m.why} /></p></div></details><a class="mistake-link" href={href(m.course, m.lesson)}>Open the lesson <Icon name="arrow" /></a></div>{/if}
   </section>
 {/snippet}
-<div class="wrap screen-enter" class:narrow={!!error || (!loading && !items.length)}><a class="back-map" href="#/"><Icon name="back" /> Your library</a><div class="page-head"><h1>Mistakes notebook</h1>{#if !loading && !error && items.length}<div class="row">{#if roadmaps.length > 1}<Select id="mistakes-roadmap" ariaLabel="Roadmap" value={course} options={roadmaps} onchange={pick} />{:else}<span class="session-count">{open.length} open</span>{/if}</div>{/if}</div>
+<div class="wrap screen-enter" class:narrow={!!error || (!loading && !items.length)}><a class="back-map" href="#/"><Icon name="back" /> Back</a><div class="page-head"><h1>Mistakes notebook</h1>{#if !loading && !error && items.length}<div class="row">{#if roadmaps.length > 1}<Select id="mistakes-roadmap" ariaLabel="Roadmap" value={course} options={roadmaps} onchange={pick} />{:else}<span class="session-count">{open.length} open</span>{/if}</div>{/if}</div>
   {#if loading}<Waiting skeleton="rows" inline title="Opening mistakes" />{:else if error}<LoadError what="Your mistakes notebook could not load." {error} retry={load} />{:else if !items.length}<div class="empty-state"><Icon name="empty-route" /><h2>Nothing here yet.</h2><p>Missed quiz, exam and review questions stay here, along with unfinished coding exercises.</p></div>
   {:else}{#if roadmaps.length === 1}<p class="small">{items[0].roadmap}</p>{/if}{#if open.length}<p class="muted lead">Each one comes back in your daily review. Answer it right there and it moves to Fixed.</p>{/if}{#key course}<div class="mistakes-list stagger">{#each open as m}{@render row(m)}{/each}</div>{#if fixed.length}<div class="section-title"><h2>Fixed</h2><span>{fixed.length}</span></div><div class="mistakes-list stagger">{#each fixed as m}{@render row(m)}{/each}</div>{/if}{/key}{/if}
 </div>

@@ -137,6 +137,17 @@ export async function loadLibrary() {
   // ChatGPT model names come from the server, so load them early: the tutor then shows "GPT-5.6 Terra", not the raw id.
   if (cfg.base === 'codex') void loadModels();
 }
+// Each history entry made in the app carries its depth, so Back knows whether there is an earlier app screen to return to.
+let depth = typeof history.state?.depth === 'number' ? history.state.depth : 0;
+history.replaceState({ depth }, '');
+export function hashChanged() {
+  if (typeof history.state?.depth === 'number') depth = history.state.depth;
+  else history.replaceState({ depth: ++depth }, '');
+  void route();
+}
+export function goBack(fallback: string) { if (depth > 0) history.back(); else location.hash = fallback; }
+// Swap the current entry instead of adding one, so Back never lands on a page that sends you forward again.
+export function redirect(hash: string) { history.replaceState(history.state, '', hash); void route(); }
 export async function route() {
   const version = ++appState.routeVersion;
   appState.screen = 'loading';
@@ -190,7 +201,7 @@ export async function applyPlan(plan: object, ask = '') {
   fillState(Object.assign(c, r.course));
   if (id) {
     appState.current = lessons(c).find(l => l.id === id) || null;
-    if (!appState.current) location.hash = href(c.id);
+    if (!appState.current) redirect(href(c.id));
   }
   toast(r.change.note || 'Roadmap updated.');
 }

@@ -1,8 +1,27 @@
 name: CI
 # Pull requests only: the merge into master releases straight away, without a second run.
+# Linux and Windows run as separate small jobs (UI, Rust tests, Windows installer), so
+# "Re-run failed jobs" on the run page repeats only the part that failed.
 on: pull_request
 jobs:
-  linux:
+  linux-ui:
+    runs-on: ubuntu-24.04
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-node@v4
+        with:
+          node-version: 24
+          cache: npm
+          cache-dependency-path: ui/package-lock.json
+      - run: npm ci
+        working-directory: ui
+      - run: npm run check
+        working-directory: ui
+      - run: npm test
+        working-directory: ui
+      - run: npm run build
+        working-directory: ui
+  linux-rust:
     runs-on: ubuntu-24.04
     steps:
       - uses: actions/checkout@v4
@@ -16,6 +35,30 @@ jobs:
       - run: rustup toolchain install stable --profile minimal
       - run: rustup default stable
       - uses: Swatinem/rust-cache@v2
+      # The app embeds ui/dist when it compiles, so the tests need the built UI.
+      - run: npm ci && npm run build
+        working-directory: ui
+      # On "Re-run failed jobs", only the tests that failed last attempt run again.
+      - uses: actions/cache/restore@v4
+        with:
+          path: ci-failed.txt
+          key: failed-${{ github.job }}-${{ github.run_id }}-${{ github.run_attempt }}
+          restore-keys: failed-${{ github.job }}-${{ github.run_id }}-
+      - run: bash scripts/ci-test.sh
+      - if: failure() && hashFiles('ci-failed.txt') != ''
+        uses: actions/cache/save@v4
+        with:
+          path: ci-failed.txt
+          key: failed-${{ github.job }}-${{ github.run_id }}-${{ github.run_attempt }}
+  windows-ui:
+    runs-on: windows-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-node@v4
+        with:
+          node-version: 24
+          cache: npm
+          cache-dependency-path: ui/package-lock.json
       - run: npm ci
         working-directory: ui
       - run: npm run check
@@ -24,8 +67,7 @@ jobs:
         working-directory: ui
       - run: npm run build
         working-directory: ui
-      - run: cargo test --locked
-  windows:
+  windows-rust:
     runs-on: windows-latest
     steps:
       - uses: actions/checkout@v4
@@ -39,13 +81,35 @@ jobs:
       - uses: Swatinem/rust-cache@v2
       - run: npm ci
         working-directory: ui
-      - run: npm run check
-        working-directory: ui
-      - run: npm test
-        working-directory: ui
       - run: npm run build
         working-directory: ui
-      - run: cargo test --locked
+      - uses: actions/cache/restore@v4
+        with:
+          path: ci-failed.txt
+          key: failed-${{ github.job }}-${{ github.run_id }}-${{ github.run_attempt }}
+          restore-keys: failed-${{ github.job }}-${{ github.run_id }}-
+      # Git Bash, not the WSL bash that a plain "bash" can reach on Windows.
+      - run: bash scripts/ci-test.sh
+        shell: bash
+      - if: failure() && hashFiles('ci-failed.txt') != ''
+        uses: actions/cache/save@v4
+        with:
+          path: ci-failed.txt
+          key: failed-${{ github.job }}-${{ github.run_id }}-${{ github.run_attempt }}
+  windows-installer:
+    runs-on: windows-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-node@v4
+        with:
+          node-version: 24
+          cache: npm
+          cache-dependency-path: ui/package-lock.json
+      - run: rustup toolchain install stable --profile minimal
+      - run: rustup default stable
+      - uses: Swatinem/rust-cache@v2
+      - run: npm ci
+        working-directory: ui
       - run: npm --prefix ui run tauri -- build --no-bundle -- --locked
       - run: cargo build --release --locked --bin roadmap-mcp
       - name: Inno Setup installer

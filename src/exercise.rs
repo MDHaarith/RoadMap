@@ -227,6 +227,17 @@ pub(crate) fn process_until(
     stop: Option<&AtomicBool>,
     pid: Option<&std::sync::atomic::AtomicU32>,
 ) -> std::io::Result<(i32, String, String, bool)> {
+    process_hooked(cmd, secs, input, stop, pid, &|_| Ok(()))
+}
+// Like process_until, and runs `spawned` on the new program first; when it fails, the program is stopped.
+pub(crate) fn process_hooked(
+    cmd: &mut Command,
+    secs: u64,
+    input: Stdio,
+    stop: Option<&AtomicBool>,
+    pid: Option<&std::sync::atomic::AtomicU32>,
+    spawned: &dyn Fn(&std::process::Child) -> std::io::Result<()>,
+) -> std::io::Result<(i32, String, String, bool)> {
     #[cfg(windows)]
     {
         use std::os::windows::process::CommandExt;
@@ -237,6 +248,11 @@ pub(crate) fn process_until(
         .stdout(Stdio::piped())
         .stderr(Stdio::piped())
         .spawn()?;
+    if let Err(e) = spawned(&child) {
+        let _ = child.kill();
+        let _ = child.wait();
+        return Err(e);
+    }
     if let Some(p) = pid {
         p.store(child.id(), Ordering::Relaxed);
     }
@@ -300,9 +316,7 @@ impl Sandbox {
     }
 }
 // A lesson exercise needs a few dozen MB; 512 MB covers a JVM (its default heap is a quarter of this, 128 MB) or a Go build.
-#[cfg(target_os = "linux")]
 pub(crate) const MEMORY_MAX: u64 = 512 << 20;
-#[cfg(target_os = "linux")]
 pub(crate) const DISK_MAX: u64 = 64 << 20;
 // Exit status the sandbox script gives when the run filled its disk; the learner's program would have to pick it on purpose.
 #[cfg(target_os = "linux")]
@@ -346,7 +360,6 @@ fn bwrap_sizes() -> bool {
     let v = out.split_whitespace().last().unwrap_or("").split('.').map(|n| n.parse().unwrap_or(0)).collect::<Vec<u64>>();
     v.len() > 1 && (v[0], v[1]) >= (0, 10)
 }
-#[cfg(target_os = "linux")]
 fn dir_size(p: &std::path::Path) -> u64 {
     fs::read_dir(p)
         .into_iter()
@@ -354,7 +367,8 @@ fn dir_size(p: &std::path::Path) -> u64 {
         .flatten()
         .map(|e| match e.file_type() {
             Ok(t) if t.is_dir() => dir_size(&e.path()),
-            Ok(t) if t.is_file() => e.metadata().map_or(0, |m| m.len()),
+            // The file's own size, not the folder listing's: on Windows the listing lags behind a file still open for writing.
+            Ok(t) if t.is_file() => fs::metadata(e.path()).map_or(0, |m| m.len()),
             _ => 0,
         })
         .sum()
@@ -588,12 +602,12 @@ pub(crate) fn install_lang(lang: &str) -> Result<Value> {
 }
 
 impl App {
-    /// Linux runs exercises in a sandbox. Windows and macOS have none here, so the learner must allow plain runs in Settings first.
+    /// Linux runs exercises in a full sandbox. Windows gets only some limits and macOS fewer (see the non-Linux `run_code`), so the learner must allow runs in Settings first.
     pub(crate) fn may_run(&self) -> Result<()> {
         if cfg!(target_os = "linux") || truth(&self.config()["unsandboxed"]) {
             return Ok(());
         }
-        Err(Error { status: 403, message: "On this computer exercises run without a sandbox. Turn on “Run exercises on this computer” in Settings to use them.".into() })
+        Err(Error { status: 403, message: "On this computer exercises run with only some limits, not a full sandbox. Turn on “Run exercises on this computer” in Settings to use them.".into() })
     }
 }
 
@@ -604,8 +618,55 @@ fn local_program(prog: &str) -> Option<String> {
     on_path(prog).then(|| prog.to_string())
 }
 
-// Windows and macOS: no sandbox, only the time and output caps, in a temporary folder that is deleted afterwards.
-// shortcut: no memory, process or disk limits and no network block here (Linux has them); add a Job object (Windows) or sandbox-exec (macOS) if learners run untrusted code.
+// Windows: a Job object holds every process of one step. It caps their memory together and how many there are, and
+// closing it (when the step ends) stops any the program left behind. It has no network or file system walls.
+#[cfg(windows)]
+struct Job(windows_sys::Win32::Foundation::HANDLE);
+#[cfg(windows)]
+impl Job {
+    fn new() -> std::io::Result<Job> {
+        use windows_sys::Win32::System::JobObjects::*;
+        // SAFETY: plain Win32 calls on a handle this struct owns; the info struct is fully initialised (zeroed, then set).
+        unsafe {
+            let h = CreateJobObjectW(std::ptr::null(), std::ptr::null());
+            if h.is_null() {
+                return Err(std::io::Error::last_os_error());
+            }
+            let job = Job(h);
+            let mut info: JOBOBJECT_EXTENDED_LIMIT_INFORMATION = std::mem::zeroed();
+            info.BasicLimitInformation.LimitFlags = JOB_OBJECT_LIMIT_KILL_ON_JOB_CLOSE
+                | JOB_OBJECT_LIMIT_ACTIVE_PROCESS
+                | JOB_OBJECT_LIMIT_JOB_MEMORY
+                | JOB_OBJECT_LIMIT_DIE_ON_UNHANDLED_EXCEPTION;
+            info.BasicLimitInformation.ActiveProcessLimit = 64;
+            info.JobMemoryLimit = MEMORY_MAX as usize;
+            let size = std::mem::size_of_val(&info) as u32;
+            if SetInformationJobObject(h, JobObjectExtendedLimitInformation, &info as *const _ as *const _, size) == 0 {
+                return Err(std::io::Error::last_os_error());
+            }
+            Ok(job)
+        }
+    }
+    // The program could start another in the moment before this; Windows puts the ones it starts later in the job too.
+    fn add(&self, child: &std::process::Child) -> std::io::Result<()> {
+        use std::os::windows::io::AsRawHandle;
+        // SAFETY: both handles are open: the job is owned by self, the process by `child`.
+        if unsafe { windows_sys::Win32::System::JobObjects::AssignProcessToJobObject(self.0, child.as_raw_handle() as _) } == 0 {
+            return Err(std::io::Error::last_os_error());
+        }
+        Ok(())
+    }
+}
+#[cfg(windows)]
+impl Drop for Job {
+    fn drop(&mut self) {
+        // SAFETY: the handle came from CreateJobObjectW and is closed only here.
+        unsafe { windows_sys::Win32::Foundation::CloseHandle(self.0) };
+    }
+}
+// Windows and macOS, after the learner allows it in Settings: the time and output caps, a temporary folder deleted
+// afterwards, and a watch that stops a run writing more than DISK_MAX there. Windows adds a Job object (memory and
+// process caps) but can still use the network and write elsewhere. macOS is not released, so it has nothing more.
 #[cfg(not(target_os = "linux"))]
 pub(crate) fn run_code(lang: &str, code: &str, tests: Option<&str>) -> Result<Value> {
     let ([name, _, prog, main, test, run, check], secs) = language(lang)?;
@@ -632,9 +693,36 @@ pub(crate) fn run_code(lang: &str, code: &str, tests: Option<&str>) -> Result<Va
         });
         let Some(program) = words.next() else { continue };
         let left = secs.saturating_sub(start.elapsed().as_secs()).max(1);
-        let (status, out, err, timeout) = process(Command::new(program).args(words).current_dir(work.path()), left)?;
+        let mut cmd = Command::new(program);
+        cmd.args(words).current_dir(work.path());
+        #[cfg(windows)]
+        let job = Job::new()?;
+        #[cfg(windows)]
+        let spawned = |c: &std::process::Child| job.add(c);
+        #[cfg(not(windows))]
+        let spawned = |_: &std::process::Child| Ok(());
+        // Stops the step when the folder grows past DISK_MAX.
+        let (stop, done, full) = (AtomicBool::new(false), AtomicBool::new(false), AtomicBool::new(false));
+        let (status, out, err, timeout) = thread::scope(|scope| {
+            scope.spawn(|| {
+                while !done.load(Ordering::Relaxed) {
+                    if dir_size(work.path()) > DISK_MAX {
+                        full.store(true, Ordering::Relaxed);
+                        stop.store(true, Ordering::Relaxed);
+                        break;
+                    }
+                    thread::sleep(Duration::from_millis(100));
+                }
+            });
+            let r = process_hooked(&mut cmd, left, Stdio::null(), Some(&stop), None, &spawned);
+            done.store(true, Ordering::Relaxed);
+            r
+        })?;
         output.push_str(&out);
         output.push_str(&err);
+        if full.load(Ordering::Relaxed) {
+            return Ok(json!({"ok":false,"output":format!("{}\nStopped: wrote more than {} MB of files.", tail(&output, 20000), DISK_MAX >> 20)}));
+        }
         if timeout {
             return Ok(json!({"ok":false,"output":format!("{}\nStopped: ran longer than {secs} seconds. Look for a loop that never ends.", tail(&output, 20000))}));
         }

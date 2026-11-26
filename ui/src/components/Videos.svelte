@@ -154,7 +154,7 @@
 </script>
 <svelte:window onmessage={playerMessage} onkeydown={mediaKey} />
 <div id="videos">
-  {#if loading}<Waiting skeleton="videos" title="Finding videos for this lesson" hint="this usually takes a few seconds" />
+  {#if loading}<Waiting skeleton="videos" title="Finding videos for this lesson" hint="this can take a minute, and keeps going if you leave this lesson" />
   {:else if error}<LoadError id="retry-videos" what="Videos for this lesson could not load." {error} retry={loadVideos} /><p class="small"><a href={`https://www.youtube.com/results?search_query=${enc(l.query || l.title)}`}>Search YouTube for this lesson</a></p>
   {:else}
     <div class="video-layout"><div class="video-main">

@@ -19,7 +19,7 @@ use std::{
     path::PathBuf,
     sync::{
         atomic::{AtomicBool, AtomicI64, Ordering},
-        Arc, Mutex,
+        Arc, Condvar, Mutex,
     },
 };
 
@@ -90,6 +90,9 @@ pub struct App {
     pub(crate) transcribing: Mutex<HashSet<String>>,
     // Roadmaps whose unpicked videos were already searched again this run.
     pub(crate) repicked: Mutex<HashSet<String>>,
+    // Lessons ("roadmap/lesson") whose video search is running, so a second request waits for it instead of searching again.
+    pub(crate) finding: Mutex<HashSet<String>>,
+    pub(crate) found: Condvar,
     pub(crate) day_offset: AtomicI64,
     // Set when the learner stops the tutor reply that is on its way; cleared when the next one starts.
     pub(crate) stop_chat: AtomicBool,
@@ -136,6 +139,8 @@ impl App {
             fetching: Mutex::new(HashSet::new()),
             transcribing: Mutex::new(HashSet::new()),
             repicked: Mutex::new(HashSet::new()),
+            finding: Mutex::new(HashSet::new()),
+            found: Condvar::new(),
             day_offset: AtomicI64::new(0),
             stop_chat: AtomicBool::new(false),
             yt_running: Default::default(),
@@ -292,7 +297,7 @@ pub(crate) fn drop_obscure(c: &mut Value) -> bool {
         for l in p["lessons"].as_array_mut().into_iter().flatten() {
             if let Some(vs) = l["videos"].as_array_mut() {
                 let n = vs.len();
-                vs.retain(|v| truth(&v["gem"]) || !v["views"].as_i64().is_some_and(|n| n < MIN_VIEWS));
+                vs.retain(|v| truth(&v["gem"]) || v["views"].as_i64().is_none_or(|n| n >= MIN_VIEWS));
                 dropped |= vs.len() != n;
             }
         }

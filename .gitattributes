@@ -1,0 +1,2 @@
+# Shell scripts run in Git Bash on the Windows CI machine, which fails on CRLF line endings.
+*.sh text eol=lf

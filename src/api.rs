@@ -33,7 +33,7 @@ impl App {
             }
         }
         self.save(&c)?;
-        self.log_activity(1, right as u64, 1);
+        self.log_activity(1, &[], right as u64, 1);
         Ok(r)
     }
     // A wrong quiz or exam answer goes in the mistakes notebook and comes back in today's review.
@@ -586,8 +586,8 @@ impl App {
                     }
                 }
                 // Newly finished lessons and quizzes count toward the daily goal.
-                // shortcut: unticking and ticking a lesson again counts it twice; keep a per-day set of counted ids if that matters.
-                let mut steps = b["done"].as_object().into_iter().flatten().filter(|(k, v)| truth(v) && !truth(&old["done"][k.as_str()])).count() as u64;
+                let done = b["done"].as_object().into_iter().flatten().filter(|(k, v)| truth(v) && !truth(&old["done"][k.as_str()])).map(|(k, _)| format!("{cid}/{k}")).collect::<Vec<_>>();
+                let mut steps = 0;
                 let (mut right, mut asked) = (0, 0);
                 for (lid, q) in b["quiz"].as_object().into_iter().flatten() {
                     if old["quiz"][lid.as_str()] != *q && q["total"].as_u64().is_some_and(|t| t > 0) {
@@ -598,7 +598,7 @@ impl App {
                 }
                 c["state"] = st;
                 self.save(&c)?;
-                self.log_activity(steps, right, asked);
+                self.log_activity(steps, &done, right, asked);
                 Ok(json!({}))
             }
             ("POST", "/notes") => self.rewrite_notes(cid, b),
@@ -765,6 +765,18 @@ impl App {
                     return Ok(json!(videos));
                 }
                 let fresh = truth(&b["fresh"]);
+                let lid = l["id"].clone();
+                // This lesson's search may be running already (the background search, or an earlier open the learner left):
+                // wait for it and use what it found instead of starting again. The claim keeps a later open waiting for this one.
+                let mut c = c;
+                let mut _claim = None;
+                while !fresh && { let l = lesson(&c, &lid)?; list(&l["videos"]).is_empty() && !truth(&l["novideos"]) } {
+                    if let Some(f) = self.claim_lesson(cid, &string(&lid)) { _claim = Some(f); break; }
+                    self.wait_lesson(cid, &string(&lid));
+                    c = self.load(cid)?;
+                }
+                let l = lesson(&c, &lid)?;
+                let old = list(&l["videos"]);
                 // An earlier search found nothing that fits; only "Search again" (fresh) tries once more.
                 if !fresh && old.is_empty() && truth(&l["novideos"]) {
                     return Ok(json!([]));

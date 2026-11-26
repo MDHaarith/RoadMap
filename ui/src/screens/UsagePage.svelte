@@ -117,7 +117,7 @@
 {#snippet cell(t: ByModel | undefined)}<td>{#if tokens(t)}<span class="us-amt">{amount(t)}</span><small>{detail(t)}</small>{:else}<span class="us-none">—</span>{/if}</td>{/snippet}
 {#snippet meter(x: number, c = 'var(--accent)')}<span class="us-meter" aria-hidden="true"><span style:width={`${Math.max(2, x * 100)}%`} style:background={c}></span></span>{/snippet}
 
-<div class="wrap screen-enter usage-page" class:narrow={!u}><a class="back-map" href="#/settings"><Icon name="back" /> Settings</a>
+<div class="wrap screen-enter usage-page" class:narrow={!u}><a class="back-map" href="#/settings"><Icon name="back" /> Back</a>
   <div class="page-head"><div><h1>Usage</h1>{#if u && all}<p class="us-period">{n(total.calls)} AI requests{u.since ? ` since ${date(u.since, true)}` : ''}</p>{/if}</div>{#if u && all}<button type="button" class="btn secondary sm" disabled={busy} onclick={() => void reset()}><BusyLabel {busy} idle="Reset counter" label="Clearing…" /></button>{/if}</div>
   {#if error}<LoadError what="Usage could not load." {error} retry={load} />
   {:else if !u}<Waiting inline title="Adding up your usage" />

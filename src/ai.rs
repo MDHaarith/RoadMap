@@ -47,6 +47,26 @@ pub(crate) fn cached_of(u: &Value) -> u64 {
     [&u["prompt_tokens_details"]["cached_tokens"], &u["input_tokens_details"]["cached_tokens"], &u["prompt_cache_hit_tokens"], &u["cache_read_input_tokens"]]
         .into_iter().find_map(|v| v.as_u64()).unwrap_or(0)
 }
+/// A running video search for one lesson; see `claim_lesson`. Dropping it wakes requests waiting in `wait_lesson`.
+pub(crate) struct Finding<'a>(&'a App, String);
+impl Drop for Finding<'_> {
+    fn drop(&mut self) {
+        self.0.finding.lock().unwrap_or_else(|e| e.into_inner()).remove(&self.1);
+        self.0.found.notify_all();
+    }
+}
+/// One of a limited number of places for a running job; waits while all are taken and frees its place when dropped.
+pub(crate) struct Slot<'a>(&'a (Mutex<usize>, Condvar));
+pub(crate) fn slot(s: &(Mutex<usize>, Condvar), max: usize) -> Slot<'_> {
+    *s.1.wait_while(s.0.lock().unwrap_or_else(|e| e.into_inner()), |n| *n >= max).unwrap_or_else(|e| e.into_inner()) += 1;
+    Slot(s)
+}
+impl Drop for Slot<'_> {
+    fn drop(&mut self) {
+        *self.0 .0.lock().unwrap_or_else(|e| e.into_inner()) -= 1;
+        self.0 .1.notify_one();
+    }
+}
 pub(crate) const EFFORTS: [&str; 3] = ["low", "medium", "high"];
 fn effort_of(v: &Value) -> &'static str {
     EFFORTS.into_iter().find(|e| v == *e).unwrap_or("")
@@ -978,16 +998,7 @@ impl App {
     }
     fn yt(&self, args: &[String]) -> Result<Value> {
         // Prefetch runs four lessons at once and each checks eight videos: unlimited, that is 32 yt-dlp processes and a sluggish computer.
-        let (count, freed) = &self.yt_running;
-        *freed.wait_while(count.lock().unwrap_or_else(|e| e.into_inner()), |n| *n >= 6).unwrap_or_else(|e| e.into_inner()) += 1;
-        struct Done<'a>(&'a (Mutex<usize>, std::sync::Condvar));
-        impl Drop for Done<'_> {
-            fn drop(&mut self) {
-                *self.0 .0.lock().unwrap_or_else(|e| e.into_inner()) -= 1;
-                self.0 .1.notify_one();
-            }
-        }
-        let _done = Done(&self.yt_running);
+        let _slot = slot(&self.yt_running, 6);
         // YouTube needs a JS challenge solver: yt-dlp enables only deno by default, so allow node and bun too and fetch the solver script.
         const JS: [&str; 8] = ["--js-runtimes", "deno", "--js-runtimes", "node", "--js-runtimes", "bun", "--remote-components", "ejs:github"];
         let yt = self.yt_path()?;
@@ -1038,9 +1049,9 @@ impl App {
         if let Some(v) = cached() {
             return Ok(v);
         }
-        // shortcut: serialize caption fetches process-wide; use a bounded worker pool if throughput matters.
-        static FETCH: std::sync::Mutex<()> = std::sync::Mutex::new(());
-        let _fetch = FETCH.lock().unwrap_or_else(|e| e.into_inner());
+        // Four caption fetches at once across the app: enough for a quick search, few enough that YouTube does not refuse them.
+        static FETCHING: (Mutex<usize>, Condvar) = (Mutex::new(0), Condvar::new());
+        let _slot = slot(&FETCHING, 4);
         if let Some(v) = cached() {
             return Ok(v);
         }
@@ -1327,7 +1338,7 @@ impl App {
         if picks.is_empty() {
             return Ok(picks);
         }
-        // Metadata in parallel (chapters, caption address); captions one at a time, as `transcript` requires.
+        // Metadata in parallel (chapters, caption address); captions follow below.
         let metas = std::thread::scope(|scope| {
             let handles = picks
                 .iter()
@@ -1361,11 +1372,21 @@ impl App {
         let context = rows.join("\n");
         let mut transcripts = Vec::new();
         let mut anchors = Vec::new();
-        for (i, (v, d)) in picks.iter_mut().zip(&metas).enumerate() {
+        for (v, d) in picks.iter_mut().zip(&metas) {
             if let Some(d) = d {
                 v["chapters"] = chapters_of(d);
             }
-            let said = self.transcript_with(&string(&v["id"]), d.as_ref()).unwrap_or_default();
+        }
+        // Captions in parallel too; `transcript_with` limits how many fetch at once.
+        let saids = std::thread::scope(|scope| {
+            let handles = picks
+                .iter()
+                .zip(&metas)
+                .map(|(v, d)| scope.spawn(move || self.transcript_with(&string(&v["id"]), d.as_ref()).unwrap_or_default()))
+                .collect::<Vec<_>>();
+            handles.into_iter().map(|h| h.join().unwrap()).collect::<Vec<_>>()
+        });
+        for (i, (v, said)) in picks.iter().zip(saids).enumerate() {
             let (passages, mut times) = lesson_passages(&said, &focus);
             times.extend(list(&v["chapters"]).iter().filter_map(|ch| ch["t"].as_i64()));
             times.extend([0, v["duration"].as_i64().unwrap_or(0)]);
@@ -1562,54 +1583,77 @@ impl App {
         self.save(&c)?;
         Ok(json!(videos))
     }
+    /// Marks a lesson's video search as running. None when one already is; the mark goes when the result drops.
+    pub(crate) fn claim_lesson(&self, cid: &str, lid: &str) -> Option<Finding<'_>> {
+        let key = format!("{cid}/{lid}");
+        self.finding.lock().unwrap_or_else(|e| e.into_inner()).insert(key.clone()).then(|| Finding(self, key))
+    }
+    /// Waits until no video search for this lesson is running.
+    pub(crate) fn wait_lesson(&self, cid: &str, lid: &str) {
+        let key = format!("{cid}/{lid}");
+        let mut running = self.finding.lock().unwrap_or_else(|e| e.into_inner());
+        while running.contains(&key) {
+            running = self.found.wait(running).unwrap_or_else(|e| e.into_inner());
+        }
+    }
     pub(crate) fn prefetch_inner(&self, cid: &str) -> Result<()> {
-        let mut c = self.load(cid)?;
-        // Roadmaps saved before the view floor can hold obscure picks: drop them so those lessons are searched again.
-        drop_obscure(&mut c);
         // Lessons left with raw results by an AI failure are picked again once per app run.
         let retry = self.repicked.lock().unwrap_or_else(|e| e.into_inner()).insert(cid.to_string());
-        let ls = lessons(&c)
-            .filter(|l| needs_videos(l, retry))
-            .cloned()
-            .collect::<Vec<_>>();
-        let mut found = vec![];
-        let m = meter();
-        // Four searches at once, matching the original desktop app's worker limit.
-        for chunk in ls.chunks(4) {
-            let more = std::thread::scope(|scope| {
-                let handles = chunk
-                    .iter()
-                    .map(|l| {
-                        let (c, m) = (&c, m.clone());
-                        scope.spawn(move || {
-                            (
-                                string(&l["id"]),
-                                metering(m, || self.find_videos(c, l, &[]).ok()),
-                            )
-                        })
-                    })
-                    .collect::<Vec<_>>();
-                handles
-                    .into_iter()
-                    .map(|h| h.join().unwrap())
-                    .collect::<Vec<_>>()
-            });
-            found.extend(more);
-        }
-        let _guard = self.guard();
-        let mut c = self.load(cid)?;
-        drop_obscure(&mut c);
-        // A failed search (None) changes nothing, so the lesson is tried again later.
-        for (lid, vids) in found.into_iter().filter_map(|(lid, v)| Some((lid, v?))) {
-            if let Ok(l) = lesson_mut(&mut c, &lid) {
-                let old = list(&l["videos"]);
-                // Raw results never replace raw results; anything else (picks, or "nothing fits") does.
-                if old.is_empty() || unpicked(old) && (vids.is_empty() || !unpicked(&vids)) {
-                    set_videos(l, vids);
-                }
+        {
+            // Roadmaps saved before the view floor can hold obscure picks: drop them for good, so those lessons are searched again.
+            let _guard = self.guard();
+            let mut c = self.load(cid)?;
+            if drop_obscure(&mut c) {
+                self.save(&c)?;
             }
         }
-        self.save(&c)
+        let m = meter();
+        // One part (phase) at a time, starting with the part the learner is on (its first unfinished lesson), then the
+        // parts after it, then the ones before. Read again for each part: a part written meanwhile, or a lesson opened
+        // and searched meanwhile, is seen.
+        let c = self.load(cid)?;
+        let start = list(&c["phases"])
+            .iter()
+            .position(|p| list(&p["lessons"]).iter().any(|l| !truth(&c["state"]["done"][string(&l["id"])])))
+            .unwrap_or(0);
+        let mut searched = HashSet::new();
+        loop {
+            let c = self.load(cid)?;
+            let n = list(&c["phases"]).len();
+            let Some(p) = (start..n).chain(0..start.min(n)).find(|p| !searched.contains(p)) else { break };
+            searched.insert(p);
+            let phase = c["phases"][p].clone();
+            let ls = list(&phase["lessons"]).iter().filter(|l| needs_videos(l, retry)).cloned().collect::<Vec<_>>();
+            // Four searches at once, matching the original desktop app's worker limit.
+            for chunk in ls.chunks(4) {
+                std::thread::scope(|scope| {
+                    for l in chunk {
+                        let (c, m) = (&c, m.clone());
+                        scope.spawn(move || {
+                            let lid = string(&l["id"]);
+                            // Already being searched because the learner opened it: that request saves it.
+                            let Some(_claim) = self.claim_lesson(cid, &lid) else { return };
+                            // Or it was, and that request saved it after this part was read.
+                            if !self.load(cid).is_ok_and(|now| lesson(&now, &l["id"]).is_ok_and(|l| needs_videos(l, retry))) { return }
+                            // A failed search changes nothing, so the lesson is tried again later.
+                            let Some(vids) = metering(m, || self.find_videos(c, l, &[]).ok()) else { return };
+                            // Saved as soon as it is found, before the claim goes, so a waiting lesson finds it.
+                            let _guard = self.guard();
+                            let Ok(mut c) = self.load(cid) else { return };
+                            if let Ok(l) = lesson_mut(&mut c, &lid) {
+                                let old = list(&l["videos"]);
+                                // Raw results never replace raw results; anything else (picks, or "nothing fits") does.
+                                if old.is_empty() || unpicked(old) && (vids.is_empty() || !unpicked(&vids)) {
+                                    set_videos(l, vids);
+                                    let _ = self.save(&c);
+                                }
+                            }
+                        });
+                    }
+                });
+            }
+        }
+        Ok(())
     }
     /// What the learner asked the tutor in earlier lessons, newest first, with how that lesson ended:
     /// the tutor's memory of what they found hard, so it can check later that the help stuck.
@@ -2169,6 +2213,8 @@ fn apply_changes(c: &mut Value, d: &Value, revise: bool) -> Result<Value> {
 }
 // urllib used the proxy for this URL's scheme and respected no_proxy.
 // ureq's automatic proxy discovery does neither, so preserve that policy here.
+// ureq's own error type, so callers can chain `.and_then(|a| a.get(url).call())`; it is large but rare.
+#[allow(clippy::result_large_err)]
 pub(crate) fn agent(url: &str, secs: u64) -> std::result::Result<ureq::Agent, ureq::Error> {
     let mut agent = ureq::AgentBuilder::new()
         .timeout(Duration::from_secs(secs))
