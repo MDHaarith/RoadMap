@@ -1,8 +1,10 @@
 name: Release
-# Publishes the version in tauri.conf.json to MDHaarith/RoadMap-releases for Linux, Windows,
-# or both. Runs when a pull request into master is merged with the label "release: linux"
-# and/or "release: windows" (CI already passed on the pull request, so it does not run again),
-# or by hand from the Actions tab with the two tick boxes.
+# Publishes the version in tauri.conf.json to MDHaarith/RoadMap-releases. Runs when a pull
+# request into master is merged (CI already passed on it, so it does not run again): both
+# platforms, or only one if the pull request has the label "release: linux" or
+# "release: windows". A platform already released at this version is skipped, so a merge
+# without a version bump releases nothing. Also runs by hand from the Actions tab with the
+# two tick boxes.
 on:
   pull_request:
     types: [closed]
@@ -44,6 +46,8 @@ jobs:
           if [ "$GITHUB_EVENT_NAME" = pull_request ]; then
             LINUX=$(jq 'index("release: linux") != null' <<<"$LABELS")
             WINDOWS=$(jq 'index("release: windows") != null' <<<"$LABELS")
+            # No platform label: release both.
+            if [ "$LINUX" = false ] && [ "$WINDOWS" = false ]; then LINUX=true WINDOWS=true; fi
           fi
           version=$(jq -r .version tauri.conf.json)
           # A platform already in this version's release is skipped; bump the version to release it again.
@@ -57,7 +61,7 @@ jobs:
             if grep -q 'setup\.exe$' <<<"$assets"; then echo "Windows v$version is already released."
             else include=$(jq -c '. + [{"platform":"windows","os":"windows-latest"}]' <<<"$include"); fi
           fi
-          [ "$include" = '[]' ] && echo "Nothing to release: no release label (or tick box), or already released."
+          [ "$include" = '[]' ] && echo "Nothing to release: this version is already released (or no tick box)."
           { echo "version=$version"; echo "ref=$REF"; echo "matrix={\"include\":$include}"; } >> "$GITHUB_OUTPUT"
   build:
     needs: plan

@@ -65,12 +65,13 @@ and the root package entries in `ui/package-lock.json`. The UI version matches
 for release validation; the running version comes from Tauri. Run `cargo check`
 to update the root package version in `Cargo.lock`, then `make release-check`.
 Commit the changes and open a pull request into `master`. CI runs on the pull
-request only. Label it `release: linux`, `release: windows`, or both: merging
-it builds signed installers for those platforms and publishes `vX.Y.Z` to
-`MDHaarith/RoadMap-releases`. No release label means no release. A platform
-already in that version is skipped, so bump the version to release it again;
-the other platform can still be added to the same version later. A manual
-Actions run (Release, with Linux and Windows tick boxes) does the same.
+request only. Merging it builds signed installers for Linux and Windows and
+publishes `vX.Y.Z` to `MDHaarith/RoadMap-releases`. To release only one
+platform, label the pull request `release: linux` or `release: windows`. A
+platform already in that version is skipped, so a merge without a version bump
+releases nothing; the other platform can still be added to the same version
+later. A manual Actions run (Release, with Linux and Windows tick boxes) does
+the same.
 
 Configure these repository Actions secrets once:
 
